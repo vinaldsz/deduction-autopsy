@@ -89,6 +89,42 @@ against prompt injection via fixture `notes` fields.
 
 ---
 
+## Git practices
+
+**One commit per layer.** Commit only when the layer's tests pass. Never commit broken code.
+
+**Commit message format:**
+```
+Layer N: <what was built>
+
+- bullet summarizing key decisions or non-obvious choices
+```
+
+**Branch per layer** (optional but recommended):
+```
+main          ← only receives merges when a layer is complete and tests pass
+layer/1-models
+layer/2-fixtures
+...
+```
+
+**.gitignore must include:**
+```
+.env
+__pycache__/
+*.pyc
+outputs/
+.pytest_cache/
+```
+
+**Never commit:**
+- `.env` (contains ANTHROPIC_API_KEY)
+- `outputs/` (generated artifacts, not source)
+
+**Push cadence:** push to remote at the end of each session after committing.
+
+---
+
 ## Session workflow
 - Check `PROGRESS.md` before starting — it tells you what layer we're on and what tests pass
 - Use plan mode (`/plan`) for anything that touches more than one file
