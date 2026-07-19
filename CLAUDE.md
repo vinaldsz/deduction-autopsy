@@ -45,9 +45,14 @@ tool logic instead. Changing expected verdicts requires explicit user sign-off.
 ## Tech stack
 - Python 3.11+
 - FastMCP (Python MCP SDK) for the MCP server
-- Anthropic Python SDK for both agents
-  - Investigator: `claude-haiku-4-5` (mechanical data-fetch + compare)
-  - Reviewer: `claude-sonnet-4-5` (subtle reasoning for trap detection)
+- OpenRouter (OpenAI-compatible chat completions API) via the `openai` Python SDK's
+  `AsyncOpenAI`, pointed at `base_url="https://openrouter.ai/api/v1"` with
+  `OPENROUTER_API_KEY` — NOT the Anthropic SDK directly, and NOT Anthropic's native
+  Messages/tool_use format. Deliberate deviation from the original plan, approved 2026-07-18.
+  - Investigator: Claude Haiku 4.5 (mechanical data-fetch + compare) — exact OpenRouter
+    model slug to be confirmed against OpenRouter's model catalog at implementation time;
+    do not hardcode a guessed slug.
+  - Reviewer: Claude Sonnet 4.5 (subtle reasoning for trap detection) — same caveat.
 - Fixtures as plain JSON, checked into repo
 - `pytest` for unit tests; `rich` for CLI output
 - Temperature 0 for both agents (deterministic, debuggable)
@@ -121,7 +126,7 @@ outputs/
 ```
 
 **Never commit:**
-- `.env` (contains ANTHROPIC_API_KEY)
+- `.env` (contains OPENROUTER_API_KEY)
 - `outputs/` (generated artifacts, not source)
 
 **Push cadence:** push to remote at the end of each session after committing.

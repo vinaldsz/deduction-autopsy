@@ -7,6 +7,7 @@ _CONVERSIONS = json.loads(CONVERSIONS_PATH.read_text())
 
 
 def normalize_uom(qty: float, from_uom: str, to_uom: str, sku: str) -> float:
+    """Convert a quantity between units of measure (EACH/CASE/PALLET) for a given SKU; raises if no conversion path exists."""
     if from_uom == to_uom:
         return qty
     if sku not in _CONVERSIONS:

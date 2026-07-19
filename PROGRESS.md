@@ -1,6 +1,68 @@
 # Progress
 
 ## Current layer
+**Layer 5 — `agents/base.py` shared tool-use loop complete**
+
+Resolved the OpenRouter-vs-Anthropic-SDK decision from the previous session: **the user chose
+OpenRouter.** Updated `CLAUDE.md`'s "Tech stack" section (and its "Never commit" line) to
+describe `AsyncOpenAI` pointed at `base_url="https://openrouter.ai/api/v1"` with
+`OPENROUTER_API_KEY`, explicitly noting this is an approved deviation (2026-07-18) from the
+original Anthropic-SDK plan. Swapped `anthropic` → `openai` in `pyproject.toml`. Added
+`.env.example` documenting `OPENROUTER_API_KEY=` and the existing `SCENARIO_ID=` convention.
+Exact OpenRouter model slugs for Claude Haiku 4.5 / Sonnet 4.5 are intentionally left
+unconfirmed in the docs — to be resolved against OpenRouter's actual catalog at Layer 6.
+
+Because OpenRouter speaks the OpenAI-compatible chat completions API rather than Anthropic's
+native `tool_use`/`tool_result` content blocks, the loop shape is OpenAI's `tool_calls` on the
+assistant message plus one `role:"tool"` reply message per `tool_call_id`, not Anthropic's
+format — this is the main way `agents/base.py` differs from what `docs/PLAN.md` originally
+sketched.
+
+Built `agents/base.py`: `AgentRunner` (constructor-injected `openai_client` and `mcp_client`,
+both duck-typed and owned by the caller — Layer 7's orchestrator will own the real subprocess
+MCP connection and the real `AsyncOpenAI` client; `AgentRunner` itself is stateless and never
+touches env vars or transport). `run(user_message)` is fully async (required since
+`fastmcp.Client` is async-only): fetches tool schemas fresh via `mcp_client.list_tools()` every
+call, loops `create → inspect tool_calls → execute → append tool-role messages → repeat` until
+a text-only response, returning `AgentResult(final_text, trace)`. `max_iterations` (default 10)
+bounds the loop; exceeding it raises `AgentRunnerError` rather than returning a truncated
+result. `fastmcp.exceptions.ToolError` (what a tool's `ValueError` becomes crossing the MCP
+protocol boundary) and malformed tool-call-argument JSON are both caught and fed back to the
+model as ordinary `"ERROR: ..."` tool-result content (OpenAI's tool-message schema has no
+`is_error` flag, unlike Anthropic's) — both are recorded in the trace with `is_error=True`
+rather than crashing the run.
+
+**Important discovery, not anticipated by the original plan**: `fastmcp.Client.call_tool(...)`'s
+`.data` field is **not** the original Pydantic model instance — the client reconstructs return
+values from the tool's JSON output schema into a dynamically-generated `dataclass`
+(`fastmcp.utilities.json_schema_type.Root`), since the client only sees JSON Schema over the
+wire, not the server's actual Python types. `_serialize_tool_result` in `agents/base.py`
+recursively converts via `dataclasses.is_dataclass`/`dataclasses.asdict`, not
+`isinstance(..., pydantic.BaseModel)` as originally planned — confirmed by direct
+experimentation against `get_po` (single object), `get_asns_for_po` (list of dataclasses), and
+`get_trade_agreement` (`None` case) before writing the serializer.
+
+Added one-line docstrings to all 8 `mcp_server/tools/*.py` functions — FastMCP derives each
+tool's LLM-visible `description` from its docstring, and all 8 were previously blank, which
+would have left the agent with no information about what any tool does beyond its name and
+parameter types.
+
+Wrote `tests/test_agents_base.py` (7 tests): real in-process `fastmcp.Client(mcp)` for the MCP
+side (same pattern as `test_server.py`, `monkeypatch.setenv("SCENARIO_ID", ...)`, no mocking),
+and a small hand-written `StubAsyncOpenAI` (constructor-injected, no `unittest.mock.patch`
+needed) returning scripted real `openai.types.chat.ChatCompletion` objects — using the actual
+SDK types rather than duck-typed stand-ins to catch attribute-shape mistakes. Covers:
+text-only response, single tool-call round trip, parallel tool calls in one turn, a real
+`ToolError` from `normalize_uom` on an unknown SKU, malformed tool-call-argument JSON, a
+runner that never stops calling tools (`AgentRunnerError` after exactly `max_iterations`
+calls), and MCP→OpenAI tool-schema translation (asserts all 8 tools have non-empty
+descriptions — a regression guard for the docstring fix).
+
+`pytest tests/` — 70 passed, 0 failed (63 prior + 7 new).
+
+---
+
+## Previous layer
 **Layer 4 — `mcp_server/server.py` FastMCP wiring complete**
 
 Built `mcp_server/server.py`: constructs a `FastMCP("deduction-autopsy")` app and registers the
@@ -108,12 +170,16 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Start **Layer 5**: `agents/base.py` — shared Anthropic tool-use loop (`AgentRunner`):
-`create → process tool_use blocks → append results → repeat`, logging every tool call
-name+args to a trace list, returning `AgentResult(final_text, trace)`. This is what both
-`agents/investigator.py` and `agents/reviewer.py` (Layer 6) will use to talk to the MCP
-server built in Layer 4. Revisit the OpenRouter-vs-Anthropic-SDK question (see "Known
-issues" below) before writing this layer.
+Start **Layer 6**: `agents/investigator.py` + `agents/reviewer.py`. Each defines its system
+prompt (`INVESTIGATOR_SYSTEM_PROMPT`/`REVIEWER_SYSTEM_PROMPT` per `docs/PLAN.md`'s System
+Prompt Design section) and a `run_investigator()`/`run_reviewer()` entry point that constructs
+an `AgentRunner` (from Layer 5) with the right model/system prompt and calls `.run(...)`.
+Needs the exact OpenRouter model slugs for Claude Haiku 4.5 (Investigator) and Claude Sonnet
+4.5 (Reviewer) confirmed against OpenRouter's actual model catalog first — `CLAUDE.md`
+deliberately left these unresolved rather than hardcoding a guess. Also needs a `CaseFile`
+Pydantic model (doesn't exist yet — currently only a JSON shape in `docs/SPEC.md`) if Layer 6
+wants schema-validated parsing of the Investigator's output before Layer 7 does its own
+required-fields check.
 
 ## Layer status
 
@@ -124,14 +190,14 @@ issues" below) before writing this layer.
 | 2 | All 7 scenario fixture JSON files + fixture validation tests | ✅ Done |
 | 3 | `mcp_server/fixtures.py` + `mcp_server/tools/` + unit tests passing | ✅ Done |
 | 4 | `mcp_server/server.py` (FastMCP wiring) | ✅ Done |
-| 5 | `agents/base.py` (shared tool loop) | ⬜ Not started |
+| 5 | `agents/base.py` (shared tool loop) | ✅ Done |
 | 6 | `agents/investigator.py` + `agents/reviewer.py` | ⬜ Not started |
 | 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ⬜ Not started |
 | 8 | `cli/run_claim.py` + `cli/run_all.py` | ⬜ Not started |
 | 9 | Integration tests + README | ⬜ Not started |
 
 ## Tests passing
-`pytest tests/` — 63 passed, 0 failed:
+`pytest tests/` — 70 passed, 0 failed:
 - `test_fixtures.py` (45): Pydantic model validation for every fixture file, po_id/retailer
   cross-document consistency, file-layout expectations per scenario, ground-truth claim_id
   matches, and each scenario's specific numeric trap.
@@ -144,17 +210,26 @@ issues" below) before writing this layer.
   round-trip through the real MCP protocol (in-process `fastmcp.Client`), `None` return
   serializes correctly (s06 promo mismatch), `ValueError` surfaces as `ToolError` through
   `call_tool` rather than being swallowed.
+- `test_agents_base.py` (7): text-only response, single/parallel tool-call round trips,
+  real `ToolError` surfaced without crashing, malformed tool-call JSON handled, max-iterations
+  safety bound raises `AgentRunnerError`, and MCP→OpenAI tool-schema translation with a
+  non-empty-description regression guard.
 
 ## Known issues / decisions pending
 - Cross-document referential integrity (po_id/sku consistency) is now enforced by
   `tests/test_fixtures.py`, not at the model layer — this is intentional; models stay
   single-document, fixture-level tests catch cross-file drift.
-- Tech stack note: user is considering OpenRouter as an alternative to calling the
-  Anthropic SDK directly for agents. Confirmed this does not affect Layers 1-4 (models,
-  fixtures, tools, MCP server); revisit when building `agents/base.py` (Layer 5).
+- **Resolved**: OpenRouter-vs-Anthropic-SDK decision — user chose OpenRouter. `CLAUDE.md`,
+  `pyproject.toml`, and `.env.example` updated accordingly; see Layer 5 notes above.
 - `pytest-asyncio` added as a dev dependency (not anticipated in `docs/PLAN.md`'s original
   dependency list) since `fastmcp.Client`'s test API is async-only; `asyncio_mode = "auto"`
   set in `pyproject.toml` so async test functions need no per-test decorator.
+- `fastmcp.Client.call_tool(...).data` returns dynamically-generated dataclasses, not the
+  server's original Pydantic model instances — see Layer 5 notes above. Worth remembering if
+  Layer 6/7 ever need to inspect tool results directly rather than through `AgentRunner`'s
+  serializer.
+- Exact OpenRouter model slugs for Claude Haiku 4.5 / Sonnet 4.5 still need confirming against
+  OpenRouter's live model catalog before Layer 6 can hardcode them.
 
 ---
 *Update this file at the end of every session before stopping.*
