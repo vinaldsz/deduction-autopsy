@@ -38,6 +38,12 @@ tool logic instead. Changing expected verdicts requires explicit user sign-off.
 - SKU-to-product-name mapping — SKUs stay opaque codes (e.g. "SKU-001") everywhere, no
   product master/catalog; mention as future work in README (display-only, cosmetic for
   dispute packets), do not build
+- Heterogeneous mock data sources — fixtures stay plain JSON for all 7 scenarios; no
+  relational DB, CSV/Excel, or other mixed backing stores behind `FixtureLoader`. The goal
+  (recreating the messiness of real multi-system data landscapes, and testing that the
+  MCP-tool abstraction hides the backing store from agents) is worth pursuing once the
+  in-scope build (layers 1-9) is complete — mention as future work in README, do not build
+  now
 - Production concerns: auth, multi-tenancy, persistence beyond local files
 
 ---

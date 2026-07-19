@@ -83,6 +83,9 @@ These expected verdicts are fixed — see [`docs/SPEC.md`](docs/SPEC.md) for ful
 - A frontend/UI — CLI output and markdown evidence packets only
 - Parallel/concurrent orchestration
 - SKU-to-product-name mapping — SKUs stay opaque codes everywhere
+- Heterogeneous mock data sources (relational DB, CSV/Excel, etc. behind `FixtureLoader`,
+  to recreate the messiness of real multi-system data landscapes) — planned as a
+  post-launch enhancement once the in-scope build is complete, not part of the current plan
 - Production concerns: auth, multi-tenancy, persistence beyond local files
 
 See [`CLAUDE.md`](CLAUDE.md) for the full set of build and safeguard rules this project
