@@ -1,0 +1,9 @@
+{
+  "SKU-001": { "CASE_to_EACH": 12 },
+  "SKU-002": { "CASE_to_EACH": 24, "PALLET_to_CASE": 40 },
+  "SKU-003": { "CASE_to_EACH": 6 },
+  "SKU-004": { "CASE_to_EACH": 12 },
+  "SKU-005": { "CASE_to_EACH": 10 },
+  "SKU-005-ALT": { "CASE_to_EACH": 10 },
+  "SKU-006": { "CASE_to_EACH": 24 }
+}

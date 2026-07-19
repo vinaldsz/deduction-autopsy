@@ -1,0 +1,23 @@
+[project]
+name = "deduction-autopsy"
+version = "0.1.0"
+description = "Two-agent reconciliation system for CPG retailer deduction claims"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic",
+    "fastmcp",
+    "pydantic>=2",
+    "rich",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["mcp_server*", "agents*", "orchestrator*", "cli*"]
