@@ -152,7 +152,7 @@ the structured JSON verdict object.
 # Unit tests (no API key needed)
 pytest tests/test_fixtures.py tests/test_uom_tools.py tests/test_document_tools.py -v
 
-# Integration tests (requires ANTHROPIC_API_KEY)
+# Integration tests (requires OPENROUTER_API_KEY)
 pytest tests/test_pipeline_scenarios.py -m integration -v
 
 # Single claim end-to-end

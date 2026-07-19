@@ -1,6 +1,71 @@
 # Progress
 
 ## Current layer
+**Layer 9 — Integration tests + README complete (build order finished)**
+
+Added `tests/test_pipeline_scenarios.py`: one `@pytest.mark.integration` test, parametrized
+over `orchestrator.ground_truth.GROUND_TRUTH` (reused directly, not re-hardcoded), calling
+`run_pipeline` with no injected clients so it builds a real `AsyncOpenAI` + spawns the real
+MCP server subprocess — the first tests in the suite to hit the network. Follows
+`ground_truth.py`'s own docstring: compares `investigator_verdict`/`reviewer_verdict` against
+`expected_investigator`/`expected_reviewer`, never `final_verdict` (same convention as
+`cli/run_all.py`). For the 4 scenarios with a required-tool-call check
+(`orchestrator/pipeline.py`'s `REQUIRED_TOOL_CALLS`), also reads the written
+`reasoning_trace.json` and asserts the specific tool name appears in the Investigator's
+`tool_calls` — making explicit what `run_pipeline` already enforces internally (it would raise
+`PipelineError` otherwise). Also asserts `verdict.json`/`reasoning_trace.json` always exist and
+`dispute_packet.md` exists iff `final_verdict == "INVALID"`.
+
+Registered the `integration` marker in `pyproject.toml` and set
+`addopts = "-m 'not integration'"` so plain `pytest`/`pytest tests/` never spends API credits
+by accident — integration tests require explicit `-m integration`. Added `tests/conftest.py`
+(`load_dotenv()`) since pytest doesn't source `.env` on its own the way the CLI scripts'
+`__main__` blocks do — without it the new tests silently skipped (missing
+`OPENROUTER_API_KEY` in `os.environ` despite it being in `.env`).
+
+Fixed the stale `ANTHROPIC_API_KEY` reference in `docs/PLAN.md`'s verification snippet to
+`OPENROUTER_API_KEY`. Rewrote `README.md`: layer-status table now shows all 9 layers done, new
+"Running the CLI" section (`.env` setup, `run_claim`/`run_all` invocations, output artifacts
+per claim), "Running tests" now distinguishes default unit tests from opt-in integration
+tests, and a new "Future work" section transcribing `CLAUDE.md`'s "Explicit out of scope" list
+(parallel orchestration, SKU-to-product-name mapping, heterogeneous mock data sources,
+API-facing deployment concerns) so a reader doesn't have to open `CLAUDE.md` to find it.
+
+**First-ever live run of all 7 scenarios against real OpenRouter — mixed results, logged
+honestly rather than adjusted to pass.** `pytest tests/test_pipeline_scenarios.py -m
+integration -v`: **4/7 passed** (s02, s03, s05, s07) on the full run. Re-ran the 3 failures
+(s01, s04, s06) alone to capture full tracebacks (the first run's output got truncated by an
+overly aggressive `tail` in the capture command, not a test problem):
+- **s06** passed on the re-run (`OVERTURN` the first time, `CONFIRM` the second) — looks like
+  genuine model-response variance run-to-run rather than a reproducible bug; not investigated
+  further this session.
+- **s01 failed both times**: Reviewer returns `OVERTURN` instead of `CONFIRM` for the
+  "everything genuinely agrees" scenario. Reproducible across 2 runs — not a fluke.
+- **s04 failed both times** with the same root cause: the Investigator calls `get_po`,
+  `get_asns_for_po`, `get_invoice`, `get_receiving_record` using `po_id="CLM-004"` (the
+  *claim* ID) instead of resolving the actual PO ID (`PO-004`) from `get_deduction_claim`'s
+  response first. Every one of those calls fails with `ValueError: po_id 'CLM-004' not found`,
+  so the Investigator ends up with almost no evidence and (reasonably, given what it actually
+  gathered) proposes `ESCALATE` instead of `INVALID`. Root cause:
+  `INVESTIGATOR_SYSTEM_PROMPT` (`agents/investigator.py`) lists
+  "get_deduction_claim, get_po, get_asns_for_po, ..." as one flat sequence without explicitly
+  telling the model that `get_po`/`get_asns_for_po`/`get_invoice`/`get_receiving_record` all
+  take the PO ID returned by `get_deduction_claim`, not the claim ID itself — the model is left
+  to infer that, and Haiku got it wrong specifically on s04.
+
+**Not fixed this session** — Layer 9's scope (per the approved plan) was integration tests +
+README, not agent-prompt changes; per `CLAUDE.md`, the fix belongs in
+`agents/investigator.py`'s system prompt (make the claim_id→po_id handoff explicit), not in
+fixture data. Flagged as the top item for a follow-up session — see "Known issues" below.
+
+`pytest tests/` — 125 collected, 118 passed + 7 deselected by default (the 7 deselected are
+exactly `test_pipeline_scenarios.py`'s parametrized integration cases — confirmed via
+`--collect-only` that no other file's count changed this layer). Live integration run:
+`pytest tests/test_pipeline_scenarios.py -m integration -v` — 4/7 passed (see above).
+
+---
+
+## Previous layer
 **Layer 8 — `cli/run_claim.py` + `cli/run_all.py` complete**
 
 Built `cli/run_claim.py`: `parse_args` (stdlib `argparse`) takes `--claim-id`/`--scenario`
@@ -372,19 +437,27 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Start **Layer 9**: Integration tests + README. `docs/PLAN.md` describes
-`tests/test_pipeline_scenarios.py` marked `@pytest.mark.integration`, calling `run_pipeline`
-directly (not the CLI) for all 7 scenarios and asserting `final_verdict`/required tool calls —
-note it's `OPENROUTER_API_KEY` that's actually needed, not the `ANTHROPIC_API_KEY` PLAN.md's
-verification snippet still says (stale from before the Layer 5 OpenRouter switch). The README
-should cover: how to run `cli/run_claim.py`/`cli/run_all.py`, the `.env` setup, and the
-documented future-work items (parallel orchestration, SKU-to-product-name mapping, heterogeneous
-mock data sources — see `CLAUDE.md`'s "Explicit out of scope" section for exact wording).
-Only `cli/run_claim.py --claim-id CLM-002 --scenario s02_casepack_mismatch` has been run live
-against OpenRouter so far (see Layer 8 notes above) — the full 7-scenario `run_all.py` suite has
-never been run live yet; budget time/cost for that as part of Layer 9's integration-test pass,
-and watch for the same prose-before-JSON pattern recurring on other scenarios (the `_extract_json`
-fix should handle it, but it's only been observed live on s02 so far).
+The Layer 1-9 build order is now complete. What's left is fixing the two reproducible live
+failures the Layer 9 integration run surfaced (see "Known issues" below), not new layers:
+
+1. **Priority fix — s04's investigator uses the wrong ID.** `agents/investigator.py`'s
+   `INVESTIGATOR_SYSTEM_PROMPT` needs to explicitly say that `get_po`/`get_asns_for_po`/
+   `get_invoice`/`get_receiving_record` all take the PO ID *returned by* `get_deduction_claim`,
+   not the claim ID itself — right now the model has to infer that, and Haiku got it wrong on
+   s04 both times it was run live. This is a prompt fix per `CLAUDE.md` ("change agent prompts
+   or tool logic instead" of fixtures). After fixing, re-run
+   `pytest tests/test_pipeline_scenarios.py -m integration -v -k s04` live to confirm.
+2. **s01's reviewer overturns a clean-agreement case.** Reproducible across 2 live runs
+   (`OVERTURN` both times, expected `CONFIRM`). Worth a closer look at
+   `REVIEWER_SYSTEM_PROMPT` (`agents/reviewer.py`) — possibly it's too aggressive about finding
+   something to dispute even when the Investigator's case is genuinely solid. Re-run live after
+   any prompt change.
+3. **s06 was flaky, not reproducible** (failed once, passed once) — lower priority; revisit only
+   if it recurs.
+
+Re-run the full `pytest tests/test_pipeline_scenarios.py -m integration -v` suite after any
+fix, and budget for genuine run-to-run variance (see s06) rather than expecting bit-for-bit
+reproducibility even at `temperature=0`.
 
 ## Layer status
 
@@ -399,7 +472,7 @@ fix should handle it, but it's only been observed live on s02 so far).
 | 6 | `agents/investigator.py` + `agents/reviewer.py` | ✅ Done |
 | 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ✅ Done |
 | 8 | `cli/run_claim.py` + `cli/run_all.py` | ✅ Done |
-| 9 | Integration tests + README | ⬜ Not started |
+| 9 | Integration tests + README | ✅ Done |
 
 ## Tests passing
 `pytest tests/` — 116 passed, 0 failed:
@@ -450,6 +523,17 @@ fix should handle it, but it's only been observed live on s02 so far).
   against s07's fixtures.
 
 ## Known issues / decisions pending
+- **Open — found during Layer 9's first live 7-scenario run, not yet fixed**: s04's
+  Investigator calls `get_po`/`get_asns_for_po`/`get_invoice`/`get_receiving_record` with
+  `po_id="CLM-004"` (the claim ID) instead of the actual PO ID (`PO-004`), so every one of
+  those calls errors out and the Investigator proposes `ESCALATE` instead of `INVALID` on
+  almost no evidence. Reproduced on both live runs this session. Root cause: nothing in
+  `INVESTIGATOR_SYSTEM_PROMPT` explicitly says these tools take the PO ID from
+  `get_deduction_claim`'s response, not the claim ID — see "Next session" above for the fix.
+- **Open — found during Layer 9's first live 7-scenario run, not yet fixed**: s01's Reviewer
+  returns `OVERTURN` instead of `CONFIRM` for the scenario where every document genuinely
+  agrees. Reproduced on both live runs this session (not a one-off). Not yet root-caused —
+  see "Next session" above.
 - Cross-document referential integrity (po_id/sku consistency) is now enforced by
   `tests/test_fixtures.py`, not at the model layer — this is intentional; models stay
   single-document, fixture-level tests catch cross-file drift.

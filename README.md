@@ -16,23 +16,20 @@ Full domain spec: [`docs/SPEC.md`](docs/SPEC.md). Full implementation plan:
 
 ## Status
 
-This project is being built layer by layer (see [`PROGRESS.md`](PROGRESS.md) for the
-authoritative, up-to-date state). As of now:
+This project was built layer by layer (see [`PROGRESS.md`](PROGRESS.md) for the
+authoritative, up-to-date state). All layers are complete:
 
 | Layer | What | Status |
 |---|---|---|
 | 1 | `mcp_server/models.py` + UOM conversion table | ✅ Done |
 | 2 | 7 scenario fixtures + fixture validation tests | ✅ Done |
-| 3 | `mcp_server/fixtures.py` + `mcp_server/tools/` | ⬜ Not started |
-| 4 | `mcp_server/server.py` (FastMCP) | ⬜ Not started |
-| 5 | `agents/base.py` | ⬜ Not started |
-| 6 | `agents/investigator.py` + `agents/reviewer.py` | ⬜ Not started |
-| 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ⬜ Not started |
-| 8 | `cli/run_claim.py` + `cli/run_all.py` | ⬜ Not started |
-| 9 | Integration tests | ⬜ Not started |
-
-The MCP server, agents, orchestrator, and CLI don't exist yet — only the data models and
-scenario fixtures. The sections below describe what's runnable today.
+| 3 | `mcp_server/fixtures.py` + `mcp_server/tools/` | ✅ Done |
+| 4 | `mcp_server/server.py` (FastMCP) | ✅ Done |
+| 5 | `agents/base.py` | ✅ Done |
+| 6 | `agents/investigator.py` + `agents/reviewer.py` | ✅ Done |
+| 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ✅ Done |
+| 8 | `cli/run_claim.py` + `cli/run_all.py` | ✅ Done |
+| 9 | Integration tests + README | ✅ Done |
 
 ## Setup
 
@@ -41,17 +38,46 @@ uv venv
 uv pip install -e ".[dev]"
 ```
 
-Requires Python 3.11+.
+Requires Python 3.11+. Copy `.env.example` to `.env` and set `OPENROUTER_API_KEY` (get one
+at https://openrouter.ai/keys) — this is required to run the CLI or the integration tests;
+unit tests don't need it.
+
+## Running the CLI
+
+Investigate a single claim end-to-end:
+
+```bash
+python -m cli.run_claim --claim-id CLM-002 --scenario s02_casepack_mismatch
+```
+
+Run all 7 scenarios and print a pass/fail table against ground truth:
+
+```bash
+python -m cli.run_all
+```
+
+Each claim run writes its artifacts to `outputs/<claim_id>/`:
+
+- `verdict.json` — investigator/reviewer/final verdicts, confidence, timestamp (always written)
+- `reasoning_trace.json` — full message history for both agents, including every tool call (always written)
+- `dispute_packet.md` — normalized quantities, timeline, and dispute grounds (only when `final_verdict` is `INVALID`)
 
 ## Running tests
 
 ```bash
-pytest tests/test_fixtures.py -v
+# Unit tests — no API key needed, runs by default
+pytest tests/ -v
+
+# Integration tests — hits the real OpenRouter API, costs money and time, requires
+# OPENROUTER_API_KEY. Excluded from the default `pytest tests/` run (see pyproject.toml);
+# opt in explicitly:
+pytest tests/test_pipeline_scenarios.py -m integration -v
 ```
 
-This validates all 7 scenario fixture files against their Pydantic models and checks
-cross-document consistency (`po_id`/`retailer` alignment, expected file layout per
-scenario, and each scenario's specific numeric trap).
+Unit tests mock OpenRouter responses (`tests/agent_stubs.py`) but always exercise the real
+MCP server in-process — no test hits OpenRouter or spawns a subprocess except the
+integration suite. The integration suite runs `run_pipeline` directly (not through the CLI)
+for all 7 scenarios and asserts both agents' verdicts match `orchestrator/ground_truth.py`.
 
 ## The seven scenarios
 
@@ -81,12 +107,24 @@ These expected verdicts are fixed — see [`docs/SPEC.md`](docs/SPEC.md) for ful
 - Real EDI X12 parsing (fixtures resemble real documents, not valid EDI)
 - Third-party integrations (NetSuite, Shopify, Amazon, etc.)
 - A frontend/UI — CLI output and markdown evidence packets only
-- Parallel/concurrent orchestration
-- SKU-to-product-name mapping — SKUs stay opaque codes everywhere
-- Heterogeneous mock data sources (relational DB, CSV/Excel, etc. behind `FixtureLoader`,
-  to recreate the messiness of real multi-system data landscapes) — planned as a
-  post-launch enhancement once the in-scope build is complete, not part of the current plan
 - Production concerns: auth, multi-tenancy, persistence beyond local files
+
+## Future work
+
+These are deliberately out of scope for the current build (see [`CLAUDE.md`](CLAUDE.md)'s
+"Explicit out of scope" section for the authoritative list):
+
+- **Parallel/concurrent orchestration** — scenarios and claims currently run sequentially.
+- **SKU-to-product-name mapping** — SKUs stay opaque codes (e.g. `SKU-001`) everywhere; a
+  display-only product catalog for dispute packets would be cosmetic, not functional.
+- **Heterogeneous mock data sources** — fixtures are plain JSON for all 7 scenarios today.
+  Backing `FixtureLoader` with a mix of a relational DB, CSV/Excel, etc. would better
+  recreate the messiness of real multi-system data landscapes and more thoroughly test that
+  the MCP-tool abstraction hides the backing store from agents — worth pursuing once the
+  in-scope build is stable.
+- **API-facing deployment concerns** — auth, per-user/per-IP rate limiting, and per-user
+  cost caps on OpenRouter usage only become a real concern if this sits behind a
+  frontend/web UI instead of a locally-run CLI.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full set of build and safeguard rules this project
 follows.
