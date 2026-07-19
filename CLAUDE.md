@@ -35,6 +35,9 @@ tool logic instead. Changing expected verdicts requires explicit user sign-off.
 - Any third-party integrations (NetSuite, Shopify, Amazon, etc.)
 - Frontend or UI — CLI output and markdown evidence packets only
 - Parallel/concurrent orchestration — mention as future work in README, do not build
+- SKU-to-product-name mapping — SKUs stay opaque codes (e.g. "SKU-001") everywhere, no
+  product master/catalog; mention as future work in README (display-only, cosmetic for
+  dispute packets), do not build
 - Production concerns: auth, multi-tenancy, persistence beyond local files
 
 ---
