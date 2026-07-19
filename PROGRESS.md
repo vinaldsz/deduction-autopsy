@@ -1,6 +1,78 @@
 # Progress
 
 ## Current layer
+**Layer 8 — `cli/run_claim.py` + `cli/run_all.py` complete**
+
+Built `cli/run_claim.py`: `parse_args` (stdlib `argparse`) takes `--claim-id`/`--scenario`
+(required) plus `--output-dir`/`--max-attempts` (default to `run_pipeline`'s own defaults, so
+omitting them changes nothing). `main(argv=None, *, openai_client=None, mcp_client=None,
+console=None)` mirrors `run_pipeline`'s own DI convention — real invocation via `__main__`
+passes no clients, so `run_pipeline` constructs the real `AsyncOpenAI`/subprocess MCP client;
+tests inject `StubAsyncOpenAI` + a real in-process `fastmcp.Client(mcp)`. Catches
+`PipelineError`/`AgentRunnerError` and prints a clean error instead of a traceback, and checks
+for `OPENROUTER_API_KEY` up front (before touching `run_pipeline`) so a missing key fails fast
+with a clear message rather than a deep `KeyError`. Prints a `rich` table of the `PipelineResult`
+(verdicts, confidence, output dir) plus dispute grounds when present.
+
+Built `cli/run_all.py`: hardcoded `GROUND_TRUTH` list from `docs/SPEC.md`'s ground-truth table
+(scenario, claim_id, expected_investigator, expected_reviewer). `main()` runs all 7 scenarios
+**sequentially** (per `CLAUDE.md`'s out-of-scope note on parallel orchestration), sharing one
+`AsyncOpenAI` client across calls but leaving `mcp_client` unset so each scenario gets its own
+subprocess with the correct `SCENARIO_ID`. Accepts an injectable `run_pipeline_fn` purely for
+testing the table/pass-fail/exit-code logic without needing 7 real or stubbed pipeline runs. A
+`PipelineError`/`AgentRunnerError` on one scenario is recorded as an error row and does **not**
+abort the remaining scenarios. Exit code `0` only if all 7 scenarios match ground truth.
+
+**Correctly implemented the documented gotcha**: the pass/fail check compares
+`result.investigator_verdict` against `expected_investigator` **and** `result.reviewer_verdict`
+against `expected_reviewer` (`"CONFIRM"` for all 7) — never against `.final_verdict`. Added
+`test_ground_truth_check_uses_reviewer_verdict_not_final_verdict` as an explicit regression test
+(constructs a fake result with a `final_verdict` that would fail the check if compared against
+by mistake, asserts it still passes).
+
+**`run_all.py` initially had a real bug, caught during manual testing, not code review**: since
+it took zero CLI flags, it never called `argparse` at all — running `python -m cli.run_all
+--help` silently ignored the flag and executed a real 7-scenario run against the live
+OPENROUTER_API_KEY instead of printing help. Caught this manually (see below) after it had
+already launched a few real MCP subprocesses; killed it, no partial `outputs/` were written.
+Fixed by giving `run_all.py` its own (empty) `parse_args`/`argv` handling too, so `--help` and
+any unrecognized flag now fail fast via `argparse` instead of falling through to a real run.
+Added `test_parse_args_rejects_unrecognized_flags` as a regression test.
+
+Added `python-dotenv` as a new dependency; both scripts call `load_dotenv()` in their `__main__`
+block so `.env`'s `OPENROUTER_API_KEY`/`SCENARIO_ID` are picked up automatically — previously
+nothing in the codebase loaded `.env` at all.
+
+**Live smoke test against real OpenRouter** (`python -m cli.run_claim --claim-id CLM-002
+--scenario s02_casepack_mismatch`), first real end-to-end run of the whole system: initially
+**failed** — `PipelineError: Investigator failed to produce a valid CaseFile ... after 3
+attempts: Expecting value: line 1 column 1 (char 0)`. Diagnosed by calling `run_investigator`
+directly against the real model: it reasons through the five-step protocol in prose, then emits
+the CaseFile inside a ` ```json ` fence *after* that prose — despite the system prompt's "ONLY a
+single JSON object, no prose before or after" instruction. `_extract_json` in
+`orchestrator/pipeline.py` only stripped a fence when the response *started* with `` ``` ``, so
+it fed the whole prose+JSON blob to `json.loads` and failed identically on all 3 retries (the
+correction message didn't change the model's behavior). Fixed `_extract_json` to (1) find a
+` ```json `/`` ``` `` fence anywhere in the text via regex, and (2) fall back to the outermost
+`{...}` brace-matched substring if there's no fence at all — a `tool logic` fix per `CLAUDE.md`,
+not a prompt or fixture change. Added `test_extract_json_handles_prose_before_json` (parametrized)
+and `test_happy_path_survives_prose_before_fenced_json` (full `run_pipeline` regression test
+using a stub that reproduces the exact prose-then-fence pattern). Re-ran the live smoke test
+after the fix: CLM-002 now correctly resolves `INVALID` → `CONFIRM` (matches SPEC.md), with all
+three output artifacts written correctly, confirming the CLI, `run_pipeline`, and the fix all
+work end-to-end against a real model. Did not run the full `run_all.py` 7-scenario suite live
+this session (cost/time tradeoff, deferred to a future session or explicit request).
+
+Wrote `tests/test_cli_run_claim.py` (8 tests) and `tests/test_cli_run_all.py` (7 tests), plus 2
+new tests in `tests/test_orchestrator_pipeline.py` for the `_extract_json` fix — all following
+the established `StubAsyncOpenAI` + real in-process `fastmcp.Client(mcp)` convention (no
+subprocess/network calls in the test suite).
+
+`pytest tests/` — 116 passed, 0 failed (98 prior + 18 new).
+
+---
+
+## Previous layer
 **Layer 7 — `orchestrator/pipeline.py` + `orchestrator/output.py` complete**
 
 Built `orchestrator/pipeline.py`'s `run_pipeline(*, claim_id, scenario, openai_client=None,
@@ -300,20 +372,19 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Start **Layer 8**: `cli/run_claim.py` + `cli/run_all.py`. `run_claim.py` should call
-`orchestrator.pipeline.run_pipeline(claim_id=..., scenario=...)` with no injected
-`openai_client`/`mcp_client` (letting it construct the real `AsyncOpenAI` + subprocess MCP
-client) and print the resulting `PipelineResult` — needs `OPENROUTER_API_KEY` set in `.env`.
-`run_all.py` iterates the 7 scenarios from `docs/SPEC.md`'s ground-truth table and prints a
-`rich` pass/fail table comparing `final_verdict` against the "Final expected" column (all
-`CONFIRM`... note: the ground-truth table's "Final expected" column is literally the
-Reviewer's verdict vocabulary, not `run_pipeline`'s business-vocabulary `final_verdict` field —
-Layer 8 should compare against `reviewer_verdict`, not `final_verdict`, or the pass/fail table
-will be wrong for every scenario since `final_verdict` is `VALID`/`INVALID` depending on
-scenario while the table says `CONFIRM` uniformly). This is a real, first-run manual
-verification against OpenRouter — no scenario has been run end-to-end against a live model yet;
-budget for prompt-tuning iteration once actual model behavior is observed (the CaseFile/Reviewer
-JSON schemas and correction-retry loop are built to spec but untested against real model output).
+Start **Layer 9**: Integration tests + README. `docs/PLAN.md` describes
+`tests/test_pipeline_scenarios.py` marked `@pytest.mark.integration`, calling `run_pipeline`
+directly (not the CLI) for all 7 scenarios and asserting `final_verdict`/required tool calls —
+note it's `OPENROUTER_API_KEY` that's actually needed, not the `ANTHROPIC_API_KEY` PLAN.md's
+verification snippet still says (stale from before the Layer 5 OpenRouter switch). The README
+should cover: how to run `cli/run_claim.py`/`cli/run_all.py`, the `.env` setup, and the
+documented future-work items (parallel orchestration, SKU-to-product-name mapping, heterogeneous
+mock data sources — see `CLAUDE.md`'s "Explicit out of scope" section for exact wording).
+Only `cli/run_claim.py --claim-id CLM-002 --scenario s02_casepack_mismatch` has been run live
+against OpenRouter so far (see Layer 8 notes above) — the full 7-scenario `run_all.py` suite has
+never been run live yet; budget time/cost for that as part of Layer 9's integration-test pass,
+and watch for the same prose-before-JSON pattern recurring on other scenarios (the `_extract_json`
+fix should handle it, but it's only been observed live on s02 so far).
 
 ## Layer status
 
@@ -327,15 +398,30 @@ JSON schemas and correction-retry loop are built to spec but untested against re
 | 5 | `agents/base.py` (shared tool loop) | ✅ Done |
 | 6 | `agents/investigator.py` + `agents/reviewer.py` | ✅ Done |
 | 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ✅ Done |
-| 8 | `cli/run_claim.py` + `cli/run_all.py` | ⬜ Not started |
+| 8 | `cli/run_claim.py` + `cli/run_all.py` | ✅ Done |
 | 9 | Integration tests + README | ⬜ Not started |
 
 ## Tests passing
-`pytest tests/` — 98 passed, 0 failed:
-- `test_orchestrator_pipeline.py` (13): s01/s02 happy paths (investigator/reviewer wiring,
+`pytest tests/` — 116 passed, 0 failed:
+- `test_cli_run_claim.py` (8): argparse required-flag enforcement and `--output-dir`/
+  `--max-attempts` defaults/overrides, happy path against s01 (exit 0, verdict fields printed,
+  `verdict.json` written under a custom `--output-dir`), `PipelineError` path (exit 1, clean
+  error message, no traceback), missing-`OPENROUTER_API_KEY` path (exit 1 without touching
+  `run_pipeline` at all).
+- `test_cli_run_all.py` (7): all-7-pass summary line and exit 0; one scenario's
+  `investigator_verdict` mismatch fails only that row (exit 1, others still pass); a
+  `PipelineError` on one scenario is recorded as an error row and the loop continues to the
+  rest; missing-`OPENROUTER_API_KEY` returns 1 without ever calling `run_pipeline_fn`; explicit
+  regression test that the ground-truth check compares `reviewer_verdict` (not `final_verdict`)
+  against `"CONFIRM"`; `parse_args` regression test that `--help`/an unrecognized flag raises
+  `SystemExit` rather than falling through to a real run (see Layer 8 notes above for why this
+  matters).
+- `test_orchestrator_pipeline.py` (15): s01/s02 happy paths (investigator/reviewer wiring,
   output-artifact presence/absence), missing-required-field and missing-required-tool-call
   correction retries, `max_investigator_attempts` exhaustion, reasoning-strip safeguard,
-  full `_resolve_final_verdict` truth table.
+  full `_resolve_final_verdict` truth table, `_extract_json` parametrized cases (fenced,
+  unfenced, prose-before-fence, prose-before-unfenced-brace) and a full-pipeline regression test
+  reproducing the exact live prose-before-fence failure.
 - `test_orchestrator_output.py` (5): `verdict.json`/`reasoning_trace.json`/`dispute_packet.md`
   writers — paths, JSON shape, markdown content, empty-dispute-grounds handling, nested
   output-dir creation.
@@ -390,12 +476,26 @@ JSON schemas and correction-retry loop are built to spec but untested against re
   looked like. Fixed by passing `messages=list(messages)` (shallow copy) to `create()`. Worth
   keeping in mind if `agents/base.py` changes again: don't mutate `messages` after any call
   whose kwargs might still be referenced (tests or otherwise).
-- Layer 8 gotcha to watch for: `docs/SPEC.md`'s ground-truth table's "Final expected" column is
-  in the *Reviewer's* vocabulary (`CONFIRM`/`OVERTURN`/`ESCALATE`, uniformly `CONFIRM` across
-  all 7 scenarios), not `run_pipeline`'s business-vocabulary `final_verdict` field
-  (`VALID`/`INVALID`/`ESCALATE`, which varies per scenario). `cli/run_all.py`'s pass/fail table
-  must compare against `PipelineResult.reviewer_verdict`, not `.final_verdict` — see Layer 7's
-  "Next session" note above.
+- **Resolved**: the "Final expected" vocabulary gotcha flagged at the end of Layer 7 —
+  `cli/run_all.py`'s pass/fail check compares `reviewer_verdict` (not `final_verdict`) against
+  `"CONFIRM"`, with an explicit regression test. See Layer 8 notes above.
+- **Found and fixed during Layer 8 (manual smoke test, not code review)**: `cli/run_all.py` took
+  no CLI flags at all and never called `argparse`, so `python -m cli.run_all --help` silently
+  ignored the flag and executed a real 7-scenario run against the live `OPENROUTER_API_KEY`
+  instead of printing help — caught mid-run and killed, no partial `outputs/` written. Fixed by
+  giving it an (empty) `parse_args`/`argv` too, so `--help`/any unrecognized flag now fails fast.
+  Worth remembering for any future zero-flag CLI entry point in this project: always parse
+  `sys.argv` even with no real options, so unexpected input can't fall through into a real run.
+- **Found and fixed during Layer 8's live smoke test**: `orchestrator/pipeline.py`'s
+  `_extract_json` only stripped a ` ``` ` fence when the model's response *started* with it. The
+  real Investigator model (via OpenRouter) reasons through the five-step protocol in prose first,
+  then emits the CaseFile inside a ` ```json ` fence afterward — despite the system prompt's
+  explicit "no prose before or after" instruction, and the correction-retry loop's message didn't
+  change this behavior across 3 attempts. Fixed `_extract_json` to find a fence anywhere in the
+  text (regex) and, failing that, fall back to the outermost `{...}` brace-matched substring.
+  Confirmed live against s02 after the fix (`INVALID`→`CONFIRM`, matches SPEC.md). Only observed
+  live on s02 so far — worth watching for the same pattern on the other 6 scenarios when Layer 9
+  runs `run_all.py` live for the first time.
 
 ---
 *Update this file at the end of every session before stopping.*

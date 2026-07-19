@@ -8,6 +8,7 @@ dependencies = [
     "fastmcp",
     "pydantic>=2",
     "rich",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]

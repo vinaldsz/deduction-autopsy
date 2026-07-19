@@ -4,7 +4,7 @@ import pytest
 from fastmcp import Client
 
 from mcp_server.server import mcp
-from orchestrator.pipeline import PipelineError, _resolve_final_verdict, run_pipeline
+from orchestrator.pipeline import PipelineError, _extract_json, _resolve_final_verdict, run_pipeline
 from tests.agent_stubs import StubAsyncOpenAI, make_completion
 
 VALID_CASE_FILE_JSON = json.dumps(
@@ -273,3 +273,50 @@ async def test_reviewer_receives_case_file_without_reasoning(monkeypatch, tmp_pa
 )
 def test_resolve_final_verdict(investigator_verdict, reviewer_verdict, expected):
     assert _resolve_final_verdict(investigator_verdict, reviewer_verdict) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ('{"a": 1}', '{"a": 1}'),
+        ('```\n{"a": 1}\n```', '{"a": 1}'),
+        ('```json\n{"a": 1}\n```', '{"a": 1}'),
+        (
+            'Let me analyze this...\n\nHere is my conclusion:\n\n```json\n{"a": 1}\n```',
+            '{"a": 1}',
+        ),
+        ('Some reasoning first. {"a": 1} trailing note.', '{"a": 1}'),
+    ],
+)
+def test_extract_json_handles_prose_before_json(raw, expected):
+    assert _extract_json(raw) == expected
+
+
+async def test_happy_path_survives_prose_before_fenced_json(monkeypatch, tmp_path):
+    """Regression test: a live OpenRouter run against s02 showed the Investigator reasoning in
+    prose before emitting the CaseFile inside a ```json fence — _extract_json must not require
+    the fence to be the very first characters of the response."""
+    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
+    prose_wrapped_case_file = (
+        "Let me walk through the five-step protocol.\n\n"
+        "Step 1: documents collected. Step 5: no prior claims.\n\n"
+        f"```json\n{VALID_CASE_FILE_JSON}\n```"
+    )
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(content=prose_wrapped_case_file),
+            make_completion(content=confirm_json("CLM-001")),
+        ]
+    )
+
+    async with Client(mcp) as mcp_client:
+        result = await run_pipeline(
+            claim_id="CLM-001",
+            scenario="s01_clean_shortage",
+            openai_client=stub,
+            mcp_client=mcp_client,
+            output_dir=tmp_path,
+        )
+
+    assert result.investigator_verdict == "VALID"
+    assert result.final_verdict == "VALID"

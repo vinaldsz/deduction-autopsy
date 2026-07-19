@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -98,13 +99,24 @@ REQUIRED_TOOL_CALLS: dict[str, Callable[[list[ToolCallRecord]], bool]] = {
 }
 
 
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
+
+
 def _extract_json(text: str) -> str:
     stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.split("\n", 1)[1] if "\n" in stripped else ""
-        if stripped.endswith("```"):
-            stripped = stripped.rsplit("```", 1)[0]
-    return stripped.strip()
+
+    fence_match = _JSON_FENCE_RE.search(stripped)
+    if fence_match:
+        return fence_match.group(1).strip()
+
+    # Some models reason in prose before the JSON object with no code fence at all — fall back
+    # to the outermost brace-matched substring rather than feeding the whole response to json.loads.
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start : end + 1]
+
+    return stripped
 
 
 def _required_tool_call_check(scenario: str) -> Callable[[list[ToolCallRecord]], bool] | None:
