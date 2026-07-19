@@ -1,0 +1,9 @@
+{
+  "claim_id": "CLM-006",
+  "po_id": "PO-006",
+  "retailer": "safeway",
+  "claimed_reason": "promo_billback",
+  "claimed_amount": 3840,
+  "claim_date": "2024-06-15",
+  "retailer_notes": "Deducting 10% promo billback per agreement PROMO-SUMMER-2024 covering this SKU."
+}

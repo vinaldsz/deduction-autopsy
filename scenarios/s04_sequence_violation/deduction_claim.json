@@ -1,0 +1,9 @@
+{
+  "claim_id": "CLM-004",
+  "po_id": "PO-004",
+  "retailer": "costco",
+  "claimed_reason": "shortage",
+  "claimed_amount": 900,
+  "claim_date": "2024-04-15",
+  "retailer_notes": "Invoice INV-004 dated 2024-04-08 covers 240 EACH, but only 228 EACH were received - deducting for 12-unit shortage."
+}

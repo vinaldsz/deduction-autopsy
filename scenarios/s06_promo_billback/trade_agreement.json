@@ -1,0 +1,10 @@
+{
+  "agreement_id": "TA-006",
+  "retailer": "safeway",
+  "sku": "SKU-006",
+  "promo_code": "PROMO-SPRING-2024",
+  "discount_terms": "10% off invoiced amount for units sold during the promo window",
+  "valid_from": "2024-03-01",
+  "valid_to": "2024-05-31",
+  "signed_by": "M. Alvarez"
+}

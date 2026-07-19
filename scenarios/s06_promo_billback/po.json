@@ -1,0 +1,9 @@
+{
+  "po_id": "PO-006",
+  "retailer": "safeway",
+  "sku": "SKU-006",
+  "ordered_qty": 480,
+  "ordered_uom": "EACH",
+  "unit_price": 80,
+  "order_date": "2024-06-01"
+}

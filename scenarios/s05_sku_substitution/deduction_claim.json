@@ -1,0 +1,9 @@
+{
+  "claim_id": "CLM-005",
+  "po_id": "PO-005",
+  "retailer": "publix",
+  "claimed_reason": "wrong_item",
+  "claimed_amount": 18000,
+  "claim_date": "2024-05-10",
+  "retailer_notes": "Received SKU-005-ALT instead of ordered SKU-005 - deducting full invoice amount for wrong item shipped."
+}

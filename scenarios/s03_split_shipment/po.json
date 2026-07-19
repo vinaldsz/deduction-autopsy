@@ -1,0 +1,9 @@
+{
+  "po_id": "PO-003",
+  "retailer": "kroger",
+  "sku": "SKU-003",
+  "ordered_qty": 720,
+  "ordered_uom": "EACH",
+  "unit_price": 50,
+  "order_date": "2024-03-01"
+}

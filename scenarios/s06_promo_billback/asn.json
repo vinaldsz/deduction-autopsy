@@ -1,0 +1,9 @@
+{
+  "asn_id": "ASN-006",
+  "po_id": "PO-006",
+  "sku": "SKU-006",
+  "shipped_qty": 480,
+  "shipped_uom": "EACH",
+  "ship_date": "2024-06-03",
+  "carrier": "Estes Express"
+}

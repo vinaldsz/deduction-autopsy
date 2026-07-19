@@ -1,0 +1,9 @@
+{
+  "asn_id": "ASN-002",
+  "po_id": "PO-002",
+  "sku": "SKU-002",
+  "shipped_qty": 120,
+  "shipped_uom": "EACH",
+  "ship_date": "2024-02-03",
+  "carrier": "J.B. Hunt"
+}

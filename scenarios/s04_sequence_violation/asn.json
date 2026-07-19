@@ -1,0 +1,9 @@
+{
+  "asn_id": "ASN-004",
+  "po_id": "PO-004",
+  "sku": "SKU-004",
+  "shipped_qty": 240,
+  "shipped_uom": "EACH",
+  "ship_date": "2024-04-10",
+  "carrier": "Werner Enterprises"
+}

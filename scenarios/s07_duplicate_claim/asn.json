@@ -1,0 +1,9 @@
+{
+  "asn_id": "ASN-007",
+  "po_id": "PO-007",
+  "sku": "SKU-001",
+  "shipped_qty": 144,
+  "shipped_uom": "EACH",
+  "ship_date": "2024-06-03",
+  "carrier": "XPO Logistics"
+}

@@ -1,0 +1,9 @@
+{
+  "po_id": "PO-007",
+  "retailer": "albertsons",
+  "sku": "SKU-001",
+  "ordered_qty": 144,
+  "ordered_uom": "EACH",
+  "unit_price": 150,
+  "order_date": "2024-06-01"
+}

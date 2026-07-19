@@ -1,0 +1,9 @@
+{
+  "claim_id": "CLM-001",
+  "po_id": "PO-001",
+  "retailer": "walmart",
+  "claimed_reason": "shortage",
+  "claimed_amount": 3000,
+  "claim_date": "2024-01-20",
+  "retailer_notes": "Received 108 of 120 ordered EACH units. Deducting for 12-unit shortage per carrier BOL exception noted at receipt."
+}

@@ -1,0 +1,9 @@
+{
+  "claim_id": "CLM-003",
+  "po_id": "PO-003",
+  "retailer": "kroger",
+  "claimed_reason": "shortage",
+  "claimed_amount": 18000,
+  "claim_date": "2024-03-12",
+  "retailer_notes": "Only received first shipment of 360 EACH against a PO for 720 EACH - deducting for a 360-unit shortage."
+}

@@ -1,0 +1,9 @@
+{
+  "po_id": "PO-004",
+  "retailer": "costco",
+  "sku": "SKU-004",
+  "ordered_qty": 240,
+  "ordered_uom": "EACH",
+  "unit_price": 75,
+  "order_date": "2024-04-01"
+}

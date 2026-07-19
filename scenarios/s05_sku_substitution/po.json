@@ -1,0 +1,9 @@
+{
+  "po_id": "PO-005",
+  "retailer": "publix",
+  "sku": "SKU-005",
+  "ordered_qty": 300,
+  "ordered_uom": "EACH",
+  "unit_price": 60,
+  "order_date": "2024-05-01"
+}

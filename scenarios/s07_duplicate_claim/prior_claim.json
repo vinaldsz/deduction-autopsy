@@ -1,0 +1,9 @@
+{
+  "claim_id": "CLM-007a",
+  "po_id": "PO-007",
+  "retailer": "albertsons",
+  "claimed_reason": "shortage",
+  "claimed_amount": 1800,
+  "claim_date": "2024-06-08",
+  "retailer_notes": "RESOLVED - credit memo CM-007 issued 2024-06-10 for 12-unit shortage on PO-007."
+}

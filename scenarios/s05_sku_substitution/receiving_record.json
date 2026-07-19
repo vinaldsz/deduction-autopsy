@@ -1,0 +1,10 @@
+{
+  "receipt_id": "RCP-005",
+  "po_id": "PO-005",
+  "sku": "SKU-005-ALT",
+  "received_qty": 300,
+  "received_uom": "EACH",
+  "receipt_date": "2024-05-05",
+  "lot_id": "LOT-005",
+  "notes": "Substitution of SKU-005-ALT for SKU-005 was pre-approved by buyer J. Ortiz via email on 2024-04-28; same case pack and unit price."
+}
