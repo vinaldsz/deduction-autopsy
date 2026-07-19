@@ -55,10 +55,10 @@ tool logic instead. Changing expected verdicts requires explicit user sign-off.
   `AsyncOpenAI`, pointed at `base_url="https://openrouter.ai/api/v1"` with
   `OPENROUTER_API_KEY` — NOT the Anthropic SDK directly, and NOT Anthropic's native
   Messages/tool_use format. Deliberate deviation from the original plan, approved 2026-07-18.
-  - Investigator: Claude Haiku 4.5 (mechanical data-fetch + compare) — exact OpenRouter
-    model slug to be confirmed against OpenRouter's model catalog at implementation time;
-    do not hardcode a guessed slug.
-  - Reviewer: Claude Sonnet 4.5 (subtle reasoning for trap detection) — same caveat.
+  - Investigator: Claude Haiku 4.5 (mechanical data-fetch + compare) — confirmed OpenRouter
+    slug `anthropic/claude-haiku-4.5` (Layer 6, checked against OpenRouter's live catalog).
+  - Reviewer: Claude Sonnet 4.5 (subtle reasoning for trap detection) — confirmed OpenRouter
+    slug `anthropic/claude-sonnet-4.5` (Layer 6, same check).
 - Fixtures as plain JSON, checked into repo
 - `pytest` for unit tests; `rich` for CLI output
 - Temperature 0 for both agents (deterministic, debuggable)

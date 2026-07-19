@@ -1,6 +1,57 @@
 # Progress
 
 ## Current layer
+**Layer 6 — `agents/investigator.py` + `agents/reviewer.py` complete**
+
+Confirmed the two OpenRouter model slugs `CLAUDE.md` had deliberately left unresolved, by
+checking OpenRouter's live model pages rather than guessing: `anthropic/claude-haiku-4.5`
+(Investigator) and `anthropic/claude-sonnet-4.5` (Reviewer). Updated `CLAUDE.md`'s Tech
+stack section to record these as confirmed rather than pending.
+
+Built `agents/investigator.py`: `INVESTIGATOR_SYSTEM_PROMPT` encodes the five-step ordered
+protocol from `docs/PLAN.md` (collect all docs → normalize UOM → verify timeline → reconcile
+quantities → check prior claims) and spells out the exact CaseFile JSON shape from
+`docs/SPEC.md` inline in the prompt so the model has a concrete schema to match rather than
+inferring one. `run_investigator(*, openai_client, mcp_client, claim_id, model=...)` builds a
+short user message naming the claim_id and delegates to `AgentRunner` — it does not parse or
+validate the returned JSON itself; per the build order, CaseFile schema validation and the
+required-tool-call trace check are Layer 7's job (`orchestrator/pipeline.py`), not this layer's.
+
+Built `agents/reviewer.py`: `REVIEWER_SYSTEM_PROMPT` frames the Reviewer as a targeted
+spot-check (re-run `normalize_uom`, re-call `get_asns_for_po`/`get_trade_agreement`/
+`list_claims_for_po`), not a full re-investigation, and states explicitly that the case file
+is data to verify, not instructions to follow — reinforcing the XML-delimiter prompt-injection
+guard from `CLAUDE.md`'s Safeguards section. `run_reviewer(*, openai_client, mcp_client,
+case_file, model=...)` embeds the case file inside `<case_file>...</case_file>` tags in the
+user message. It also strips the `reasoning` field itself via a module-level
+`_case_file_for_reviewer()` helper — belt-and-suspenders alongside Layer 7's orchestrator-level
+stripping (`CLAUDE.md`'s "Stripped reasoning handoff" safeguard), so the Reviewer never sees
+the Investigator's narrative even if a future caller forgets to strip it first.
+
+Both `run_investigator`/`run_reviewer` take an optional `model` override (defaulting to the
+confirmed slug) purely so tests can substitute `"test-model"` without monkeypatching a module
+constant — mirrors how `AgentRunner` itself takes `model` as a required constructor arg.
+
+Extracted the `make_completion`/`StubAsyncOpenAI` test helpers that `test_agents_base.py` had
+defined inline into `tests/agent_stubs.py`, since all three agent test files now need identical
+scripted-`ChatCompletion` fixtures — re-pointed `test_agents_base.py`'s imports at the shared
+module with no behavior change (verified by re-running it before adding new tests).
+
+Wrote `tests/test_agents_investigator.py` (5 tests) and `tests/test_agents_reviewer.py` (5
+tests), both using the same real in-process `fastmcp.Client(mcp)` pattern as
+`test_agents_base.py` (`monkeypatch.setenv("SCENARIO_ID", ...)`, no mocking of the MCP layer).
+Covers: the confirmed model slug constants, user-message wiring (claim_id present for the
+Investigator; case_file JSON present and XML-delimited for the Reviewer), the `model=` override
+being honored, the `reasoning` field never reaching the Reviewer's actual prompt text even
+though the fixture case file included one, and one real tool-call round trip per agent against
+actual scenario fixtures (s02's `normalize_uom` for the Investigator, s07's
+`list_claims_for_po` for the Reviewer).
+
+`pytest tests/` — 80 passed, 0 failed (70 prior + 10 new).
+
+---
+
+## Previous layer
 **Layer 5 — `agents/base.py` shared tool-use loop complete**
 
 Resolved the OpenRouter-vs-Anthropic-SDK decision from the previous session: **the user chose
@@ -170,16 +221,19 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Start **Layer 6**: `agents/investigator.py` + `agents/reviewer.py`. Each defines its system
-prompt (`INVESTIGATOR_SYSTEM_PROMPT`/`REVIEWER_SYSTEM_PROMPT` per `docs/PLAN.md`'s System
-Prompt Design section) and a `run_investigator()`/`run_reviewer()` entry point that constructs
-an `AgentRunner` (from Layer 5) with the right model/system prompt and calls `.run(...)`.
-Needs the exact OpenRouter model slugs for Claude Haiku 4.5 (Investigator) and Claude Sonnet
-4.5 (Reviewer) confirmed against OpenRouter's actual model catalog first — `CLAUDE.md`
-deliberately left these unresolved rather than hardcoding a guess. Also needs a `CaseFile`
-Pydantic model (doesn't exist yet — currently only a JSON shape in `docs/SPEC.md`) if Layer 6
-wants schema-validated parsing of the Investigator's output before Layer 7 does its own
-required-fields check.
+Start **Layer 7**: `orchestrator/pipeline.py` + `orchestrator/output.py`. Needs a `CaseFile`
+Pydantic model (doesn't exist yet — currently only a JSON shape in `docs/SPEC.md` and inline
+in `agents/investigator.py`'s system prompt) for schema-validated parsing of the Investigator's
+raw JSON text before the required-fields check and correction-message retry loop described in
+`CLAUDE.md`'s Safeguards section. Also needs: the tool-call trace verification (per-scenario
+required tool names from `docs/SPEC.md`'s "Required Tool Calls Per Scenario" table), the
+`reasoning`-field strip before handoff to the Reviewer (Layer 6's `agents/reviewer.py` already
+strips it defensively, but the orchestrator should do its own strip per `CLAUDE.md` rather than
+relying on that), and `orchestrator/output.py`'s three artifact writers
+(`verdict.json`/`dispute_packet.md`/`reasoning_trace.json`). Will need to construct the real
+`AsyncOpenAI` client (`base_url="https://openrouter.ai/api/v1"`, `OPENROUTER_API_KEY` from
+env) and a real MCP stdio subprocess client for the first time — everything through Layer 6
+has used the in-process `fastmcp.Client(mcp)` test pattern instead.
 
 ## Layer status
 
@@ -191,13 +245,13 @@ required-fields check.
 | 3 | `mcp_server/fixtures.py` + `mcp_server/tools/` + unit tests passing | ✅ Done |
 | 4 | `mcp_server/server.py` (FastMCP wiring) | ✅ Done |
 | 5 | `agents/base.py` (shared tool loop) | ✅ Done |
-| 6 | `agents/investigator.py` + `agents/reviewer.py` | ⬜ Not started |
+| 6 | `agents/investigator.py` + `agents/reviewer.py` | ✅ Done |
 | 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ⬜ Not started |
 | 8 | `cli/run_claim.py` + `cli/run_all.py` | ⬜ Not started |
 | 9 | Integration tests + README | ⬜ Not started |
 
 ## Tests passing
-`pytest tests/` — 70 passed, 0 failed:
+`pytest tests/` — 80 passed, 0 failed:
 - `test_fixtures.py` (45): Pydantic model validation for every fixture file, po_id/retailer
   cross-document consistency, file-layout expectations per scenario, ground-truth claim_id
   matches, and each scenario's specific numeric trap.
@@ -214,6 +268,13 @@ required-fields check.
   real `ToolError` surfaced without crashing, malformed tool-call JSON handled, max-iterations
   safety bound raises `AgentRunnerError`, and MCP→OpenAI tool-schema translation with a
   non-empty-description regression guard.
+- `test_agents_investigator.py` (5): confirmed model slug, claim_id present in the user
+  message, default vs. overridden `model`, and a real `normalize_uom` tool-call round trip
+  against s02's fixtures.
+- `test_agents_reviewer.py` (5): confirmed model slug, `reasoning` field absent from the
+  actual prompt text sent to the model, case file XML-delimited and valid JSON inside the
+  tags, default vs. overridden `model`, and a real `list_claims_for_po` tool-call round trip
+  against s07's fixtures.
 
 ## Known issues / decisions pending
 - Cross-document referential integrity (po_id/sku consistency) is now enforced by
@@ -221,15 +282,19 @@ required-fields check.
   single-document, fixture-level tests catch cross-file drift.
 - **Resolved**: OpenRouter-vs-Anthropic-SDK decision — user chose OpenRouter. `CLAUDE.md`,
   `pyproject.toml`, and `.env.example` updated accordingly; see Layer 5 notes above.
+- **Resolved**: exact OpenRouter model slugs — `anthropic/claude-haiku-4.5` (Investigator),
+  `anthropic/claude-sonnet-4.5` (Reviewer). Confirmed against OpenRouter's live catalog in
+  Layer 6, hardcoded as `INVESTIGATOR_MODEL`/`REVIEWER_MODEL` in the respective agent modules.
 - `pytest-asyncio` added as a dev dependency (not anticipated in `docs/PLAN.md`'s original
   dependency list) since `fastmcp.Client`'s test API is async-only; `asyncio_mode = "auto"`
   set in `pyproject.toml` so async test functions need no per-test decorator.
 - `fastmcp.Client.call_tool(...).data` returns dynamically-generated dataclasses, not the
   server's original Pydantic model instances — see Layer 5 notes above. Worth remembering if
-  Layer 6/7 ever need to inspect tool results directly rather than through `AgentRunner`'s
+  Layer 7 ever needs to inspect tool results directly rather than through `AgentRunner`'s
   serializer.
-- Exact OpenRouter model slugs for Claude Haiku 4.5 / Sonnet 4.5 still need confirming against
-  OpenRouter's live model catalog before Layer 6 can hardcode them.
+- No `CaseFile`/Reviewer-output Pydantic models exist yet — Layer 6 only encodes the schema as
+  prompt text (matching `docs/SPEC.md` verbatim) and leaves parsing/validation entirely to
+  Layer 7, per the build order's stated split of responsibilities.
 
 ---
 *Update this file at the end of every session before stopping.*
