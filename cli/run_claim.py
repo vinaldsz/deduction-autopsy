@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import os
 from typing import Any
 
 from dotenv import load_dotenv
@@ -8,6 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from agents.base import AgentRunnerError
+from cli._common import ensure_api_key
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline
 
 
@@ -30,10 +30,7 @@ async def main(
     args = parse_args(argv)
     console = console or Console()
 
-    if openai_client is None and mcp_client is None and "OPENROUTER_API_KEY" not in os.environ:
-        console.print(
-            "[bold red]OPENROUTER_API_KEY is not set[/] — add it to .env or export it."
-        )
+    if openai_client is None and mcp_client is None and not ensure_api_key(console):
         return 1
 
     try:

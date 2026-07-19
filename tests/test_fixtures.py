@@ -11,6 +11,7 @@ from mcp_server.models import (
     ReceivingRecord,
     TradeAgreement,
 )
+from orchestrator.ground_truth import GROUND_TRUTH
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS_DIR = REPO_ROOT / "scenarios"
@@ -27,25 +28,10 @@ MODEL_BY_STEM = {
     "prior_claim": DeductionClaim,
 }
 
-EXPECTED_SCENARIOS = {
-    "s01_clean_shortage",
-    "s02_casepack_mismatch",
-    "s03_split_shipment",
-    "s04_sequence_violation",
-    "s05_sku_substitution",
-    "s06_promo_billback",
-    "s07_duplicate_claim",
-}
-
-EXPECTED_CLAIM_ID = {
-    "s01_clean_shortage": "CLM-001",
-    "s02_casepack_mismatch": "CLM-002",
-    "s03_split_shipment": "CLM-003",
-    "s04_sequence_violation": "CLM-004",
-    "s05_sku_substitution": "CLM-005",
-    "s06_promo_billback": "CLM-006",
-    "s07_duplicate_claim": "CLM-007b",
-}
+# Derived from orchestrator.ground_truth.GROUND_TRUTH — the single source of truth for
+# scenario -> claim_id, shared with cli/run_all.py so the two can't drift out of sync.
+EXPECTED_SCENARIOS = {case["scenario"] for case in GROUND_TRUTH}
+EXPECTED_CLAIM_ID = {case["scenario"]: case["claim_id"] for case in GROUND_TRUTH}
 
 
 def _model_for(path: Path):

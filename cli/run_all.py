@@ -9,20 +9,9 @@ from rich.console import Console
 from rich.table import Table
 
 from agents.base import AgentRunnerError
+from cli._common import ensure_api_key
+from orchestrator.ground_truth import GROUND_TRUTH
 from orchestrator.pipeline import OPENROUTER_BASE_URL, PipelineError, run_pipeline
-
-# From docs/SPEC.md's ground-truth table. expected_reviewer is uniformly CONFIRM and is in the
-# Reviewer's own vocabulary — it must be checked against PipelineResult.reviewer_verdict, not
-# .final_verdict (which is business-vocabulary VALID/INVALID/ESCALATE and varies per scenario).
-GROUND_TRUTH = [
-    {"scenario": "s01_clean_shortage", "claim_id": "CLM-001", "expected_investigator": "VALID", "expected_reviewer": "CONFIRM"},
-    {"scenario": "s02_casepack_mismatch", "claim_id": "CLM-002", "expected_investigator": "INVALID", "expected_reviewer": "CONFIRM"},
-    {"scenario": "s03_split_shipment", "claim_id": "CLM-003", "expected_investigator": "INVALID", "expected_reviewer": "CONFIRM"},
-    {"scenario": "s04_sequence_violation", "claim_id": "CLM-004", "expected_investigator": "INVALID", "expected_reviewer": "CONFIRM"},
-    {"scenario": "s05_sku_substitution", "claim_id": "CLM-005", "expected_investigator": "INVALID", "expected_reviewer": "CONFIRM"},
-    {"scenario": "s06_promo_billback", "claim_id": "CLM-006", "expected_investigator": "INVALID", "expected_reviewer": "CONFIRM"},
-    {"scenario": "s07_duplicate_claim", "claim_id": "CLM-007b", "expected_investigator": "INVALID", "expected_reviewer": "CONFIRM"},
-]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -33,7 +22,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 async def main(
-    argv: list[str] | None = (),
+    argv: list[str] | None = None,
     *,
     openai_client: Any | None = None,
     console: Console | None = None,
@@ -41,14 +30,13 @@ async def main(
 ) -> int:
     # Takes no real options — this exists so `--help` and unrecognized arguments (e.g. a typo'd
     # flag) fail fast with argparse's usage message instead of silently running all 7 scenarios
-    # for real against a live API key.
-    parse_args(argv)
+    # for real against a live API key. Note: default here means "no args", NOT "use sys.argv" —
+    # argparse.parse_args(None) would fall back to real sys.argv, which breaks callers (tests)
+    # that omit argv entirely. Real __main__ invocation passes sys.argv[1:] explicitly below.
+    parse_args([] if argv is None else argv)
     console = console or Console()
 
-    if openai_client is None and "OPENROUTER_API_KEY" not in os.environ:
-        console.print(
-            "[bold red]OPENROUTER_API_KEY is not set[/] — add it to .env or export it."
-        )
+    if openai_client is None and not ensure_api_key(console):
         return 1
 
     if openai_client is None:

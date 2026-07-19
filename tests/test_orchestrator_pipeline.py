@@ -286,6 +286,9 @@ def test_resolve_final_verdict(investigator_verdict, reviewer_verdict, expected)
             '{"a": 1}',
         ),
         ('Some reasoning first. {"a": 1} trailing note.', '{"a": 1}'),
+        ('{"a": {"nested": 1}}', '{"a": {"nested": 1}}'),
+        # Trailing prose containing a stray '}' must not extend the match past the real object.
+        ('{"a": 1} — let me know if you have questions {2}', '{"a": 1}'),
     ],
 )
 def test_extract_json_handles_prose_before_json(raw, expected):

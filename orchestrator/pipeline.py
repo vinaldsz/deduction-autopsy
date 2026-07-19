@@ -102,6 +102,27 @@ REQUIRED_TOOL_CALLS: dict[str, Callable[[list[ToolCallRecord]], bool]] = {
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
 
 
+def _find_balanced_json_object(text: str) -> str | None:
+    """Return the first brace-balanced {...} substring, ignoring any trailing text after it.
+
+    Tracks nesting depth rather than assuming the last '}' in the text closes the object —
+    trailing prose after the JSON (e.g. "... } — let me know if you have questions.") can
+    contain stray braces that would otherwise get swept into the result.
+    """
+    depth = 0
+    start = None
+    for i, char in enumerate(text):
+        if char == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 def _extract_json(text: str) -> str:
     stripped = text.strip()
 
@@ -109,12 +130,10 @@ def _extract_json(text: str) -> str:
     if fence_match:
         return fence_match.group(1).strip()
 
-    # Some models reason in prose before the JSON object with no code fence at all — fall back
-    # to the outermost brace-matched substring rather than feeding the whole response to json.loads.
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return stripped[start : end + 1]
+    # Some models reason in prose before the JSON object with no code fence at all.
+    balanced = _find_balanced_json_object(stripped)
+    if balanced is not None:
+        return balanced
 
     return stripped
 

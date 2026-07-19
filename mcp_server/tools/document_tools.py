@@ -9,30 +9,37 @@ from mcp_server.models import (
 )
 
 
-def get_po(po_id: str) -> PurchaseOrder:
-    """Look up the purchase order for a given PO ID."""
-    po = FixtureLoader().get_po()
+def _validated_loader(po_id: str) -> tuple[FixtureLoader, PurchaseOrder]:
+    """Return a FixtureLoader for the active scenario, after confirming its PO matches po_id."""
+    loader = FixtureLoader()
+    po = loader.get_po()
     if po.po_id != po_id:
         raise ValueError(f"po_id {po_id!r} not found; active scenario has {po.po_id!r}")
+    return loader, po
+
+
+def get_po(po_id: str) -> PurchaseOrder:
+    """Look up the purchase order for a given PO ID."""
+    _, po = _validated_loader(po_id)
     return po
 
 
 def get_asns_for_po(po_id: str) -> list[ASN]:
     """Return all ASNs (shipment notices) for a PO, including split shipments across multiple ASN files."""
-    get_po(po_id)
-    return FixtureLoader().get_asns()
+    loader, _ = _validated_loader(po_id)
+    return loader.get_asns()
 
 
 def get_invoice(po_id: str) -> Invoice:
     """Look up the invoice for a given PO ID."""
-    get_po(po_id)
-    return FixtureLoader().get_invoice()
+    loader, _ = _validated_loader(po_id)
+    return loader.get_invoice()
 
 
 def get_receiving_record(po_id: str) -> ReceivingRecord:
     """Look up the warehouse receiving record for a given PO ID."""
-    get_po(po_id)
-    return FixtureLoader().get_receiving_record()
+    loader, _ = _validated_loader(po_id)
+    return loader.get_receiving_record()
 
 
 def get_trade_agreement(retailer: str, sku: str, promo_code: str) -> TradeAgreement | None:
