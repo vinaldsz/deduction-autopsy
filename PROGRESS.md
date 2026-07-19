@@ -1,6 +1,85 @@
 # Progress
 
 ## Current layer
+**Layer 7 — `orchestrator/pipeline.py` + `orchestrator/output.py` complete**
+
+Built `orchestrator/pipeline.py`'s `run_pipeline(*, claim_id, scenario, openai_client=None,
+mcp_client=None, output_dir="outputs", max_investigator_attempts=3)`: the single entry point
+that wires `run_investigator` → `run_reviewer` and writes all three output artifacts,
+implementing every safeguard named in `CLAUDE.md`. `openai_client`/`mcp_client` are optional
+dependency injections (mirroring `AgentRunner`'s Layer 5/6 convention) — when omitted,
+`run_pipeline` constructs a real `AsyncOpenAI` (OpenRouter) and launches `mcp_server/server.py`
+as a real stdio subprocess via `fastmcp.client.transports.PythonStdioTransport` with
+`SCENARIO_ID` set in its environment (merged with the parent env, not replacing it), sharing
+one MCP connection across both agents per `docs/PLAN.md`'s handoff pattern. Tests always
+inject a `StubAsyncOpenAI` + real in-process `fastmcp.Client(mcp)`, so no test spawns a real
+subprocess or hits OpenRouter.
+
+Added `CaseFile`/`PoSummary`/`TimelineEvent` and `ReviewFindings`/`ReviewerOutput` Pydantic
+models in `pipeline.py` (colocated with the orchestrator logic rather than
+`mcp_server/models.py`, since these are agent I/O contracts, not domain objects). Only the
+fields `docs/SPEC.md` lists as "Required fields" (`claim_id`, `po_summary`'s four sub-fields,
+`timeline`, `proposed_verdict`, `confidence`) have no default, so a Pydantic `ValidationError`
+maps 1:1 onto the "CaseFile schema validation" safeguard.
+
+Implemented the three `CLAUDE.md` safeguards precisely:
+- **CaseFile schema validation + correction retry**: `_run_investigator_until_valid` calls
+  `run_investigator`, parses/validates the response, and on failure re-invokes with a specific
+  `extra_instructions` correction describing exactly what was missing — up to
+  `max_investigator_attempts` (default 3) before raising `PipelineError`.
+- **Tool-call trace verification**: `REQUIRED_TOOL_CALLS` maps only the 4 scenarios
+  `docs/SPEC.md`'s table actually specifies (s02→`normalize_uom`, s03→`get_asns_for_po` with
+  `len >= 2`, s06→`get_trade_agreement`, s07→`list_claims_for_po`) to a trace predicate,
+  matched via `scenario[:3]`; a failing check triggers the same correction-retry loop as schema
+  validation. Deliberately did not invent checks for s01/s04/s05 — not in the spec's table.
+- **Stripped reasoning handoff**: the orchestrator strips `reasoning` from
+  `case_file.model_dump()` itself before calling `run_reviewer`, independent of
+  `agents/reviewer.py`'s own internal strip (belt-and-suspenders, confirmed by a test that
+  spies on the `run_reviewer` call and asserts `"reasoning" not in case_file`).
+
+**Verdict semantics** (confirmed with the user before implementing, since `docs/SPEC.md`'s
+`dispute_packet.md` trigger of `final_verdict == INVALID` can't literally apply to the
+Reviewer's own `CONFIRM/OVERTURN/ESCALATE` vocabulary): `verdict.json` carries three distinct
+fields — `investigator_verdict` (`case_file.proposed_verdict`, verbatim), `reviewer_verdict`
+(`reviewer_output.final_verdict`, verbatim), and `final_verdict` (the business outcome in
+`VALID/INVALID/ESCALATE`, derived by `_resolve_final_verdict`: `CONFIRM` keeps
+`investigator_verdict`; `OVERTURN` flips `VALID`↔`INVALID` (falls back to `ESCALATE` if the
+investigator itself said `ESCALATE`); `ESCALATE` always yields `ESCALATE`). `confidence` in
+verdict.json is the Reviewer's confidence, since the Reviewer has final say.
+
+**Two small additive changes to already-completed layers** (confirmed with the user,
+non-breaking — all 80 prior tests pass unchanged):
+- `agents/base.py`: `AgentResult` gained a `messages: list[dict]` field (the full transcript
+  `AgentRunner.run()` already built internally) so `reasoning_trace.json` can contain the
+  literal message arrays `docs/SPEC.md` asks for. While adding this, discovered and fixed a
+  latent aliasing bug: `AgentRunner.run()` was passing the same mutable `messages` list object
+  by reference to every `create()` call, so `StubAsyncOpenAI`'s recorded `stub.requests[i]`
+  all pointed at the same list — appending the final assistant turn on return retroactively
+  changed what earlier "recorded" requests looked like. Fixed by passing `messages=list(messages)`
+  (a shallow copy) into each `create()` call; caught by `test_agents_base.py`'s existing
+  `test_single_tool_call_round_trip` failing after the `messages` field was added, not by a
+  new test.
+- `agents/investigator.py`: `run_investigator()` gained an optional
+  `extra_instructions: str | None = None`, appended to the user message, so the
+  correction-retry safeguard can name the specific problem instead of a generic re-run.
+
+Wrote `tests/test_orchestrator_pipeline.py` (13 tests) and `tests/test_orchestrator_output.py`
+(5 tests), following the exact `StubAsyncOpenAI` + real in-process `fastmcp.Client(mcp)`
+convention from Layers 5-6 — no test hits OpenRouter or spawns a subprocess. Covers: s01
+(VALID→CONFIRM) and s02 (INVALID→CONFIRM, with an actual `normalize_uom` tool-call round trip)
+happy paths including output-artifact presence/absence; missing-required-field and
+missing-required-tool-call correction retries (asserting the second attempt's user message
+contains the specific correction text); `max_investigator_attempts` exhaustion raising
+`PipelineError`; the reasoning-strip safeguard via a `run_reviewer` spy; the full
+`_resolve_final_verdict` truth table (7 cases, including the `ESCALATE`+`OVERTURN` edge case);
+and `output.py`'s three writers (correct paths/JSON shape, dispute packet content, empty
+`dispute_grounds` handling, nested output-dir creation).
+
+`pytest tests/` — 98 passed, 0 failed (80 prior + 18 new).
+
+---
+
+## Previous layer
 **Layer 6 — `agents/investigator.py` + `agents/reviewer.py` complete**
 
 Confirmed the two OpenRouter model slugs `CLAUDE.md` had deliberately left unresolved, by
@@ -221,19 +300,20 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Start **Layer 7**: `orchestrator/pipeline.py` + `orchestrator/output.py`. Needs a `CaseFile`
-Pydantic model (doesn't exist yet — currently only a JSON shape in `docs/SPEC.md` and inline
-in `agents/investigator.py`'s system prompt) for schema-validated parsing of the Investigator's
-raw JSON text before the required-fields check and correction-message retry loop described in
-`CLAUDE.md`'s Safeguards section. Also needs: the tool-call trace verification (per-scenario
-required tool names from `docs/SPEC.md`'s "Required Tool Calls Per Scenario" table), the
-`reasoning`-field strip before handoff to the Reviewer (Layer 6's `agents/reviewer.py` already
-strips it defensively, but the orchestrator should do its own strip per `CLAUDE.md` rather than
-relying on that), and `orchestrator/output.py`'s three artifact writers
-(`verdict.json`/`dispute_packet.md`/`reasoning_trace.json`). Will need to construct the real
-`AsyncOpenAI` client (`base_url="https://openrouter.ai/api/v1"`, `OPENROUTER_API_KEY` from
-env) and a real MCP stdio subprocess client for the first time — everything through Layer 6
-has used the in-process `fastmcp.Client(mcp)` test pattern instead.
+Start **Layer 8**: `cli/run_claim.py` + `cli/run_all.py`. `run_claim.py` should call
+`orchestrator.pipeline.run_pipeline(claim_id=..., scenario=...)` with no injected
+`openai_client`/`mcp_client` (letting it construct the real `AsyncOpenAI` + subprocess MCP
+client) and print the resulting `PipelineResult` — needs `OPENROUTER_API_KEY` set in `.env`.
+`run_all.py` iterates the 7 scenarios from `docs/SPEC.md`'s ground-truth table and prints a
+`rich` pass/fail table comparing `final_verdict` against the "Final expected" column (all
+`CONFIRM`... note: the ground-truth table's "Final expected" column is literally the
+Reviewer's verdict vocabulary, not `run_pipeline`'s business-vocabulary `final_verdict` field —
+Layer 8 should compare against `reviewer_verdict`, not `final_verdict`, or the pass/fail table
+will be wrong for every scenario since `final_verdict` is `VALID`/`INVALID` depending on
+scenario while the table says `CONFIRM` uniformly). This is a real, first-run manual
+verification against OpenRouter — no scenario has been run end-to-end against a live model yet;
+budget for prompt-tuning iteration once actual model behavior is observed (the CaseFile/Reviewer
+JSON schemas and correction-retry loop are built to spec but untested against real model output).
 
 ## Layer status
 
@@ -246,12 +326,19 @@ has used the in-process `fastmcp.Client(mcp)` test pattern instead.
 | 4 | `mcp_server/server.py` (FastMCP wiring) | ✅ Done |
 | 5 | `agents/base.py` (shared tool loop) | ✅ Done |
 | 6 | `agents/investigator.py` + `agents/reviewer.py` | ✅ Done |
-| 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ⬜ Not started |
+| 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ✅ Done |
 | 8 | `cli/run_claim.py` + `cli/run_all.py` | ⬜ Not started |
 | 9 | Integration tests + README | ⬜ Not started |
 
 ## Tests passing
-`pytest tests/` — 80 passed, 0 failed:
+`pytest tests/` — 98 passed, 0 failed:
+- `test_orchestrator_pipeline.py` (13): s01/s02 happy paths (investigator/reviewer wiring,
+  output-artifact presence/absence), missing-required-field and missing-required-tool-call
+  correction retries, `max_investigator_attempts` exhaustion, reasoning-strip safeguard,
+  full `_resolve_final_verdict` truth table.
+- `test_orchestrator_output.py` (5): `verdict.json`/`reasoning_trace.json`/`dispute_packet.md`
+  writers — paths, JSON shape, markdown content, empty-dispute-grounds handling, nested
+  output-dir creation.
 - `test_fixtures.py` (45): Pydantic model validation for every fixture file, po_id/retailer
   cross-document consistency, file-layout expectations per scenario, ground-truth claim_id
   matches, and each scenario's specific numeric trap.
@@ -290,11 +377,25 @@ has used the in-process `fastmcp.Client(mcp)` test pattern instead.
   set in `pyproject.toml` so async test functions need no per-test decorator.
 - `fastmcp.Client.call_tool(...).data` returns dynamically-generated dataclasses, not the
   server's original Pydantic model instances — see Layer 5 notes above. Worth remembering if
-  Layer 7 ever needs to inspect tool results directly rather than through `AgentRunner`'s
-  serializer.
-- No `CaseFile`/Reviewer-output Pydantic models exist yet — Layer 6 only encodes the schema as
-  prompt text (matching `docs/SPEC.md` verbatim) and leaves parsing/validation entirely to
-  Layer 7, per the build order's stated split of responsibilities.
+  a future layer ever needs to inspect tool results directly rather than through
+  `AgentRunner`'s serializer.
+- **Resolved**: `CaseFile`/`ReviewerOutput` Pydantic models now live in
+  `orchestrator/pipeline.py` (Layer 7) — see Layer 7 notes above for why they're colocated
+  there rather than in `mcp_server/models.py`.
+- **Found and fixed during Layer 7**: `agents/base.py`'s `AgentRunner.run()` passed the same
+  mutable `messages` list object by reference into every `chat.completions.create()` call.
+  Harmless against the real `AsyncOpenAI` client (which serializes immediately), but a real
+  aliasing bug against `StubAsyncOpenAI` (which stores `**kwargs` by reference) — appending to
+  `messages` after a later call retroactively changed what earlier `stub.requests[i]["messages"]`
+  looked like. Fixed by passing `messages=list(messages)` (shallow copy) to `create()`. Worth
+  keeping in mind if `agents/base.py` changes again: don't mutate `messages` after any call
+  whose kwargs might still be referenced (tests or otherwise).
+- Layer 8 gotcha to watch for: `docs/SPEC.md`'s ground-truth table's "Final expected" column is
+  in the *Reviewer's* vocabulary (`CONFIRM`/`OVERTURN`/`ESCALATE`, uniformly `CONFIRM` across
+  all 7 scenarios), not `run_pipeline`'s business-vocabulary `final_verdict` field
+  (`VALID`/`INVALID`/`ESCALATE`, which varies per scenario). `cli/run_all.py`'s pass/fail table
+  must compare against `PipelineResult.reviewer_verdict`, not `.final_verdict` — see Layer 7's
+  "Next session" note above.
 
 ---
 *Update this file at the end of every session before stopping.*

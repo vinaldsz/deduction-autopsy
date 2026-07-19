@@ -59,12 +59,15 @@ required. Use empty lists/false/0 where a step found nothing (e.g. prior_claims:
 trade_agreement_found: false if not applicable or not found)."""
 
 
-def _build_investigator_user_message(claim_id: str) -> str:
-    return (
+def _build_investigator_user_message(claim_id: str, extra_instructions: str | None = None) -> str:
+    message = (
         f"Investigate deduction claim {claim_id}. Gather all source documents via the "
         "available tools, normalize units of measure, verify the timeline, and reconcile "
         "quantities before producing the CaseFile JSON."
     )
+    if extra_instructions:
+        message = f"{message}\n\n{extra_instructions}"
+    return message
 
 
 async def run_investigator(
@@ -73,6 +76,7 @@ async def run_investigator(
     mcp_client,
     claim_id: str,
     model: str = INVESTIGATOR_MODEL,
+    extra_instructions: str | None = None,
 ) -> AgentResult:
     runner = AgentRunner(
         openai_client=openai_client,
@@ -80,4 +84,4 @@ async def run_investigator(
         model=model,
         system_prompt=INVESTIGATOR_SYSTEM_PROMPT,
     )
-    return await runner.run(_build_investigator_user_message(claim_id))
+    return await runner.run(_build_investigator_user_message(claim_id, extra_instructions))

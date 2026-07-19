@@ -18,6 +18,7 @@ class ToolCallRecord:
 class AgentResult:
     final_text: str
     trace: list[ToolCallRecord] = field(default_factory=list)
+    messages: list[dict] = field(default_factory=list)
 
 
 class AgentRunnerError(RuntimeError):
@@ -83,13 +84,14 @@ class AgentRunner:
             response = await self._openai_client.chat.completions.create(
                 model=self._model,
                 temperature=self._temperature,
-                messages=messages,
+                messages=list(messages),
                 tools=tools,
             )
             msg = response.choices[0].message
 
             if not msg.tool_calls:
-                return AgentResult(final_text=msg.content or "", trace=trace)
+                messages.append({"role": "assistant", "content": msg.content})
+                return AgentResult(final_text=msg.content or "", trace=trace, messages=messages)
 
             messages.append(
                 {
