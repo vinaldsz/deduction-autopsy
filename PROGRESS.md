@@ -1,6 +1,46 @@
 # Progress
 
 ## Current layer
+**Layer 3 — FixtureLoader + MCP tool functions + unit tests complete**
+
+Built `mcp_server/fixtures.py` (`FixtureLoader`): resolves the active scenario directory
+from the `SCENARIO_ID` env var via prefix glob (`scenarios/{SCENARIO_ID}*`), so either a
+short code (`s01`) or full directory name (`s01_clean_shortage`) works; raises `ValueError`
+if that doesn't resolve to exactly one directory. Loads `po.json`/`invoice.json`/
+`receiving_record.json` directly, globs `asn*.json` sorted (handles both single `asn.json`
+and split `asn_1.json`+`asn_2.json`), globs `*claim*.json` sorted (handles both single
+`deduction_claim.json` and s07's `prior_claim.json`+`deduction_claim.json`), and returns
+`None` from `get_trade_agreement()` when the file is absent. No caching — re-reads from
+disk each call, since fixtures are tiny and this keeps tests free of cross-test state.
+
+Built `mcp_server/tools/document_tools.py` and `mcp_server/tools/uom_tools.py` matching the
+exact signatures in `docs/SPEC.md`'s MCP Tools table:
+- `get_po`/`get_invoice`/`get_receiving_record`/`get_asns_for_po` all validate the requested
+  `po_id` against the scenario's actual PO and raise `ValueError` on mismatch (a design
+  choice confirmed with the user — catches agent mistakes early rather than silently
+  ignoring the argument)
+- `get_trade_agreement(retailer, sku, promo_code)` returns `None` on any field mismatch,
+  which is what makes s06 resolve correctly (claim cites `PROMO-SUMMER-2024`, fixture has
+  `PROMO-SPRING-2024`)
+- `get_deduction_claim(claim_id)` searches all `*claim*.json` files for a matching
+  `claim_id`, which is what resolves `CLM-007a` (prior, resolved) vs `CLM-007b` (current,
+  duplicate) to the correct file in s07
+- `list_claims_for_po(po_id)` returns all claim_ids for that po_id — both s07 claims
+- `normalize_uom` builds an undirected weighted graph per-SKU from
+  `sku_uom_conversions.json` and BFS's from `from_uom` to `to_uom`, accumulating the
+  multiplier — handles SKU-002's multi-hop PALLET→CASE→EACH (40×24=960) as well as direct
+  and reverse-direction conversions; raises `ValueError` for both an unknown SKU and a
+  known SKU with no path to the requested UOM
+- Each tool function constructs a fresh `FixtureLoader()` per call (reads `SCENARIO_ID`
+  from env each time, no module-level singleton) — this is what lets
+  `tests/test_document_tools.py` flip scenarios per-test via `monkeypatch.setenv`
+
+Wrote `tests/test_uom_tools.py` (6 tests) and `tests/test_document_tools.py` (7 tests), all
+passing alongside the existing `test_fixtures.py` suite (58 total, 0 failed).
+
+---
+
+## Previous layer
 **Layer 2 — All 7 scenario fixture JSON files + fixture validation tests complete**
 
 Built out `scenarios/s01_clean_shortage/` through `scenarios/s07_duplicate_claim/` per the
@@ -37,14 +77,13 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Start **Layer 3**: `mcp_server/fixtures.py` (`FixtureLoader`, `SCENARIO_ID` env var) +
-`mcp_server/tools/` (`document_tools.py`, `uom_tools.py`) + `tests/test_uom_tools.py` +
-`tests/test_document_tools.py`. Key things to get right per `docs/PLAN.md`: `get_asns_for_po`
-must glob `asn*.json` (so it picks up both `asn_1.json`/`asn_2.json` for s03);
-`list_claims_for_po` must glob `*claim*.json` (so it returns both CLM-007a and CLM-007b for
-s07); `get_trade_agreement(retailer, sku, promo_code)` must return `None` when the promo_code
-doesn't match (s06); `normalize_uom` needs BFS over the conversion graph for multi-hop
-PALLET→CASE→EACH (SKU-002) and must raise `ValueError` on an unknown SKU/path.
+Start **Layer 4**: `mcp_server/server.py` — wire up FastMCP, reading `SCENARIO_ID` from env
+at startup and exposing the 8 functions in `mcp_server/tools/` (`document_tools.py`,
+`uom_tools.py`) as MCP tools with the exact signatures from `docs/SPEC.md`'s MCP Tools
+table. The tool functions themselves already read `SCENARIO_ID` fresh from env per call, so
+server.py mainly needs to register them with FastMCP and launch as a stdio server (per
+`docs/PLAN.md`'s orchestrator handoff pattern: "Launch FastMCP server as subprocess with
+`SCENARIO_ID` env var").
 
 ## Layer status
 
@@ -53,7 +92,7 @@ PALLET→CASE→EACH (SKU-002) and must raise `ValueError` on an unknown SKU/pat
 | 0 | CLAUDE.md, SPEC.md, PROGRESS.md | ✅ Done |
 | 1 | `mcp_server/models.py` + UOM conversion table | ✅ Done |
 | 2 | All 7 scenario fixture JSON files + fixture validation tests | ✅ Done |
-| 3 | `mcp_server/fixtures.py` + `mcp_server/tools/` + unit tests passing | ⬜ Not started |
+| 3 | `mcp_server/fixtures.py` + `mcp_server/tools/` + unit tests passing | ✅ Done |
 | 4 | `mcp_server/server.py` (FastMCP wiring) | ⬜ Not started |
 | 5 | `agents/base.py` (shared tool loop) | ⬜ Not started |
 | 6 | `agents/investigator.py` + `agents/reviewer.py` | ⬜ Not started |
@@ -62,9 +101,15 @@ PALLET→CASE→EACH (SKU-002) and must raise `ValueError` on an unknown SKU/pat
 | 9 | Integration tests + README | ⬜ Not started |
 
 ## Tests passing
-`pytest tests/test_fixtures.py` — 45 passed, 0 failed. Covers Pydantic model validation for
-every fixture file, po_id/retailer cross-document consistency, file-layout expectations per
-scenario, ground-truth claim_id matches, and each scenario's specific numeric trap.
+`pytest tests/` — 58 passed, 0 failed:
+- `test_fixtures.py` (45): Pydantic model validation for every fixture file, po_id/retailer
+  cross-document consistency, file-layout expectations per scenario, ground-truth claim_id
+  matches, and each scenario's specific numeric trap.
+- `test_uom_tools.py` (6): direct/reverse/multi-hop/same-unit conversions, unknown-SKU and
+  undefined-path `ValueError`s.
+- `test_document_tools.py` (7): s01 basic wiring, s03 split-ASN aggregation, s06
+  trade-agreement promo match/mismatch, s07 claim_id resolution across two claim files,
+  po_id mismatch raises.
 
 ## Known issues / decisions pending
 - Cross-document referential integrity (po_id/sku consistency) is now enforced by
