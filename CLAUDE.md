@@ -45,6 +45,9 @@ tool logic instead. Changing expected verdicts requires explicit user sign-off.
   in-scope build (layers 1-9) is complete — mention as future work in README, do not build
   now
 - Production concerns: auth, multi-tenancy, persistence beyond local files
+- API-facing deployment (auth, per-user/per-IP rate limiting, per-user cost caps on OpenRouter
+  usage) — only becomes a real concern once this sits behind a frontend/web UI instead of a
+  locally-run CLI; mention as future work in README, do not build now
 
 ---
 
