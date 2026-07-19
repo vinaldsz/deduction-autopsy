@@ -1,6 +1,37 @@
 # Progress
 
 ## Current layer
+**Layer 4 — `mcp_server/server.py` FastMCP wiring complete**
+
+Built `mcp_server/server.py`: constructs a `FastMCP("deduction-autopsy")` app and registers the
+8 existing tool functions from `mcp_server/tools/` (`document_tools.py`, `uom_tools.py`) via a
+loop calling `mcp.tool(fn)` on each imported function object — no re-definition or wrapping, so
+the tools' exact signatures/docstrings stay the single source of truth. `server.py` itself has
+no `SCENARIO_ID` handling: each tool function already builds a fresh `FixtureLoader()` per call
+and reads the env var fresh, so nothing extra was needed at server-construction or startup time.
+`if __name__ == "__main__": mcp.run()` runs over stdio (the default transport), matching
+`docs/PLAN.md`'s "launch FastMCP server as subprocess with `SCENARIO_ID` env var" handoff
+pattern for the Layer 7 orchestrator.
+
+Confirmed installed dependency is `fastmcp==3.4.4` (the jlowin/fastmcp framework — `FastMCP`,
+`Client`, `mcp.tool()`, `mcp.run()`), not the low-level MCP SDK submodule.
+
+Wrote `tests/test_server.py` (5 tests) using `fastmcp.Client(mcp)` for in-process testing —
+constructs the client directly from the `FastMCP` app object, no subprocess/stdio pipes needed,
+while still exercising the real MCP protocol layer (tool registration, JSON-schema args,
+result serialization). Added `pytest-asyncio` as a dev dependency (`asyncio_mode = "auto"` in
+`pyproject.toml`) since `Client` methods are async-only. Tests cover: all 8 tools listed by
+name, `get_po` round-trip via MCP (s01), `normalize_uom` via MCP (s02 CASE→EACH), `None` return
+serializes correctly for a promo mismatch (s06 — `result.data is None`), and a `ValueError` from
+the tool layer surfaces as `fastmcp.exceptions.ToolError` through `call_tool` rather than being
+swallowed. Manually verified the server also runs correctly as a real stdio subprocess via
+`PythonStdioTransport` (not just the in-process `Client` path used in the test suite).
+
+`pytest tests/` — 63 passed, 0 failed (58 prior + 5 new).
+
+---
+
+## Previous layer
 **Layer 3 — FixtureLoader + MCP tool functions + unit tests complete**
 
 Built `mcp_server/fixtures.py` (`FixtureLoader`): resolves the active scenario directory
@@ -77,13 +108,12 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Start **Layer 4**: `mcp_server/server.py` — wire up FastMCP, reading `SCENARIO_ID` from env
-at startup and exposing the 8 functions in `mcp_server/tools/` (`document_tools.py`,
-`uom_tools.py`) as MCP tools with the exact signatures from `docs/SPEC.md`'s MCP Tools
-table. The tool functions themselves already read `SCENARIO_ID` fresh from env per call, so
-server.py mainly needs to register them with FastMCP and launch as a stdio server (per
-`docs/PLAN.md`'s orchestrator handoff pattern: "Launch FastMCP server as subprocess with
-`SCENARIO_ID` env var").
+Start **Layer 5**: `agents/base.py` — shared Anthropic tool-use loop (`AgentRunner`):
+`create → process tool_use blocks → append results → repeat`, logging every tool call
+name+args to a trace list, returning `AgentResult(final_text, trace)`. This is what both
+`agents/investigator.py` and `agents/reviewer.py` (Layer 6) will use to talk to the MCP
+server built in Layer 4. Revisit the OpenRouter-vs-Anthropic-SDK question (see "Known
+issues" below) before writing this layer.
 
 ## Layer status
 
@@ -93,7 +123,7 @@ server.py mainly needs to register them with FastMCP and launch as a stdio serve
 | 1 | `mcp_server/models.py` + UOM conversion table | ✅ Done |
 | 2 | All 7 scenario fixture JSON files + fixture validation tests | ✅ Done |
 | 3 | `mcp_server/fixtures.py` + `mcp_server/tools/` + unit tests passing | ✅ Done |
-| 4 | `mcp_server/server.py` (FastMCP wiring) | ⬜ Not started |
+| 4 | `mcp_server/server.py` (FastMCP wiring) | ✅ Done |
 | 5 | `agents/base.py` (shared tool loop) | ⬜ Not started |
 | 6 | `agents/investigator.py` + `agents/reviewer.py` | ⬜ Not started |
 | 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ⬜ Not started |
@@ -101,7 +131,7 @@ server.py mainly needs to register them with FastMCP and launch as a stdio serve
 | 9 | Integration tests + README | ⬜ Not started |
 
 ## Tests passing
-`pytest tests/` — 58 passed, 0 failed:
+`pytest tests/` — 63 passed, 0 failed:
 - `test_fixtures.py` (45): Pydantic model validation for every fixture file, po_id/retailer
   cross-document consistency, file-layout expectations per scenario, ground-truth claim_id
   matches, and each scenario's specific numeric trap.
@@ -110,14 +140,21 @@ server.py mainly needs to register them with FastMCP and launch as a stdio serve
 - `test_document_tools.py` (7): s01 basic wiring, s03 split-ASN aggregation, s06
   trade-agreement promo match/mismatch, s07 claim_id resolution across two claim files,
   po_id mismatch raises.
+- `test_server.py` (5): all 8 tools registered and listed by name, `get_po`/`normalize_uom`
+  round-trip through the real MCP protocol (in-process `fastmcp.Client`), `None` return
+  serializes correctly (s06 promo mismatch), `ValueError` surfaces as `ToolError` through
+  `call_tool` rather than being swallowed.
 
 ## Known issues / decisions pending
 - Cross-document referential integrity (po_id/sku consistency) is now enforced by
   `tests/test_fixtures.py`, not at the model layer — this is intentional; models stay
   single-document, fixture-level tests catch cross-file drift.
 - Tech stack note: user is considering OpenRouter as an alternative to calling the
-  Anthropic SDK directly for agents. Confirmed this does not affect Layer 1-4 (models,
+  Anthropic SDK directly for agents. Confirmed this does not affect Layers 1-4 (models,
   fixtures, tools, MCP server); revisit when building `agents/base.py` (Layer 5).
+- `pytest-asyncio` added as a dev dependency (not anticipated in `docs/PLAN.md`'s original
+  dependency list) since `fastmcp.Client`'s test API is async-only; `asyncio_mode = "auto"`
+  set in `pyproject.toml` so async test functions need no per-test decorator.
 
 ---
 *Update this file at the end of every session before stopping.*
