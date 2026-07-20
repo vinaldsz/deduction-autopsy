@@ -235,6 +235,7 @@ async def run_pipeline(
             openai_client = AsyncOpenAI(
                 base_url=OPENROUTER_BASE_URL,
                 api_key=os.environ["OPENROUTER_API_KEY"],
+                timeout=SETTINGS.openrouter_timeout_seconds,
             )
 
         if mcp_client is None:

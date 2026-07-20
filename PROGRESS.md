@@ -1,6 +1,66 @@
 # Progress
 
 ## Current layer
+**Layer 13 — retry/backoff + timeout around OpenRouter calls complete**
+
+Built per `docs/PLAN.md`'s Layer 13 section, directly on top of Layer 12's
+`orchestrator/config.py`. `agents/base.py`'s `AgentRunner.run()` previously called
+`chat.completions.create(...)` once per tool-loop iteration with no client timeout and no
+retry — a single transient 429/5xx from OpenRouter or a network timeout killed the whole
+claim run, discarding whatever real MCP tool-call work the agent had already done.
+
+**3 new `orchestrator/config.py` fields** (same env-var-overridable pattern as Layer 12):
+`openrouter_timeout_seconds` (`OPENROUTER_TIMEOUT_SECONDS`, default `60.0`),
+`max_transport_attempts` (`MAX_TRANSPORT_ATTEMPTS`, default `3` — total attempts including
+the first, matching `max_investigator_attempts`'s existing convention rather than "retries
+after the first"), `retry_backoff_base_seconds` (`RETRY_BACKOFF_BASE_SECONDS`, default
+`1.0`, exponential: `base * 2**(attempts_made - 1)` between attempts).
+
+**`agents/base.py`**: `AgentRunner.__init__` gained matching params plus a testable seam
+`sleep: Callable[[float], Awaitable[None]] = asyncio.sleep` (mirrors the existing
+`on_tool_call` injectable-seam pattern from Layer 11). The `create()` call moved into a new
+private `_create_completion` helper that retries on `(APIStatusError, APITimeoutError)`,
+using a small `_is_retryable_transport_error(exc)` helper (`APITimeoutError` → always
+retryable; `APIStatusError` → only `status_code == 429` or `>= 500`) — scoped deliberately
+narrower than all `APIConnectionError`s (e.g. DNS/TLS failures aren't the kind of transient
+blip retrying fixes; a design-review pass by a Plan agent confirmed staying scoped to the
+plan's stated error types rather than broadening). Re-raises immediately if not retryable
+or attempts are exhausted. No change to tool-call handling, the `on_tool_call` hook, or the
+separate `max_iterations`/`_run_investigator_until_valid` retry loops — those are a
+different failure mode (validation, not transport) and stay untouched.
+
+**`orchestrator/pipeline.py` and `cli/run_all.py`**: both existing (and only)
+`AsyncOpenAI(...)` construction sites now pass `timeout=SETTINGS.openrouter_timeout_seconds`.
+Per the same design review, the duplication between these two call sites was deliberately
+*not* factored into a shared factory — the plan's ask was one new kwarg on two existing
+sites, not a refactor, and Layer 12 already left this same duplication in place.
+
+**Tests**: `tests/agent_stubs.py`'s `StubAsyncOpenAI._create` now raises if a queued
+response is a `BaseException` instance (fully backward compatible — no existing test queued
+one); added `make_status_error(status_code)`/`make_timeout_error()` helpers built from real
+`httpx.Request`/`httpx.Response` objects (required by `APIStatusError`/`APITimeoutError`'s
+actual constructors). 5 new tests in `tests/test_agents_base.py`: transient 429 retried then
+succeeds (exactly one recorded sleep call); `APITimeoutError` retried the same way;
+non-retryable 400 raises immediately with zero sleep calls; retries exhausted raises the
+underlying error once `max_transport_attempts` is hit; backoff durations passed to the
+injected `sleep` grow exponentially (`[1.0, 2.0]`) across multiple failures. Extended
+`tests/test_orchestrator_config.py`'s existing defaults/override tests to cover the 3 new
+fields. Added one regression test each to `tests/test_orchestrator_pipeline.py` and
+`tests/test_cli_run_all.py` (monkeypatching `openai.AsyncOpenAI` with a kwargs-capturing
+fake) confirming the constructed client receives the configured timeout — closes a gap,
+since neither file's real (non-injected) client-construction path had any unit coverage
+before this layer.
+
+`.env.example` documents the 3 new optional override vars, same style as Layer 12's.
+
+`pytest tests/` — 146 passed, 0 failed, 9 deselected (unit suite; +7 for this layer: 5 in
+`tests/test_agents_base.py`, 1 in `tests/test_orchestrator_pipeline.py`, 1 in
+`tests/test_cli_run_all.py`). No live OpenRouter run needed this session — no prompt/model/
+verdict-logic changed, only transport-level resilience around the existing call sites.
+
+---
+
+## Previous layer
 **Layer 12 — `orchestrator/config.py` (consolidated settings) complete**
 
 Built per `docs/PLAN.md`'s Layer 12 section. Model slugs (`INVESTIGATOR_MODEL`/`REVIEWER_MODEL`),
@@ -777,19 +837,18 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Layers 1-12 are complete, including the s04 Reviewer regression bugfix (fixed and
+Layers 1-13 are complete, including the s04 Reviewer regression bugfix (fixed and
 live-confirmed 6/6 in an earlier session), Layer 11's CLI demo mode (live double-confirmed
-with and without `--explain`), and Layer 12's consolidated settings module (this session, unit
-tests only — see "Current layer" above for why no live run was needed). Nothing outstanding is
-known to be broken. Suggested next steps, in rough priority order:
+with and without `--explain`), Layer 12's consolidated settings module, and Layer 13's
+retry/backoff + timeout around OpenRouter calls (this session, unit tests only — see "Current
+layer" above for why no live run was needed). Nothing outstanding is known to be broken.
+Suggested next steps, in rough priority order:
 
-1. Start Layer 13 (`docs/PLAN.md`): retry/backoff + timeout around OpenRouter calls in
-   `agents/base.py`'s `AgentRunner.run()` — a client-level timeout and exponential backoff on
-   retryable errors (`openai.APIStatusError` 429/5xx, `openai.APITimeoutError`), distinct from
-   the existing CaseFile-correction retry loop. Now has a natural home for its new tunables
-   (retry count, backoff base) in Layer 12's `orchestrator/config.py`.
-2. Layer 14 (token/cost usage capture) is next after that — also a natural consumer of Layer
-   12's config module if a cost-cap tunable is ever added.
+1. Start Layer 14 (`docs/PLAN.md`): token/cost usage capture — capture
+   `prompt_tokens`/`completion_tokens` per agent call in `AgentResult`, sum per claim, write to
+   a `usage` block in `verdict.json`. Natural consumer of Layer 12's config module if a
+   cost-cap tunable is ever added.
+2. Layer 15 (CI — `.github/workflows/tests.yml`) is next after that.
 3. Nothing else is currently flagged. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
    orchestration, SKU-to-product-name mapping, heterogeneous mock data sources, API-facing
    deployment concerns) only if the user asks to expand scope beyond the original 9-layer build.
@@ -811,9 +870,10 @@ known to be broken. Suggested next steps, in rough priority order:
 | 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
 | 11 | CLI demo mode (`--explain` flag) | ✅ Done |
 | 12 | `orchestrator/config.py` (consolidated settings) | ✅ Done |
+| 13 | Retry/backoff + timeout around OpenRouter calls | ✅ Done |
 
 ## Tests passing
-`pytest tests/` — 139 passed, 0 failed, 9 deselected (the 9 deselected are
+`pytest tests/` — 146 passed, 0 failed, 9 deselected (the 9 deselected are
 `test_pipeline_scenarios.py`'s integration tests — 8 parametrized scenarios + the dedicated
 `test_reviewer_overturns_a_missed_duplicate`):
 - `test_cli_run_claim.py` (9): argparse required-flag enforcement and `--output-dir`/
@@ -826,22 +886,24 @@ known to be broken. Suggested next steps, in rough priority order:
   `dispute_grounds` text (not a static per-scenario description — see "Current layer" above for
   the mid-session correction), and a regression test that omitting `--explain` prints none of
   the explain-only sections.
-- `test_cli_run_all.py` (6): all-7-pass summary line and exit 0; one scenario's
+- `test_cli_run_all.py` (7): all-7-pass summary line and exit 0; one scenario's
   `investigator_verdict` mismatch fails only that row (exit 1, others still pass); a
   `PipelineError` on one scenario is recorded as an error row and the loop continues to the
   rest; missing-`OPENROUTER_API_KEY` returns 1 without ever calling `run_pipeline_fn`; explicit
   regression test that the ground-truth check compares `reviewer_verdict` (not `final_verdict`)
   against `"CONFIRM"`; `parse_args` regression test that `--help`/an unrecognized flag raises
   `SystemExit` rather than falling through to a real run (see Layer 8 notes above for why this
-  matters).
-- `test_orchestrator_pipeline.py` (23): s01/s02 happy paths (investigator/reviewer wiring,
+  matters); Layer 13's regression test that the real (non-injected) `AsyncOpenAI` client is
+  constructed with `timeout=SETTINGS.openrouter_timeout_seconds`.
+- `test_orchestrator_pipeline.py` (24): s01/s02 happy paths (investigator/reviewer wiring,
   output-artifact presence/absence), missing-required-field and missing-required-tool-call
   correction retries, `max_investigator_attempts` exhaustion, reasoning-strip safeguard,
   full `_resolve_final_verdict` truth table, `_extract_json` parametrized cases (fenced,
   unfenced, prose-before-fence, prose-before-unfenced-brace) and a full-pipeline regression test
   reproducing the exact live prose-before-fence failure; Layer 11's `strip_reasoning` unit test
   and a test that `on_investigator_tool_call`/`on_reviewer_tool_call` each capture real tool
-  calls from their own agent only.
+  calls from their own agent only; Layer 13's regression test that the real (non-injected)
+  `AsyncOpenAI` client is constructed with `timeout=SETTINGS.openrouter_timeout_seconds`.
 - `test_orchestrator_output.py` (5): `verdict.json`/`reasoning_trace.json`/`dispute_packet.md`
   writers — paths, JSON shape, markdown content, empty-dispute-grounds handling, nested
   output-dir creation.
@@ -862,11 +924,15 @@ known to be broken. Suggested next steps, in rough priority order:
   round-trip through the real MCP protocol (in-process `fastmcp.Client`), `None` return
   serializes correctly (s06 promo mismatch), `ValueError` surfaces as `ToolError` through
   `call_tool` rather than being swallowed.
-- `test_agents_base.py` (9): text-only response, single/parallel tool-call round trips,
+- `test_agents_base.py` (14): text-only response, single/parallel tool-call round trips,
   real `ToolError` surfaced without crashing, malformed tool-call JSON handled, max-iterations
   safety bound raises `AgentRunnerError`, MCP→OpenAI tool-schema translation with a
   non-empty-description regression guard, and Layer 11's `on_tool_call` hook tests (fires once
-  per call in order, never fires for a text-only response).
+  per call in order, never fires for a text-only response); Layer 13's transport-retry tests: a
+  transient 429 (and separately an `APITimeoutError`) is retried once then succeeds, a
+  non-retryable 400 raises immediately with zero sleep calls, retries exhausted raises the
+  underlying error once `max_transport_attempts` is hit, and backoff durations passed to the
+  injected `sleep` grow exponentially across multiple failures.
 - `test_agents_investigator.py` (6): confirmed model slug, claim_id present in the user
   message, default vs. overridden `model`, a real `normalize_uom` tool-call round trip
   against s02's fixtures, and Layer 11's `on_tool_call` passthrough test.
@@ -876,12 +942,13 @@ known to be broken. Suggested next steps, in rough priority order:
   against s07's fixtures, a static regression guard that the timeline-check bullet and
   its liability-scoping carve-out (the s04 bugfix, see below) are both present in the prompt
   text, and Layer 11's `on_tool_call` passthrough test.
-- `test_orchestrator_config.py` (4): defaults match the previously hardcoded confirmed values;
-  `load_settings()` honors all six env-var overrides; a regression guard that
-  `agents.investigator.INVESTIGATOR_MODEL`/`agents.reviewer.REVIEWER_MODEL`/
-  `orchestrator.pipeline.OPENROUTER_BASE_URL` read from the `SETTINGS` singleton rather than a
-  re-hardcoded copy; `AgentRunner`'s default `temperature` reaches the actual OpenRouter
-  request when not overridden.
+- `test_orchestrator_config.py` (4): defaults match the previously hardcoded confirmed values
+  (now including Layer 13's `openrouter_timeout_seconds`/`max_transport_attempts`/
+  `retry_backoff_base_seconds`); `load_settings()` honors all nine env-var overrides; a
+  regression guard that `agents.investigator.INVESTIGATOR_MODEL`/
+  `agents.reviewer.REVIEWER_MODEL`/`orchestrator.pipeline.OPENROUTER_BASE_URL` read from the
+  `SETTINGS` singleton rather than a re-hardcoded copy; `AgentRunner`'s default `temperature`
+  reaches the actual OpenRouter request when not overridden.
 
 ## Known issues / decisions pending
 - **Resolved (this session, see "Current layer" above)**: `agents/reviewer.py`'s prompt had

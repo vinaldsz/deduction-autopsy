@@ -3,9 +3,24 @@ import json
 import pytest
 from fastmcp import Client
 
+from openai import APIStatusError
+
 from agents.base import AgentRunner, AgentRunnerError
 from mcp_server.server import mcp
-from tests.agent_stubs import StubAsyncOpenAI, make_completion
+from tests.agent_stubs import (
+    StubAsyncOpenAI,
+    make_completion,
+    make_status_error,
+    make_timeout_error,
+)
+
+
+class _FakeSleep:
+    def __init__(self):
+        self.calls: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.calls.append(seconds)
 
 
 async def test_text_only_response_no_tools():
@@ -211,6 +226,104 @@ async def test_on_tool_call_hook_not_invoked_for_text_only_response():
         await runner.run("Investigate claim CLM-001.")
 
     assert observed == []
+
+
+async def test_transient_status_error_is_retried_then_succeeds():
+    stub = StubAsyncOpenAI([make_status_error(429), make_completion(content="Done.")])
+    sleep = _FakeSleep()
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+            sleep=sleep,
+        )
+        result = await runner.run("Investigate claim CLM-001.")
+
+    assert result.final_text == "Done."
+    assert len(stub.requests) == 2
+    assert sleep.calls == [1.0]
+
+
+async def test_timeout_error_is_retried_then_succeeds():
+    stub = StubAsyncOpenAI([make_timeout_error(), make_completion(content="Done.")])
+    sleep = _FakeSleep()
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+            sleep=sleep,
+        )
+        result = await runner.run("Investigate claim CLM-001.")
+
+    assert result.final_text == "Done."
+    assert sleep.calls == [1.0]
+
+
+async def test_non_retryable_status_error_raises_immediately():
+    stub = StubAsyncOpenAI([make_status_error(400)])
+    sleep = _FakeSleep()
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+            sleep=sleep,
+        )
+        with pytest.raises(APIStatusError):
+            await runner.run("Investigate claim CLM-001.")
+
+    assert len(stub.requests) == 1
+    assert sleep.calls == []
+
+
+async def test_transport_retries_exhausted_raises_underlying_error():
+    stub = StubAsyncOpenAI([make_status_error(500), make_status_error(500)])
+    sleep = _FakeSleep()
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+            max_transport_attempts=2,
+            sleep=sleep,
+        )
+        with pytest.raises(APIStatusError):
+            await runner.run("Investigate claim CLM-001.")
+
+    assert len(stub.requests) == 2
+    assert sleep.calls == [1.0]
+
+
+async def test_backoff_durations_grow_exponentially():
+    stub = StubAsyncOpenAI(
+        [make_status_error(500), make_status_error(500), make_completion(content="Done.")]
+    )
+    sleep = _FakeSleep()
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+            max_transport_attempts=3,
+            retry_backoff_base_seconds=1.0,
+            sleep=sleep,
+        )
+        result = await runner.run("Investigate claim CLM-001.")
+
+    assert result.final_text == "Done."
+    assert sleep.calls == [1.0, 2.0]
 
 
 async def test_mcp_tool_schema_translation():

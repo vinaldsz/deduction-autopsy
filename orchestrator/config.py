@@ -10,6 +10,9 @@ class Settings:
     temperature: float
     max_tool_iterations: int
     max_investigator_attempts: int
+    openrouter_timeout_seconds: float
+    max_transport_attempts: int
+    retry_backoff_base_seconds: float
 
 
 def load_settings() -> Settings:
@@ -30,6 +33,11 @@ def load_settings() -> Settings:
         temperature=float(os.environ.get("AGENT_TEMPERATURE", "0.0")),
         max_tool_iterations=int(os.environ.get("MAX_TOOL_ITERATIONS", "10")),
         max_investigator_attempts=int(os.environ.get("MAX_INVESTIGATOR_ATTEMPTS", "3")),
+        openrouter_timeout_seconds=float(os.environ.get("OPENROUTER_TIMEOUT_SECONDS", "60.0")),
+        max_transport_attempts=int(os.environ.get("MAX_TRANSPORT_ATTEMPTS", "3")),
+        retry_backoff_base_seconds=float(
+            os.environ.get("RETRY_BACKOFF_BASE_SECONDS", "1.0")
+        ),
     )
 
 

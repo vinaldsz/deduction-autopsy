@@ -5,6 +5,7 @@ from fastmcp import Client
 
 from agents.base import ToolCallRecord
 from mcp_server.server import mcp
+from orchestrator.config import SETTINGS
 from orchestrator.pipeline import (
     CaseFile,
     PipelineError,
@@ -115,6 +116,40 @@ async def test_happy_path_valid_confirmed_no_dispute_packet(monkeypatch, tmp_pat
         "confidence": 0.97,
         "timestamp": verdict["timestamp"],
     }
+
+
+async def test_constructs_openai_client_with_configured_timeout(monkeypatch, tmp_path):
+    """Regression guard for Layer 13: when no openai_client is injected, run_pipeline must
+    construct AsyncOpenAI with the SETTINGS-derived timeout, not the client library's
+    unbounded default."""
+    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(content=VALID_CASE_FILE_JSON),
+            make_completion(content=confirm_json("CLM-001")),
+        ]
+    )
+    captured_kwargs = []
+
+    class _CapturingAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured_kwargs.append(kwargs)
+            self.chat = stub.chat
+
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _CapturingAsyncOpenAI)
+
+    async with Client(mcp) as mcp_client:
+        await run_pipeline(
+            claim_id="CLM-001",
+            scenario="s01_clean_shortage",
+            mcp_client=mcp_client,
+            output_dir=tmp_path,
+        )
+
+    assert captured_kwargs[0]["timeout"] == SETTINGS.openrouter_timeout_seconds
 
 
 async def test_happy_path_invalid_confirmed_writes_dispute_packet(monkeypatch, tmp_path):

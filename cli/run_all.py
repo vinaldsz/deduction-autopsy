@@ -10,6 +10,7 @@ from rich.table import Table
 
 from agents.base import AgentRunnerError
 from cli._common import ensure_api_key
+from orchestrator.config import SETTINGS
 from orchestrator.ground_truth import GROUND_TRUTH
 from orchestrator.pipeline import OPENROUTER_BASE_URL, PipelineError, run_pipeline
 
@@ -45,6 +46,7 @@ async def main(
         openai_client = AsyncOpenAI(
             base_url=OPENROUTER_BASE_URL,
             api_key=os.environ["OPENROUTER_API_KEY"],
+            timeout=SETTINGS.openrouter_timeout_seconds,
         )
 
     table = Table(title="Deduction Autopsy — all scenarios")

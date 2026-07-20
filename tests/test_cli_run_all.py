@@ -4,6 +4,7 @@ import pytest
 from rich.console import Console
 
 from cli.run_all import GROUND_TRUTH, main, parse_args
+from orchestrator.config import SETTINGS
 from orchestrator.pipeline import PipelineError
 
 
@@ -79,6 +80,30 @@ async def test_pipeline_error_recorded_and_loop_continues(monkeypatch):
     output = console.export_text()
     assert f"{len(GROUND_TRUTH) - 1}/{len(GROUND_TRUTH)} passed" in output
     assert "boom" in output
+
+
+async def test_constructs_openai_client_with_configured_timeout(monkeypatch):
+    """Regression guard for Layer 13: when no openai_client is injected, main() must construct
+    AsyncOpenAI with the SETTINGS-derived timeout, not the client library's unbounded default."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    console = Console(record=True, no_color=True, width=160)
+    captured_kwargs = []
+
+    class _CapturingAsyncOpenAI:
+        def __init__(self, **kwargs):
+            captured_kwargs.append(kwargs)
+
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _CapturingAsyncOpenAI)
+
+    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None):
+        case = next(c for c in GROUND_TRUTH if c["claim_id"] == claim_id)
+        return _fake_result(claim_id, case["expected_investigator"], case["expected_reviewer"])
+
+    await main(console=console, run_pipeline_fn=run_pipeline_fn)
+
+    assert captured_kwargs[0]["timeout"] == SETTINGS.openrouter_timeout_seconds
 
 
 async def test_missing_api_key_returns_one_without_calling_run_pipeline(monkeypatch):

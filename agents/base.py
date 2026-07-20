@@ -1,10 +1,12 @@
+import asyncio
 import dataclasses
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from fastmcp.exceptions import ToolError
+from openai import APIStatusError, APITimeoutError
 
 from orchestrator.config import SETTINGS
 
@@ -40,6 +42,14 @@ def _serialize_tool_result(data: Any) -> str:
     return json.dumps(_to_jsonable(data))
 
 
+def _is_retryable_transport_error(exc: Exception) -> bool:
+    if isinstance(exc, APITimeoutError):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code == 429 or exc.status_code >= 500
+    return False
+
+
 async def _build_tool_schemas(mcp_client: Any) -> list[dict]:
     mcp_tools = await mcp_client.list_tools()
     return [
@@ -67,6 +77,9 @@ class AgentRunner:
         system_prompt: str,
         temperature: float = SETTINGS.temperature,
         max_iterations: int = SETTINGS.max_tool_iterations,
+        max_transport_attempts: int = SETTINGS.max_transport_attempts,
+        retry_backoff_base_seconds: float = SETTINGS.retry_backoff_base_seconds,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         on_tool_call: Callable[[ToolCallRecord], None] | None = None,
     ) -> None:
         self._openai_client = openai_client
@@ -75,7 +88,27 @@ class AgentRunner:
         self._system_prompt = system_prompt
         self._temperature = temperature
         self._max_iterations = max_iterations
+        self._max_transport_attempts = max_transport_attempts
+        self._retry_backoff_base_seconds = retry_backoff_base_seconds
+        self._sleep = sleep
         self._on_tool_call = on_tool_call
+
+    async def _create_completion(self, messages: list[dict], tools: list[dict]) -> Any:
+        attempts_made = 0
+        while True:
+            attempts_made += 1
+            try:
+                return await self._openai_client.chat.completions.create(
+                    model=self._model,
+                    temperature=self._temperature,
+                    messages=list(messages),
+                    tools=tools,
+                )
+            except (APIStatusError, APITimeoutError) as exc:
+                if not _is_retryable_transport_error(exc) or attempts_made >= self._max_transport_attempts:
+                    raise
+                backoff = self._retry_backoff_base_seconds * (2 ** (attempts_made - 1))
+                await self._sleep(backoff)
 
     async def run(self, user_message: str) -> AgentResult:
         tools = await _build_tool_schemas(self._mcp_client)
@@ -86,12 +119,7 @@ class AgentRunner:
         trace: list[ToolCallRecord] = []
 
         for _ in range(self._max_iterations):
-            response = await self._openai_client.chat.completions.create(
-                model=self._model,
-                temperature=self._temperature,
-                messages=list(messages),
-                tools=tools,
-            )
+            response = await self._create_completion(messages, tools)
             msg = response.choices[0].message
 
             if not msg.tool_calls:

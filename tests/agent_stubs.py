@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import httpx
+from openai import APIStatusError, APITimeoutError
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_message_tool_call import (
@@ -53,4 +55,18 @@ class StubAsyncOpenAI:
 
     async def _create(self, **kwargs):
         self.requests.append(kwargs)
-        return next(self._responses)
+        result = next(self._responses)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+def make_status_error(status_code: int) -> APIStatusError:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    response = httpx.Response(status_code=status_code, request=request)
+    return APIStatusError(f"error {status_code}", response=response, body=None)
+
+
+def make_timeout_error() -> APITimeoutError:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    return APITimeoutError(request=request)

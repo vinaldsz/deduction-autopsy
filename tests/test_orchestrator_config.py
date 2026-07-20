@@ -17,6 +17,9 @@ def test_defaults_match_confirmed_values():
         temperature=0.0,
         max_tool_iterations=10,
         max_investigator_attempts=3,
+        openrouter_timeout_seconds=60.0,
+        max_transport_attempts=3,
+        retry_backoff_base_seconds=1.0,
     )
 
 
@@ -27,6 +30,9 @@ def test_load_settings_honors_env_var_overrides(monkeypatch):
     monkeypatch.setenv("AGENT_TEMPERATURE", "0.5")
     monkeypatch.setenv("MAX_TOOL_ITERATIONS", "20")
     monkeypatch.setenv("MAX_INVESTIGATOR_ATTEMPTS", "7")
+    monkeypatch.setenv("OPENROUTER_TIMEOUT_SECONDS", "30.0")
+    monkeypatch.setenv("MAX_TRANSPORT_ATTEMPTS", "5")
+    monkeypatch.setenv("RETRY_BACKOFF_BASE_SECONDS", "2.0")
 
     settings = load_settings()
 
@@ -37,6 +43,9 @@ def test_load_settings_honors_env_var_overrides(monkeypatch):
         temperature=0.5,
         max_tool_iterations=20,
         max_investigator_attempts=7,
+        openrouter_timeout_seconds=30.0,
+        max_transport_attempts=5,
+        retry_backoff_base_seconds=2.0,
     )
 
 
