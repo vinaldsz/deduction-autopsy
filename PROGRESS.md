@@ -1,6 +1,86 @@
 # Progress
 
 ## Current layer
+**Layer 10 — `scenarios/s08_reviewer_overturn/` (8th scenario) complete**
+
+Built the 8th scenario per `docs/PLAN.md`'s Layer 10 section and `docs/SPEC.md`'s "Eighth
+Scenario" plan: `scenarios/s08_reviewer_overturn/` (`po.json`/`asn.json`/`invoice.json`/
+`receiving_record.json`/`deduction_claim.json` for a clean 12-unit shortage on PO-008, plus
+`prior_claim.json` for `CLM-008a` showing the same shortage already credited via CM-014).
+Added `SKU-008` to `data/sku_uom_conversions.json`, an `s08` entry to
+`orchestrator/ground_truth.py` and `REQUIRED_TOOL_CALLS` in `orchestrator/pipeline.py`
+(same `list_claims_for_po` check as s07), and fixture tests in `tests/test_fixtures.py`
+(renamed the now-inaccurate `test_all_seven_scenarios_present` →
+`test_all_scenarios_present`, widened `test_only_s07_has_prior_claim` →
+`test_only_s07_and_s08_have_prior_claim` since s08 also carries a `prior_claim.json`, and
+added two s08-specific assertions).
+
+**Original design didn't survive first contact with a live run — documenting the full
+pivot since it's the actual point of this layer.** The initial fixture design (approved via
+a design discussion before implementation) tried to make the prior claim's resolution a
+*numeric-inference* trap rather than a wording one: `prior_claim.retailer_notes` stated a
+dollar credit ("Credit of $24.00 issued... per CM-014") without restating the unit count,
+so connecting it to the current claim's 12-unit shortage would require computing
+`$24.00 / $2.00 unit_price = 12 units` — deliberately avoiding a keyword-matchable phrase
+like s07's explicit "RESOLVED", per user pushback that an earlier wording-subtlety draft
+risked "making the Investigator artificially dumb" rather than testing a genuine reasoning
+gap.
+
+**First live run (`python -m cli.run_claim --claim-id CLM-008 ...`) immediately falsified
+this design**: `investigator_verdict: INVALID`, `reviewer_verdict: CONFIRM` — the
+Investigator caught the duplicate on its own, no OVERTURN. Reading the trace showed why:
+`agents/investigator.py`'s step 5 (hardened during the Layer 9 follow-up) already reads
+almost identically to the Reviewer's own duplicate-check instruction ("if a prior claim's
+notes indicate it was already resolved, e.g. a credit memo was issued"), so any prior-claim
+wording legible enough for the Reviewer to reliably catch is equally legible to the
+Investigator — there is no fixture-wording lever left to pull for this specific check. Also
+learned in the process: `claimed_amount` is a structured JSON field on every claim (not
+prose), so it's always exactly visible to whichever agent fetches the prior claim regardless
+of notes wording — dollar-figure matching can't be hidden through phrasing at all.
+
+**Resolution, per the user's own suggestion**: stop trying to force the live Investigator
+into a specific wrong answer. `orchestrator/ground_truth.py`'s `s08` entry now records the
+real observed behavior honestly (`expected_investigator: INVALID`, `expected_reviewer:
+CONFIRM` — same pattern as s07, independent fixture data, still legitimate additional
+end-to-end coverage). Separately, added
+`tests/test_pipeline_scenarios.py::test_reviewer_overturns_a_missed_duplicate`: feeds the
+*live* Reviewer a hand-authored, fabricated CaseFile against s08's real fixtures
+(`proposed_verdict: "VALID"`, `prior_claims: []`, as if a hypothetical Investigator had
+reconciled quantities correctly but never surfaced `CLM-008a`) and asserts the Reviewer's
+mandatory `list_claims_for_po` re-check still independently finds the prior claim and
+returns `OVERTURN` regardless of what the case file claimed. This proves the
+segregation-of-duties safety net actually works, without depending on the real Investigator
+ever being wrong. `docs/SPEC.md`'s "Eighth Scenario" section rewritten to document this
+full story so a future reader isn't confused by why `s08`'s ground truth doesn't show
+`OVERTURN`.
+
+**Live verification**: `test_reviewer_overturns_a_missed_duplicate` passed on first live run.
+Full `pytest tests/test_pipeline_scenarios.py -m integration -v` (9 tests: 8 scenarios + the
+new dedicated test): **8/9 passed** first run, one failure —
+`test_scenario_matches_ground_truth[s04_sequence_violation]` (`reviewer_verdict: OVERTURN`
+instead of expected `CONFIRM`). s08 itself and the new dedicated test both passed clean.
+Re-ran s04 alone: passed. Re-ran the full suite again: s04 failed again (2 of 3 live
+attempts total). Confirmed via trace this is unrelated to s08/Layer 10 — a real, previously
+undiscovered bug in `agents/reviewer.py`: the Layer 9 follow-up's s01 fix added "a shortage
+that every document consistently confirms is exactly what a legitimate deduction claim looks
+like" / "don't re-litigate liability" language to stop the Reviewer manufacturing
+out-of-scope disputes — and the model is now citing that exact language to excuse a genuine,
+independent timeline-sequence violation in s04 instead of disputing it. Per explicit user
+decision, **not fixed this session** — logged below as the top-priority known issue for the
+next session, matching the project's discipline of reporting live results honestly rather
+than silently patching around them mid-layer.
+
+`pytest tests/` — 125 passed, 0 failed, 9 deselected (unit suite; one more deselected test
+than Layer 9 since the new dedicated integration test was added). Live:
+`pytest tests/test_pipeline_scenarios.py -m integration -v` — 8/9 passed on the representative
+run above (s04 is the known-flaky exception, see "Known issues").
+
+Updated `README.md`'s layer-status table (Layer 10 done), CLI section ("all 8 scenarios"),
+and "The seven scenarios" → "The eight scenarios" with an s08 row explaining the pivot.
+
+---
+
+## Previous layer
 **Layer 9 — Integration tests + README complete (build order finished)**
 
 Added `tests/test_pipeline_scenarios.py`: one `@pytest.mark.integration` test, parametrized
@@ -515,19 +595,20 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-The Layer 1-9 build order is complete, and the follow-up session above fixed and live-confirmed
-(7/7) both reproducible failures the Layer 9 integration run originally surfaced, plus two more
-bugs found while diagnosing them (see "Follow-up session" above for full detail on all five
-fixes). Nothing outstanding is known to be broken. Suggested next steps, in rough priority
-order:
+The Layer 1-10 build order is complete. Suggested next steps, in rough priority order:
 
-1. **Run the live suite a few more times** before trusting 7/7 as stable — this project's own
-   experience this session (s01 needed a second live-verified fix after the first one looked
-   plausible but wasn't sufficient) is a specific reason not to treat one clean live run as
-   proof, even though unit tests can't catch prompt-level regressions at all.
+1. **Fix the s04 Reviewer regression found during Layer 10** (see "Known issues" below):
+   `agents/reviewer.py`'s prompt needs a carve-out clarifying that "don't re-litigate
+   liability / a consistently-documented shortage is legitimate" (added for s01 in the Layer
+   9 follow-up) is independent from — and must not excuse — a genuine timeline-sequence
+   violation. Confirmed reproducible in 2 of 3 live full-suite runs this session. Per this
+   project's own verification discipline, don't trust a single clean re-run as proof once
+   fixed — re-run the live suite multiple times, same as the Layer 9 follow-up did for s01.
 2. Nothing else is currently flagged. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
    orchestration, SKU-to-product-name mapping, heterogeneous mock data sources, API-facing
    deployment concerns) only if the user asks to expand scope beyond the original 9-layer build.
+   Layers 11-22 in `docs/PLAN.md` (demo/production hardening + additive web UI) are approved
+   and ready whenever prioritized.
 
 ## Layer status
 
@@ -543,9 +624,12 @@ order:
 | 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ✅ Done |
 | 8 | `cli/run_claim.py` + `cli/run_all.py` | ✅ Done |
 | 9 | Integration tests + README | ✅ Done |
+| 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
 
 ## Tests passing
-`pytest tests/` — 116 passed, 0 failed:
+`pytest tests/` — 125 passed, 0 failed, 9 deselected (the 9 deselected are
+`test_pipeline_scenarios.py`'s integration tests — 8 parametrized scenarios + the dedicated
+`test_reviewer_overturns_a_missed_duplicate`):
 - `test_cli_run_claim.py` (8): argparse required-flag enforcement and `--output-dir`/
   `--max-attempts` defaults/overrides, happy path against s01 (exit 0, verdict fields printed,
   `verdict.json` written under a custom `--output-dir`), `PipelineError` path (exit 1, clean
@@ -568,9 +652,14 @@ order:
 - `test_orchestrator_output.py` (5): `verdict.json`/`reasoning_trace.json`/`dispute_packet.md`
   writers — paths, JSON shape, markdown content, empty-dispute-grounds handling, nested
   output-dir creation.
-- `test_fixtures.py` (45): Pydantic model validation for every fixture file, po_id/retailer
-  cross-document consistency, file-layout expectations per scenario, ground-truth claim_id
-  matches, and each scenario's specific numeric trap.
+- `test_fixtures.py` (52): Pydantic model validation for every fixture file, po_id/retailer
+  cross-document consistency, file-layout expectations per scenario (now 8 — `prior_claim.json`
+  allowed in both s07 and s08), ground-truth claim_id matches, and each scenario's specific
+  numeric trap, including s08's clean-agreement-before-shortage and
+  amount-implies-the-same-shortage checks.
+- `test_pipeline_scenarios.py` (9, `-m integration` only): all 8 `GROUND_TRUTH` scenarios
+  end-to-end against the real pipeline, plus `test_reviewer_overturns_a_missed_duplicate`
+  (see Layer 10 notes above).
 - `test_uom_tools.py` (6): direct/reverse/multi-hop/same-unit conversions, unknown-SKU and
   undefined-path `ValueError`s.
 - `test_document_tools.py` (7): s01 basic wiring, s03 split-ASN aggregation, s06
@@ -593,6 +682,20 @@ order:
   against s07's fixtures.
 
 ## Known issues / decisions pending
+- **NOT resolved — top priority for next session, found during Layer 10 (unrelated to
+  s08)**: `agents/reviewer.py`'s prompt has a regression affecting s04, one of the 7 frozen
+  scenarios. Live-tested 3 times this session: failed 2/3 (`reviewer_verdict: OVERTURN`
+  instead of expected `CONFIRM`), passed once. Root cause per the trace: the Layer 9
+  follow-up's s01 fix added "don't re-litigate liability... a shortage that every document
+  consistently confirms is exactly what a legitimate deduction claim looks like" to stop the
+  Reviewer manufacturing out-of-scope liability disputes. The model is now citing that exact
+  language to excuse s04's genuine, independent timeline-sequence violation (invoice dated
+  before shipment) instead of disputing it — i.e., the general "don't re-litigate" guidance
+  is bleeding into a check it was never meant to touch. Needs an explicit carve-out in the
+  Reviewer's prompt clarifying that liability-apportionment and timeline-sequence violations
+  are independent checks, and the former's "don't manufacture a dispute" guidance must not
+  excuse a real finding on the latter. User explicitly chose to log this rather than fix it
+  in the same session as s08, to keep Layer 10's diff scoped.
 - **Resolved (follow-up session, see above)**: s04's Investigator was calling
   `get_po`/`get_asns_for_po`/`get_invoice`/`get_receiving_record` with `po_id="CLM-004"` (the
   claim ID) instead of the actual PO ID (`PO-004`). Fixed by making `INVESTIGATOR_SYSTEM_PROMPT`

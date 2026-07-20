@@ -30,6 +30,7 @@ authoritative, up-to-date state). All layers are complete:
 | 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ✅ Done |
 | 8 | `cli/run_claim.py` + `cli/run_all.py` | ✅ Done |
 | 9 | Integration tests + README | ✅ Done |
+| 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
 
 ## Setup
 
@@ -50,7 +51,7 @@ Investigate a single claim end-to-end:
 python -m cli.run_claim --claim-id CLM-002 --scenario s02_casepack_mismatch
 ```
 
-Run all 7 scenarios and print a pass/fail table against ground truth:
+Run all 8 scenarios and print a pass/fail table against ground truth:
 
 ```bash
 python -m cli.run_all
@@ -77,12 +78,16 @@ pytest tests/test_pipeline_scenarios.py -m integration -v
 Unit tests mock OpenRouter responses (`tests/agent_stubs.py`) but always exercise the real
 MCP server in-process — no test hits OpenRouter or spawns a subprocess except the
 integration suite. The integration suite runs `run_pipeline` directly (not through the CLI)
-for all 7 scenarios and asserts both agents' verdicts match `orchestrator/ground_truth.py`.
+for all 8 scenarios and asserts both agents' verdicts match `orchestrator/ground_truth.py`,
+plus a dedicated test (`test_reviewer_overturns_a_missed_duplicate`) proving the Reviewer's
+spot-check independently catches and overturns a fabricated wrong CaseFile — see "The eight
+scenarios" below for why that's a separate test rather than part of `s08`'s own ground truth.
 
-## The seven scenarios
+## The eight scenarios
 
 Ground truth for the full pipeline (Investigator verdict → Reviewer's final verdict).
-These expected verdicts are fixed — see [`docs/SPEC.md`](docs/SPEC.md) for full detail.
+Scenarios 1-7's expected verdicts are fixed — see [`docs/SPEC.md`](docs/SPEC.md) for full
+detail.
 
 | # | Scenario | Investigator | Final | The trap |
 |---|---|---|---|---|
@@ -93,6 +98,7 @@ These expected verdicts are fixed — see [`docs/SPEC.md`](docs/SPEC.md) for ful
 | 5 | `s05_sku_substitution` | INVALID | CONFIRM | ASN SKU differs from PO SKU, but receiving notes show explicit pre-approval |
 | 6 | `s06_promo_billback` | INVALID | CONFIRM | Trade agreement exists, but for a different promo code than the claim cites |
 | 7 | `s07_duplicate_claim` | INVALID | CONFIRM | Claim duplicates a prior claim already resolved via credit memo |
+| 8 | `s08_reviewer_overturn` | INVALID | CONFIRM | Same shape as #7, independent fixture data. Originally designed to make the Investigator miss a subtly-worded prior credit and force a real Reviewer `OVERTURN` — live-tested during Layer 10 and found the Investigator already catches it (see `docs/SPEC.md`'s "Eighth Scenario" section for the full story). The `OVERTURN` case is instead proven directly: `test_reviewer_overturns_a_missed_duplicate` hands the live Reviewer a fabricated CaseFile against these same fixtures and confirms it independently catches and overturns the duplicate. |
 
 ## Non-negotiable design decisions
 

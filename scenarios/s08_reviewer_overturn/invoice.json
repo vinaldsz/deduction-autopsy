@@ -1,0 +1,9 @@
+{
+  "invoice_id": "INV-008",
+  "po_id": "PO-008",
+  "sku": "SKU-008",
+  "invoiced_qty": 150,
+  "invoiced_uom": "EACH",
+  "invoice_date": "2024-08-02",
+  "amount": 30000
+}

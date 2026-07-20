@@ -1,0 +1,10 @@
+{
+  "receipt_id": "RCP-008",
+  "po_id": "PO-008",
+  "sku": "SKU-008",
+  "received_qty": 138,
+  "received_uom": "EACH",
+  "receipt_date": "2024-08-04",
+  "lot_id": "LOT-008",
+  "notes": "12 units short upon receipt, no visible damage."
+}

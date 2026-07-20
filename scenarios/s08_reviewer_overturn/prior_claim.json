@@ -1,0 +1,9 @@
+{
+  "claim_id": "CLM-008a",
+  "po_id": "PO-008",
+  "retailer": "walmart",
+  "claimed_reason": "shortage",
+  "claimed_amount": 2400,
+  "claim_date": "2024-08-10",
+  "retailer_notes": "Credit of $24.00 issued 2024-08-20 per CM-014, see retailer portal for details."
+}

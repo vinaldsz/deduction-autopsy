@@ -11,9 +11,19 @@ import os
 from pathlib import Path
 
 import pytest
+from fastmcp import Client
+from pydantic import ValidationError
 
+from agents.reviewer import run_reviewer
+from mcp_server.server import mcp
 from orchestrator.ground_truth import GROUND_TRUTH
-from orchestrator.pipeline import REQUIRED_TOOL_CALLS, run_pipeline
+from orchestrator.pipeline import (
+    OPENROUTER_BASE_URL,
+    REQUIRED_TOOL_CALLS,
+    ReviewerOutput,
+    _extract_json,
+    run_pipeline,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -57,5 +67,68 @@ async def test_scenario_matches_ground_truth(case, tmp_path):
             "s03": "get_asns_for_po",
             "s06": "get_trade_agreement",
             "s07": "list_claims_for_po",
+            "s08": "list_claims_for_po",
         }[case["scenario"][:3]]
         assert required_tool in _investigator_tool_names(tmp_path, case["claim_id"])
+
+
+async def test_reviewer_overturns_a_missed_duplicate(monkeypatch):
+    """Proves the Reviewer's spot-check would independently catch and overturn a duplicate
+    claim even if the Investigator missed it — without depending on the real Investigator
+    actually making that mistake live (it doesn't: s08_reviewer_overturn's own
+    GROUND_TRUTH entry is INVALID/CONFIRM, because the current Investigator prompt already
+    catches this duplicate correctly on its own). Feeds the Reviewer a fabricated CaseFile —
+    as if a hypothetical Investigator had reconciled quantities correctly but never noticed
+    CLM-008a — against s08's real fixtures, and confirms the live Reviewer's mandatory
+    list_claims_for_po re-check surfaces the prior claim regardless of what the case file says.
+    """
+    monkeypatch.setenv("SCENARIO_ID", "s08_reviewer_overturn")
+
+    from openai import AsyncOpenAI
+
+    openai_client = AsyncOpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=os.environ["OPENROUTER_API_KEY"],
+    )
+
+    fabricated_case_file = {
+        "claim_id": "CLM-008",
+        "po_summary": {
+            "ordered_qty_each": 150,
+            "shipped_qty_each": 150,
+            "received_qty_each": 138,
+            "invoiced_qty_each": 150,
+        },
+        "timeline": [
+            {"event": "order_date", "date": "2024-08-01", "valid": True},
+            {"event": "ship_date", "date": "2024-08-02", "valid": True},
+            {"event": "receipt_date", "date": "2024-08-04", "valid": True},
+            {"event": "invoice_date", "date": "2024-08-02", "valid": True},
+            {"event": "claim_date", "date": "2024-09-15", "valid": True},
+        ],
+        "uom_conversions_applied": [],
+        "prior_claims": [],  # the fabricated miss: never surfaced CLM-008a
+        "trade_agreement_found": False,
+        "discrepancy_qty": 12,
+        "discrepancy_amount_cents": 2400,
+        "proposed_verdict": "VALID",
+        "confidence": 0.95,
+    }
+
+    async with Client(mcp) as mcp_client:
+        reviewer_result = await run_reviewer(
+            openai_client=openai_client,
+            mcp_client=mcp_client,
+            case_file=fabricated_case_file,
+        )
+
+    try:
+        reviewer_output = ReviewerOutput.model_validate(
+            json.loads(_extract_json(reviewer_result.final_text))
+        )
+    except (json.JSONDecodeError, ValidationError) as exc:
+        pytest.fail(f"Reviewer failed to produce a valid verdict: {exc}")
+
+    assert reviewer_output.final_verdict == "OVERTURN"
+    assert reviewer_output.review_findings.duplicate_check == "FAIL"
+    assert reviewer_output.dispute_grounds

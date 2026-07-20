@@ -45,7 +45,7 @@ def _load(path: Path):
     return json.loads(path.read_text())
 
 
-def test_all_seven_scenarios_present():
+def test_all_scenarios_present():
     found = {p.name for p in SCENARIO_DIRS}
     assert found == EXPECTED_SCENARIOS
 
@@ -106,10 +106,12 @@ def test_only_s06_has_trade_agreement():
         assert has_trade_agreement == (scenario_dir.name == "s06_promo_billback")
 
 
-def test_only_s07_has_prior_claim():
+def test_only_s07_and_s08_have_prior_claim():
     for scenario_dir in SCENARIO_DIRS:
         has_prior_claim = (scenario_dir / "prior_claim.json").exists()
-        assert has_prior_claim == (scenario_dir.name == "s07_duplicate_claim")
+        assert has_prior_claim == (
+            scenario_dir.name in ("s07_duplicate_claim", "s08_reviewer_overturn")
+        )
 
 
 def test_s06_trade_agreement_promo_code_does_not_match_claimed_promo():
@@ -158,6 +160,27 @@ def test_s03_split_asn_quantities_sum_to_full_po_quantity():
     asn_1 = _load(scenario_dir / "asn_1.json")
     asn_2 = _load(scenario_dir / "asn_2.json")
     assert asn_1["shipped_qty"] + asn_2["shipped_qty"] == po["ordered_qty"]
+
+
+def test_s08_documents_agree_on_quantity_before_the_shortage():
+    scenario_dir = SCENARIOS_DIR / "s08_reviewer_overturn"
+    po = _load(scenario_dir / "po.json")
+    asn = _load(scenario_dir / "asn.json")
+    invoice = _load(scenario_dir / "invoice.json")
+    assert po["ordered_qty"] == asn["shipped_qty"] == invoice["invoiced_qty"]
+
+
+def test_s08_prior_claim_omits_unit_count_but_amount_implies_same_shortage():
+    scenario_dir = SCENARIOS_DIR / "s08_reviewer_overturn"
+    po = _load(scenario_dir / "po.json")
+    receiving_record = _load(scenario_dir / "receiving_record.json")
+    prior_claim = _load(scenario_dir / "prior_claim.json")
+
+    notes = prior_claim["retailer_notes"].lower()
+    assert "12 units" not in notes and "12-unit" not in notes
+
+    implied_shortage = po["ordered_qty"] - receiving_record["received_qty"]
+    assert prior_claim["claimed_amount"] // po["unit_price"] == implied_shortage
 
 
 def test_every_referenced_sku_has_a_uom_conversion_entry():

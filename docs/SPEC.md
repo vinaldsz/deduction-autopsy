@@ -216,29 +216,49 @@ message before accepting the CaseFile.
 
 ---
 
-## Eighth Scenario — Reviewer Overturn (planned, Layer 10)
+## Eighth Scenario — Reviewer Overturn (Layer 10)
 
 **Additive only — does not modify any of the seven frozen ground-truth scenarios above.**
 No sign-off conflict with the "these expected verdicts are fixed" rule, since nothing in
 scenarios 1-7 changes.
 
-**Purpose:** in every existing scenario, `final_verdict == investigator_verdict` — the
-Reviewer only ever CONFIRMs. Scenario 8 exists to prove the segregation-of-duties control
-actually does something: the Investigator's mechanical pass proposes the wrong verdict,
-and only the Reviewer's targeted spot-check catches it.
+**Original purpose:** in every scenario 1-7, `final_verdict == investigator_verdict` — the
+Reviewer only ever CONFIRMs. Scenario 8 was meant to prove the segregation-of-duties control
+actually does something, by having the Investigator's mechanical pass propose the wrong
+verdict and only the Reviewer's spot-check catch it.
 
-| # | Scenario dir | Claim ID | Investigator expected | Final expected | The trap |
-|---|---|---|---|---|---|
-| 8 | `s08_reviewer_overturn` | CLM-008 | VALID | **OVERTURN → INVALID** | Investigator normalizes quantities, sees a clean match, and stops there (mechanical pass, doesn't dig into claim history). `prior_claim.json` (CLM-008a) shows this exact PO/SKU/amount was already resolved via credit memo — but the notes phrasing is subtler than s07's ("Adjusted per CM-014, see retailer portal" rather than s07's explicit "RESOLVED"), so a shallow read reads as informational, not dispositive. The Reviewer's mandatory `list_claims_for_po` + `duplicate_check` re-verification is what catches it. |
+**What actually happened, live-tested during Layer 10 implementation:** the fixture below
+(`s08_reviewer_overturn`, CLM-008 — a clean 12-unit shortage where `prior_claim.json`
+CLM-008a shows the same PO/quantity already credited via CM-014, expressed as a dollar
+figure rather than an explicit "RESOLVED") does **not** produce an Investigator miss. The
+Investigator's own protocol (`agents/investigator.py` step 5, hardened during the Layer 9
+follow-up) already computes its own discrepancy amount and explicitly checks prior claims
+for resolved-via-credit-memo language — the same check the Reviewer performs — so it
+catches the duplicate on its own, every live run tried. `GROUND_TRUTH`'s
+`s08_reviewer_overturn` entry reflects this honestly: `expected_investigator: INVALID`,
+`expected_reviewer: CONFIRM` (same pattern as s07, just independent fixture data — still a
+legitimate additional end-to-end regression case).
+
+Because `claimed_amount` is a structured field on every `DeductionClaim` (not just prose),
+it's always exactly visible to whichever agent fetches the prior claim — no amount of
+notes-wording softening can hide that the numbers match, for either agent. There is no
+fixture-only way to make this specific check (duplicate-claim-via-credit) pass for the
+Reviewer but fail for the Investigator, since both agents' prompts define it almost
+identically.
+
+**Where the OVERTURN proof actually lives:** `tests/test_pipeline_scenarios.py`'s
+`test_reviewer_overturns_a_missed_duplicate` feeds the live Reviewer a *fabricated* CaseFile
+against s08's real fixtures — `proposed_verdict: "VALID"`, `prior_claims: []`, as if a
+hypothetical Investigator had reconciled quantities correctly but never surfaced CLM-008a —
+and asserts the Reviewer's mandatory `list_claims_for_po` re-check still independently finds
+the prior claim and returns `OVERTURN` regardless of what the case file claimed. This proves
+the safety net works without requiring the real Investigator to actually make a mistake.
 
 Required tool call for trace verification (same mechanism as the table above):
 
 | Scenario | Required tool call |
 |---|---|
-| s08 | `list_claims_for_po` (Investigator must at least enumerate prior claims, even though it fails to weigh the result correctly — the Reviewer's re-check is what changes the verdict, not a missing tool call) |
-
-Integration test addition: assert `investigator_verdict != final_verdict` for `s08`, so a
-future prompt change that makes the Reviewer rubber-stamp again is caught immediately.
+| s08 | `list_claims_for_po` |
 
 ---
 

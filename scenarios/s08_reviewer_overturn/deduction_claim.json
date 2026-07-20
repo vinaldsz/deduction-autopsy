@@ -1,0 +1,9 @@
+{
+  "claim_id": "CLM-008",
+  "po_id": "PO-008",
+  "retailer": "walmart",
+  "claimed_reason": "shortage",
+  "claimed_amount": 2400,
+  "claim_date": "2024-09-15",
+  "retailer_notes": "Received 138 of 150 ordered EACH units on PO-008 - deducting for 12-unit shortage."
+}

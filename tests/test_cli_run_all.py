@@ -41,7 +41,7 @@ async def test_all_scenarios_pass_returns_zero_and_full_summary(monkeypatch):
     exit_code = await main(openai_client=object(), console=console, run_pipeline_fn=run_pipeline_fn)
 
     assert exit_code == 0
-    assert "7/7 passed" in console.export_text()
+    assert f"{len(GROUND_TRUTH)}/{len(GROUND_TRUTH)} passed" in console.export_text()
 
 
 async def test_investigator_mismatch_fails_that_row_only(monkeypatch):
@@ -57,7 +57,7 @@ async def test_investigator_mismatch_fails_that_row_only(monkeypatch):
     exit_code = await main(openai_client=object(), console=console, run_pipeline_fn=run_pipeline_fn)
 
     assert exit_code == 1
-    assert "6/7 passed" in console.export_text()
+    assert f"{len(GROUND_TRUTH) - 1}/{len(GROUND_TRUTH)} passed" in console.export_text()
 
 
 async def test_pipeline_error_recorded_and_loop_continues(monkeypatch):
@@ -77,7 +77,7 @@ async def test_pipeline_error_recorded_and_loop_continues(monkeypatch):
     assert exit_code == 1
     assert seen_claim_ids == [c["claim_id"] for c in GROUND_TRUTH]
     output = console.export_text()
-    assert "6/7 passed" in output
+    assert f"{len(GROUND_TRUTH) - 1}/{len(GROUND_TRUTH)} passed" in output
     assert "boom" in output
 
 
@@ -117,4 +117,4 @@ async def test_ground_truth_check_uses_reviewer_verdict_not_final_verdict(monkey
     exit_code = await main(openai_client=object(), console=console, run_pipeline_fn=run_pipeline_fn)
 
     assert exit_code == 0
-    assert "7/7 passed" in console.export_text()
+    assert f"{len(GROUND_TRUTH)}/{len(GROUND_TRUTH)} passed" in console.export_text()

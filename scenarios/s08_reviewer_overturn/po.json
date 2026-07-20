@@ -1,0 +1,9 @@
+{
+  "po_id": "PO-008",
+  "retailer": "walmart",
+  "sku": "SKU-008",
+  "ordered_qty": 150,
+  "ordered_uom": "EACH",
+  "unit_price": 200,
+  "order_date": "2024-08-01"
+}

@@ -96,6 +96,7 @@ REQUIRED_TOOL_CALLS: dict[str, Callable[[list[ToolCallRecord]], bool]] = {
     ),
     "s06": lambda trace: any(r.name == "get_trade_agreement" and not r.is_error for r in trace),
     "s07": lambda trace: any(r.name == "list_claims_for_po" and not r.is_error for r in trace),
+    "s08": lambda trace: any(r.name == "list_claims_for_po" and not r.is_error for r in trace),
 }
 
 
