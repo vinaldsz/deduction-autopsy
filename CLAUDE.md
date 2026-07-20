@@ -156,3 +156,10 @@ outputs/
 - Use plan mode (`/plan`) for anything that touches more than one file
 - One session = one layer from the build order
 - End each session by running the relevant tests; update `PROGRESS.md` with results
+
+---
+
+## Context management
+- Run `/compact` when messages reach ~500k tokens (roughly 50% of the 967k window)
+- Auto-compaction is enabled in `.claude/settings.json` as a backstop — but compact manually before that to preserve useful context in the summary
+- Use `/clear` when switching to a completely unrelated task (not just a new layer)
