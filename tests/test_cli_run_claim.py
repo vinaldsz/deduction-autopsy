@@ -6,7 +6,6 @@ from rich.console import Console
 
 from cli.run_claim import main, parse_args
 from mcp_server.server import mcp
-from orchestrator.ground_truth import GROUND_TRUTH
 from tests.agent_stubs import StubAsyncOpenAI, make_completion
 from tests.test_orchestrator_pipeline import (
     INVALID_CASE_FILE_JSON,
@@ -188,7 +187,7 @@ async def test_explain_prints_tool_calls_case_file_and_review_findings(monkeypat
     assert "Reviewer overturned" not in output  # s02 never overturns
 
 
-async def test_explain_prints_closing_trap_note_on_overturn(monkeypatch, tmp_path):
+async def test_explain_prints_overturn_callout_pointing_to_dispute_grounds(monkeypatch, tmp_path):
     monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     overturn_json = json.dumps(
         {
@@ -235,9 +234,10 @@ async def test_explain_prints_closing_trap_note_on_overturn(monkeypatch, tmp_pat
     assert exit_code == 0
     output = console.export_text()
     assert "Reviewer overturned the Investigator" in output
-
-    expected_trap = next(case["trap"] for case in GROUND_TRUTH if case["scenario"] == "s01_clean_shortage")
-    assert expected_trap in output
+    # The explanation for the overturn should come from the Reviewer's own live findings
+    # (dispute_grounds), not a static per-scenario description.
+    assert "Dispute grounds" in output
+    assert "Found an unresolved prior claim the Investigator missed." in output
 
 
 async def test_without_explain_output_is_unchanged(monkeypatch, tmp_path):

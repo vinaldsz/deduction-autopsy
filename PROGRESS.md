@@ -28,13 +28,6 @@ imports and calls the same function to render "the CaseFile handed to the Review
 displayed JSON is guaranteed identical to what the Reviewer actually received — not a
 CLI-side reimplementation that could silently drift.
 
-**Trap descriptions are data, not CLI string literals**: added a `"trap"` key to each of the 8
-entries in `orchestrator/ground_truth.py`'s `GROUND_TRUTH` list (text sourced from
-`docs/SPEC.md`'s ground-truth table and its "Eighth Scenario" section for s08).
-`cli/run_claim.py` looks up the current scenario's trap text from this single source of truth
-rather than hardcoding a switch statement, per the plan's explicit "data-driven off the same
-trap descriptions used in scenario docs, not hardcoded per-run" requirement.
-
 **`cli/run_claim.py`'s `--explain` flag**: prints an "Investigator" header before the pipeline
 runs, live tool-call lines for both agents (name, args, truncated result, red for errors,
 "Reviewer" header printed lazily on the Reviewer's first tool call), the stripped CaseFile via
@@ -43,10 +36,27 @@ map (`uom_check`→`normalize_uom`, `split_shipment_check`→`get_asns_for_po`,
 `trade_agreement_check`→`get_trade_agreement`, `duplicate_check`→`list_claims_for_po`;
 `timeline_check`/`substitution_check` have no dedicated re-fetch tool since the Reviewer's own
 prompt re-derives them from documents it already fetched — shown as "verified from
-already-fetched documents"), and a closing trap note from `GROUND_TRUTH` only when
-`final_verdict != investigator_verdict` (i.e. an actual overturn). Default (non-`--explain`)
-output is byte-for-byte unchanged — confirmed both by a new regression test and by a live
-side-by-side run (see below).
+already-fetched documents"), and a callout line when `final_verdict != investigator_verdict`
+(an actual overturn) pointing at the "Dispute grounds" section below it. Default
+(non-`--explain`) output is byte-for-byte unchanged — confirmed both by a regression test and
+a live side-by-side run (see below).
+
+**Course-corrected mid-session, per user pushback, on how an overturn gets explained.** The
+plan (`docs/PLAN.md`'s Layer 11 section, written in an earlier planning session) called for "a
+closing note naming the scenario's trap" on overturn, "data-driven off the same trap
+descriptions used in scenario docs" — implemented first as a `"trap"` key added to each
+`GROUND_TRUTH` entry (text copied from `docs/SPEC.md`), looked up by scenario in
+`cli/run_claim.py`. The user then asked, correctly: shouldn't that explanation come from the
+Reviewer agent itself? It should — `ReviewerOutput.dispute_grounds`/`reasoning` is already the
+live, agent-generated explanation of what the Reviewer actually found *this run*, and
+`_print_result` already prints `dispute_grounds` unconditionally. The static trap text was a
+second, canned "why" sitting next to the real one — never exercised by any live scenario (none
+of the 8 ever overturn) and only ever shown in the fabricated-`OVERTURN` test. Removed the
+`"trap"` key from `GROUND_TRUTH` entirely and the corresponding lookup/import from
+`cli/run_claim.py`; the overturn callout now just points at the Reviewer's own "Dispute
+grounds" output instead of asserting a canned description. `GROUND_TRUTH` is back to exactly
+the shape it had before this layer (`scenario`/`claim_id`/`expected_investigator`/
+`expected_reviewer`), just as `cli/run_all.py` and `tests/test_fixtures.py` already expect it.
 
 Wrote 2 new tests in `tests/test_agents_base.py` (hook fires once per call in order, never
 fires for a text-only response), 1 each in `tests/test_agents_investigator.py` /
@@ -54,8 +64,9 @@ fires for a text-only response), 1 each in `tests/test_agents_investigator.py` /
 `tests/test_orchestrator_pipeline.py` (`strip_reasoning` unit test; both pipeline-level hooks
 fire with real tool calls captured), and 3 in `tests/test_cli_run_claim.py`
 (`--explain` renders tool calls/CaseFile/review findings with correct re-fetch annotations
-against a stubbed s02 run; a scripted `OVERTURN` response prints the correct scenario's closing
-trap note from `GROUND_TRUTH`; without `--explain` none of the explain-only sections appear).
+against a stubbed s02 run; a scripted `OVERTURN` response prints the overturn callout pointing
+at the Reviewer's own `dispute_grounds` text, not a canned description; without `--explain`
+none of the explain-only sections appear).
 
 **Live verification**: `python -m cli.run_claim --claim-id CLM-002 --scenario
 s02_casepack_mismatch --explain` against real OpenRouter — confirmed live tool-call lines for
@@ -64,9 +75,10 @@ both agents (correctly labeled `investigator`/`reviewer`), the stripped CaseFile
 (`uom_check`/`split_shipment_check`/`duplicate_check` showed "re-fetched via ...";
 `timeline_check`/`substitution_check` showed "verified from already-fetched documents";
 `trade_agreement_check` correctly showed "not re-fetched" since it's `N/A` for this scenario),
-and — since s02 resolves `INVALID`→`CONFIRM` (no overturn) — no closing trap note, as expected.
+and — since s02 resolves `INVALID`→`CONFIRM` (no overturn) — no overturn callout, as expected.
 Re-ran the identical claim without `--explain` immediately after: output was the unchanged
-summary table only, confirming no regression to default behavior.
+summary table only, confirming no regression to default behavior. Re-ran again after the
+trap-note removal to confirm the rest of `--explain`'s output was unaffected by that change.
 
 `pytest tests/` — 135 passed, 0 failed, 9 deselected (unit suite; +9 for this layer: 2 in
 `test_agents_base.py`, 1 each in `test_agents_investigator.py`/`test_agents_reviewer.py`, 2 in
@@ -758,8 +770,10 @@ Suggested next steps, in rough priority order:
   (exit 1, clean error message, no traceback), missing-`OPENROUTER_API_KEY` path (exit 1
   without touching `run_pipeline` at all); Layer 11's `--explain` tests: live tool-call lines/
   stripped CaseFile/per-check re-fetch annotations against a stubbed s02 run, a scripted
-  `OVERTURN` response prints the matching scenario's `GROUND_TRUTH` trap note, and a regression
-  test that omitting `--explain` prints none of the explain-only sections.
+  `OVERTURN` response prints the overturn callout pointing at the Reviewer's own
+  `dispute_grounds` text (not a static per-scenario description — see "Current layer" above for
+  the mid-session correction), and a regression test that omitting `--explain` prints none of
+  the explain-only sections.
 - `test_cli_run_all.py` (6): all-7-pass summary line and exit 0; one scenario's
   `investigator_verdict` mismatch fails only that row (exit 1, others still pass); a
   `PipelineError` on one scenario is recorded as an error row and the loop continues to the

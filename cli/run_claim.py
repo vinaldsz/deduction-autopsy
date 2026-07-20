@@ -8,7 +8,6 @@ from rich.table import Table
 
 from agents.base import AgentRunnerError, ToolCallRecord
 from cli._common import ensure_api_key
-from orchestrator.ground_truth import GROUND_TRUTH
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline, strip_reasoning
 
 # Which MCP tool call, if any, independently re-verifies each of ReviewFindings' six checks —
@@ -90,7 +89,7 @@ async def main(
         return 1
 
     if args.explain:
-        _print_explain_summary(console, args.scenario, result, reviewer_trace)
+        _print_explain_summary(console, result, reviewer_trace)
 
     _print_result(console, result)
     return 0
@@ -105,7 +104,6 @@ def _print_tool_call(console: Console, label: str, record: ToolCallRecord) -> No
 
 def _print_explain_summary(
     console: Console,
-    scenario: str,
     result: PipelineResult,
     reviewer_trace: list[ToolCallRecord],
 ) -> None:
@@ -125,10 +123,8 @@ def _print_explain_summary(
         console.print(f"  {check_name}: [{_FINDING_STYLE[value]}]{value}[/] ({provenance})")
 
     if result.final_verdict != result.investigator_verdict:
-        trap = next((case["trap"] for case in GROUND_TRUTH if case["scenario"] == scenario), None)
-        console.print("\n[bold yellow]Reviewer overturned the Investigator[/]")
-        if trap:
-            console.print(f"  Scenario trap: {trap}")
+        console.print("\n[bold yellow]Reviewer overturned the Investigator[/] — see "
+                      "\"Dispute grounds\" below for its reasoning.")
 
 
 def _print_result(console: Console, result: PipelineResult) -> None:
