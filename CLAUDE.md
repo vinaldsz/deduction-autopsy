@@ -28,12 +28,17 @@ tool-call trace meaningful as an audit trail.
 Do not change fixture data to make a failing scenario pass — change the agent prompts or
 tool logic instead. Changing expected verdicts requires explicit user sign-off.
 
+**UI is additive, not a replacement.** Approved 2026-07-19: a FastAPI + minimal HTML/JS
+UI (Layer 19+ in `docs/PLAN.md`) is now in scope, reversing the earlier "no frontend"
+decision. `cli/run_claim.py`/`cli/run_all.py` are kept, not deprecated — they remain the
+scriptable/CI path (see Layer 15). The UI calls the same `orchestrator/pipeline.py`, binds
+to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust model.
+
 ---
 
 ## Explicit out of scope
 - Real EDI X12 parsing — fixtures only need to resemble real documents, not be valid EDI
 - Any third-party integrations (NetSuite, Shopify, Amazon, etc.)
-- Frontend or UI — CLI output and markdown evidence packets only
 - Parallel/concurrent orchestration — mention as future work in README, do not build
 - SKU-to-product-name mapping — SKUs stay opaque codes (e.g. "SKU-001") everywhere, no
   product master/catalog; mention as future work in README (display-only, cosmetic for
@@ -46,8 +51,10 @@ tool logic instead. Changing expected verdicts requires explicit user sign-off.
   now
 - Production concerns: auth, multi-tenancy, persistence beyond local files
 - API-facing deployment (auth, per-user/per-IP rate limiting, per-user cost caps on OpenRouter
-  usage) — only becomes a real concern once this sits behind a frontend/web UI instead of a
-  locally-run CLI; mention as future work in README, do not build now
+  usage) — the Layer 19+ UI (see below) does not change this: it's still a local, single-user,
+  no-auth surface bound to `127.0.0.1`, same trust model as the CLI. Auth/rate-limiting/cost
+  caps only become a real concern if this is ever exposed beyond localhost to multiple users;
+  mention as future work in README, do not build now
 
 ---
 
@@ -65,6 +72,8 @@ tool logic instead. Changing expected verdicts requires explicit user sign-off.
 - Fixtures as plain JSON, checked into repo
 - `pytest` for unit tests; `rich` for CLI output
 - Temperature 0 for both agents (deterministic, debuggable)
+- FastAPI + `uvicorn` for the Layer 19+ UI; plain HTML/JS served as static files (no
+  frontend build step, no framework) — approved 2026-07-19, see "UI is additive" above
 
 ---
 
