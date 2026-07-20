@@ -1,6 +1,54 @@
 # Progress
 
 ## Current layer
+**Bugfix — s04 Reviewer regression (found during Layer 10, fixed this session)**
+
+Not a numbered layer — a targeted fix to the top-priority known issue Layer 10 logged and
+explicitly deferred. Per user decision, fixed before starting Layer 11.
+
+**Root cause, confirmed by re-reading `agents/reviewer.py`'s prompt alongside last session's
+failing trace**: two compounding gaps. (1) The Layer 9 follow-up's s01 fix added language
+telling the Reviewer not to manufacture liability-apportionment disputes — *"a shortage that
+every document consistently confirms is exactly what a legitimate deduction claim looks
+like"* — scoped to a specific trap (a carrier-signed BOL exception ≠ grounds to redirect
+blame). (2) The Reviewer's "Re-run only what is needed" checklist had bullets for UOM,
+split-shipment, trade agreement, and duplicate — but **no bullet for the timeline check at
+all**, unlike `agents/investigator.py`'s explicit, forceful step 3 ("do not let a clean
+quantity match override a timeline that does not add up"). With no equivalent instruction to
+reach for, the model generalized (1)'s liability language to also excuse s04's genuine,
+unrelated timeline violation — reasoning that a well-documented shortage is legitimate
+"regardless" of the timeline concern, which is exactly backwards for that specific check.
+
+**Fix**: two edits to `REVIEWER_SYSTEM_PROMPT`, no code/logic/fixture changes. Added an
+explicit timeline-verification bullet mirroring the Investigator's own step-3 language
+(order_date → ship_date → receipt_date → invoice_date → claim_date; an out-of-order pair is
+physically impossible and independent grounds to dispute, regardless of clean quantities).
+Added one clarifying sentence scoping the existing liability carve-out: it's about who is at
+fault for a shortage, and "has no bearing on the separate timeline check" — a genuine
+shortage does not excuse a sequence violation. Added
+`test_prompt_treats_timeline_violation_as_independent_of_liability_scoping` to
+`tests/test_agents_reviewer.py` as a cheap static guard against a future edit silently
+dropping either half (not a substitute for live testing — unit tests can't exercise actual
+model reasoning).
+
+**Live verification, following this project's own established discipline of not trusting a
+single clean run** (the Layer 9 follow-up's s01 fix needed a second live run to catch that
+the first attempt was insufficient): ran `s04` alone **5 times** — 5/5 passed (previously
+~2/3 *failed*). Read one trace in full to confirm the reasoning itself changed, not just the
+verdict: `timeline_check: FAIL`, explicit "independently sufficient grounds to dispute this
+claim, regardless of the documented shortage," `final_verdict: CONFIRM`. Then ran the full
+8-scenario + dedicated-overturn-test suite (`pytest tests/test_pipeline_scenarios.py -m
+integration -v`, 9 tests) once more — **9/9 passed**, including s01 (confirms the liability
+carve-out itself still works — no regression back toward manufacturing disputes) and s07/s08
+(confirms the duplicate-claim scenarios adjacent to the edited paragraph are unaffected).
+Total: 6/6 live s04 runs passed this session after the fix.
+
+`pytest tests/` — 126 passed, 0 failed, 9 deselected (unit suite; +1 for the new static
+prompt-content test, no other changes since this was a prompt-only fix).
+
+---
+
+## Previous layer
 **Layer 10 — `scenarios/s08_reviewer_overturn/` (8th scenario) complete**
 
 Built the 8th scenario per `docs/PLAN.md`'s Layer 10 section and `docs/SPEC.md`'s "Eighth
@@ -595,20 +643,18 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-The Layer 1-10 build order is complete. Suggested next steps, in rough priority order:
+The Layer 1-10 build order is complete, and the s04 Reviewer regression (found during Layer
+10) is fixed and live-confirmed 6/6 (see "Current layer" above). Nothing outstanding is known
+to be broken. Suggested next steps, in rough priority order:
 
-1. **Fix the s04 Reviewer regression found during Layer 10** (see "Known issues" below):
-   `agents/reviewer.py`'s prompt needs a carve-out clarifying that "don't re-litigate
-   liability / a consistently-documented shortage is legitimate" (added for s01 in the Layer
-   9 follow-up) is independent from — and must not excuse — a genuine timeline-sequence
-   violation. Confirmed reproducible in 2 of 3 live full-suite runs this session. Per this
-   project's own verification discipline, don't trust a single clean re-run as proof once
-   fixed — re-run the live suite multiple times, same as the Layer 9 follow-up did for s01.
+1. Start Layer 11 (`docs/PLAN.md`): CLI demo mode — a `--explain` flag on
+   `cli/run_claim.py` rendering the Investigator's tool calls, the stripped CaseFile handoff,
+   and each Reviewer check live via `rich`. Requires adding an optional
+   `on_tool_call: Callable[[ToolCallRecord], None] | None` hook to `AgentRunner.run()` in
+   `agents/base.py` — build this once, since Layer 20's SSE UI streaming reuses the same hook.
 2. Nothing else is currently flagged. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
    orchestration, SKU-to-product-name mapping, heterogeneous mock data sources, API-facing
    deployment concerns) only if the user asks to expand scope beyond the original 9-layer build.
-   Layers 11-22 in `docs/PLAN.md` (demo/production hardening + additive web UI) are approved
-   and ready whenever prioritized.
 
 ## Layer status
 
@@ -627,7 +673,7 @@ The Layer 1-10 build order is complete. Suggested next steps, in rough priority 
 | 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
 
 ## Tests passing
-`pytest tests/` — 125 passed, 0 failed, 9 deselected (the 9 deselected are
+`pytest tests/` — 126 passed, 0 failed, 9 deselected (the 9 deselected are
 `test_pipeline_scenarios.py`'s integration tests — 8 parametrized scenarios + the dedicated
 `test_reviewer_overturns_a_missed_duplicate`):
 - `test_cli_run_claim.py` (8): argparse required-flag enforcement and `--output-dir`/
@@ -676,26 +722,27 @@ The Layer 1-10 build order is complete. Suggested next steps, in rough priority 
 - `test_agents_investigator.py` (5): confirmed model slug, claim_id present in the user
   message, default vs. overridden `model`, and a real `normalize_uom` tool-call round trip
   against s02's fixtures.
-- `test_agents_reviewer.py` (5): confirmed model slug, `reasoning` field absent from the
+- `test_agents_reviewer.py` (6): confirmed model slug, `reasoning` field absent from the
   actual prompt text sent to the model, case file XML-delimited and valid JSON inside the
-  tags, default vs. overridden `model`, and a real `list_claims_for_po` tool-call round trip
-  against s07's fixtures.
+  tags, default vs. overridden `model`, a real `list_claims_for_po` tool-call round trip
+  against s07's fixtures, and a static regression guard that the timeline-check bullet and
+  its liability-scoping carve-out (the s04 bugfix, see "Current layer" above) are both
+  present in the prompt text.
 
 ## Known issues / decisions pending
-- **NOT resolved — top priority for next session, found during Layer 10 (unrelated to
-  s08)**: `agents/reviewer.py`'s prompt has a regression affecting s04, one of the 7 frozen
-  scenarios. Live-tested 3 times this session: failed 2/3 (`reviewer_verdict: OVERTURN`
-  instead of expected `CONFIRM`), passed once. Root cause per the trace: the Layer 9
-  follow-up's s01 fix added "don't re-litigate liability... a shortage that every document
-  consistently confirms is exactly what a legitimate deduction claim looks like" to stop the
-  Reviewer manufacturing out-of-scope liability disputes. The model is now citing that exact
-  language to excuse s04's genuine, independent timeline-sequence violation (invoice dated
-  before shipment) instead of disputing it — i.e., the general "don't re-litigate" guidance
-  is bleeding into a check it was never meant to touch. Needs an explicit carve-out in the
-  Reviewer's prompt clarifying that liability-apportionment and timeline-sequence violations
-  are independent checks, and the former's "don't manufacture a dispute" guidance must not
-  excuse a real finding on the latter. User explicitly chose to log this rather than fix it
-  in the same session as s08, to keep Layer 10's diff scoped.
+- **Resolved (this session, see "Current layer" above)**: `agents/reviewer.py`'s prompt had
+  a regression affecting s04, one of the 7 frozen scenarios, found (unrelated) during Layer
+  10. Live-tested 3 times that session: failed 2/3 (`reviewer_verdict: OVERTURN` instead of
+  expected `CONFIRM`), passed once. Root cause per the trace: the Layer 9 follow-up's s01 fix
+  added "don't re-litigate liability... a shortage that every document consistently confirms
+  is exactly what a legitimate deduction claim looks like" to stop the Reviewer manufacturing
+  out-of-scope liability disputes. The model was citing that exact language to excuse s04's
+  genuine, independent timeline-sequence violation (invoice dated before shipment) instead of
+  disputing it — i.e., the general "don't re-litigate" guidance was bleeding into a check it
+  was never meant to touch, compounded by the prompt having no explicit timeline-check
+  instruction at all (unlike the Investigator's own explicit step 3). Fixed with an explicit
+  timeline-verification bullet plus a carve-out sentence scoping the liability language away
+  from the timeline check. Live-confirmed 6/6 after the fix (5 solo runs + 1 full-suite run).
 - **Resolved (follow-up session, see above)**: s04's Investigator was calling
   `get_po`/`get_asns_for_po`/`get_invoice`/`get_receiving_record` with `po_id="CLM-004"` (the
   claim ID) instead of the actual PO ID (`PO-004`). Fixed by making `INVESTIGATOR_SYSTEM_PROMPT`

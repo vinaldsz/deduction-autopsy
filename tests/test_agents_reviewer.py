@@ -2,7 +2,7 @@ import json
 
 from fastmcp import Client
 
-from agents.reviewer import REVIEWER_MODEL, run_reviewer
+from agents.reviewer import REVIEWER_MODEL, REVIEWER_SYSTEM_PROMPT, run_reviewer
 from mcp_server.server import mcp
 from tests.agent_stubs import StubAsyncOpenAI, make_completion
 
@@ -28,6 +28,18 @@ SAMPLE_CASE_FILE = {
 
 async def test_default_model_is_confirmed_openrouter_slug():
     assert REVIEWER_MODEL == "anthropic/claude-sonnet-4.5"
+
+
+def test_prompt_treats_timeline_violation_as_independent_of_liability_scoping():
+    """Regression guard for the s04 bug found during Layer 10: the Reviewer was citing the
+    s01-era liability-scoping language ("don't re-litigate whose fault a shortage is") to
+    excuse a genuine timeline-sequence violation instead of disputing it. This asserts the
+    prompt (1) gives the Reviewer an explicit instruction to verify the timeline itself and
+    (2) explicitly decouples that check from the liability carve-out, so a future edit can't
+    silently drop either half."""
+    assert "verify the timeline" in REVIEWER_SYSTEM_PROMPT.lower()
+    assert "does not excuse a timeline" in REVIEWER_SYSTEM_PROMPT.lower()
+    assert "no bearing on the separate timeline check" in REVIEWER_SYSTEM_PROMPT.lower()
 
 
 async def test_reasoning_field_is_stripped_from_reviewer_prompt(monkeypatch):

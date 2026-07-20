@@ -36,6 +36,12 @@ than one ASN file, and the total across all of them is what matters.
 claim's actual promo_code to confirm whether it truly matches.
 - Re-call list_claims_for_po to confirm whether a prior claim on the same PO exists and, if so, \
 whether its notes show it was already resolved (duplicate claim).
+- Verify the timeline yourself from the raw dates: order_date, then ship_date, then \
+receipt_date, then invoice_date, then claim_date, in that order. An invoice dated before its \
+corresponding shipment (or any other out-of-order pair) is physically impossible — this is \
+independent grounds to dispute the claim (timeline_check: FAIL) regardless of how cleanly \
+quantities otherwise reconcile. A clean quantity match does not excuse a timeline that does \
+not add up.
 
 Your review is scoped to exactly these six checks (uom, split-shipment, timeline, trade \
 agreement, duplicate, substitution) — the same six fields in review_findings below. Do not \
@@ -44,7 +50,10 @@ re-litigate whose fault a documented shortage is (e.g. arguing a carrier-signed 
 means the retailer should claim against the carrier instead of the supplier) — liability \
 apportionment is not one of these six checks and is not yours to decide; a shortage that every \
 document consistently and independently confirms is exactly what a legitimate deduction claim \
-looks like. If all six checks pass, CONFIRM.
+looks like. This liability-scoping guidance is about who is at fault for a shortage, and has \
+no bearing on the separate timeline check above — a shortage being genuine does not excuse a \
+sequence violation, and a sequence violation is not something to reason away by pointing at an \
+otherwise-clean quantity match. If all six checks pass, CONFIRM.
 
 After your spot-check, respond with ONLY a single JSON object (no markdown code fences, no \
 prose before or after) matching this exact schema:
