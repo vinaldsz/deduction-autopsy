@@ -1,6 +1,54 @@
 # Progress
 
 ## Current layer
+**Layer 12 — `orchestrator/config.py` (consolidated settings) complete**
+
+Built per `docs/PLAN.md`'s Layer 12 section. Model slugs (`INVESTIGATOR_MODEL`/`REVIEWER_MODEL`),
+`OPENROUTER_BASE_URL`, `temperature`, `max_iterations` (the tool-loop cap in `agents/base.py`),
+and `max_investigator_attempts` (the CaseFile-correction retry cap) were previously hardcoded
+independently in `agents/investigator.py`, `agents/reviewer.py`, `orchestrator/pipeline.py`,
+and `agents/base.py`'s default args — no single place to override one without touching every
+call site.
+
+New `orchestrator/config.py`: a frozen `Settings` dataclass plus `load_settings()` (reads
+`INVESTIGATOR_MODEL`/`REVIEWER_MODEL`/`OPENROUTER_BASE_URL`/`AGENT_TEMPERATURE`/
+`MAX_TOOL_ITERATIONS`/`MAX_INVESTIGATOR_ATTEMPTS` env vars, falling back to the confirmed
+defaults) and a module-level `SETTINGS = load_settings()` singleton computed once at import
+time. `load_settings()` is exposed separately from the singleton specifically so tests can
+construct `Settings` against arbitrary env vars without depending on import order.
+
+**Every consumer now imports from `orchestrator/config.py` rather than re-hardcoding**:
+`agents/base.py`'s `AgentRunner.__init__` defaults `temperature`/`max_iterations` to
+`SETTINGS.temperature`/`SETTINGS.max_tool_iterations`; `agents/investigator.py`/
+`agents/reviewer.py` set `INVESTIGATOR_MODEL`/`REVIEWER_MODEL` from `SETTINGS.*_model` (still
+re-exported as module-level names — no import changes needed anywhere else in the codebase);
+`orchestrator/pipeline.py` sets `OPENROUTER_BASE_URL` from `SETTINGS.openrouter_base_url` and
+`run_pipeline`'s `max_investigator_attempts` default from
+`SETTINGS.max_investigator_attempts`; `cli/run_claim.py`'s `--max-attempts` argparse default
+now reads from the same settings instead of its own separate hardcoded `3`. No circular import:
+`orchestrator/config.py` is a leaf module (imports only `os`/`dataclasses`), so `agents/base.py`
+importing from `orchestrator.config` doesn't create a cycle with `orchestrator/pipeline.py`
+importing from `agents.base`.
+
+`.env.example` documents the six new optional override vars (commented out, defaults noted)
+without changing default behavior.
+
+Wrote `tests/test_orchestrator_config.py` (4 new tests): defaults match the previously
+hardcoded confirmed values; `load_settings()` honors all six env-var overrides; a regression
+guard that `agents.investigator.INVESTIGATOR_MODEL`/`agents.reviewer.REVIEWER_MODEL`/
+`orchestrator.pipeline.OPENROUTER_BASE_URL` read from the `SETTINGS` singleton rather than a
+re-hardcoded copy (so a future env-var override can't silently miss one call site); and that
+`AgentRunner`'s default `temperature` actually reaches the OpenRouter request when not
+overridden by a caller.
+
+`pytest tests/` — 139 passed, 0 failed, 9 deselected (unit suite; +4 for this layer, all in
+`tests/test_orchestrator_config.py`). No behavior change to any of the 8 scenarios — not
+live-tested against real OpenRouter this session since no prompt/model/pipeline-logic changed,
+only where each existing default value is defined.
+
+---
+
+## Previous layer
 **Layer 11 — CLI demo mode (`--explain` flag) complete**
 
 Built per `docs/PLAN.md`'s Layer 11 section: `cli/run_claim.py` previously only printed a final
@@ -729,17 +777,20 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Layers 1-11 are complete, including the s04 Reviewer regression bugfix (fixed and
-live-confirmed 6/6 in an earlier session) and Layer 11's CLI demo mode (this session, live
-double-confirmed with and without `--explain`). Nothing outstanding is known to be broken.
-Suggested next steps, in rough priority order:
+Layers 1-12 are complete, including the s04 Reviewer regression bugfix (fixed and
+live-confirmed 6/6 in an earlier session), Layer 11's CLI demo mode (live double-confirmed
+with and without `--explain`), and Layer 12's consolidated settings module (this session, unit
+tests only — see "Current layer" above for why no live run was needed). Nothing outstanding is
+known to be broken. Suggested next steps, in rough priority order:
 
-1. Start Layer 12 (`docs/PLAN.md`): `orchestrator/config.py` — consolidate the model slugs,
-   `OPENROUTER_BASE_URL`, temperature, and `max_iterations` that are currently scattered across
-   `agents/investigator.py`, `agents/reviewer.py`, `orchestrator/pipeline.py`, and
-   `agents/base.py`'s default args into one `Settings`-style module. Prerequisite for Layers
-   13-14 (retry/backoff, token/cost usage capture), which add new tunables.
-2. Nothing else is currently flagged. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
+1. Start Layer 13 (`docs/PLAN.md`): retry/backoff + timeout around OpenRouter calls in
+   `agents/base.py`'s `AgentRunner.run()` — a client-level timeout and exponential backoff on
+   retryable errors (`openai.APIStatusError` 429/5xx, `openai.APITimeoutError`), distinct from
+   the existing CaseFile-correction retry loop. Now has a natural home for its new tunables
+   (retry count, backoff base) in Layer 12's `orchestrator/config.py`.
+2. Layer 14 (token/cost usage capture) is next after that — also a natural consumer of Layer
+   12's config module if a cost-cap tunable is ever added.
+3. Nothing else is currently flagged. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
    orchestration, SKU-to-product-name mapping, heterogeneous mock data sources, API-facing
    deployment concerns) only if the user asks to expand scope beyond the original 9-layer build.
 
@@ -759,9 +810,10 @@ Suggested next steps, in rough priority order:
 | 9 | Integration tests + README | ✅ Done |
 | 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
 | 11 | CLI demo mode (`--explain` flag) | ✅ Done |
+| 12 | `orchestrator/config.py` (consolidated settings) | ✅ Done |
 
 ## Tests passing
-`pytest tests/` — 135 passed, 0 failed, 9 deselected (the 9 deselected are
+`pytest tests/` — 139 passed, 0 failed, 9 deselected (the 9 deselected are
 `test_pipeline_scenarios.py`'s integration tests — 8 parametrized scenarios + the dedicated
 `test_reviewer_overturns_a_missed_duplicate`):
 - `test_cli_run_claim.py` (9): argparse required-flag enforcement and `--output-dir`/
@@ -824,6 +876,12 @@ Suggested next steps, in rough priority order:
   against s07's fixtures, a static regression guard that the timeline-check bullet and
   its liability-scoping carve-out (the s04 bugfix, see below) are both present in the prompt
   text, and Layer 11's `on_tool_call` passthrough test.
+- `test_orchestrator_config.py` (4): defaults match the previously hardcoded confirmed values;
+  `load_settings()` honors all six env-var overrides; a regression guard that
+  `agents.investigator.INVESTIGATOR_MODEL`/`agents.reviewer.REVIEWER_MODEL`/
+  `orchestrator.pipeline.OPENROUTER_BASE_URL` read from the `SETTINGS` singleton rather than a
+  re-hardcoded copy; `AgentRunner`'s default `temperature` reaches the actual OpenRouter
+  request when not overridden.
 
 ## Known issues / decisions pending
 - **Resolved (this session, see "Current layer" above)**: `agents/reviewer.py`'s prompt had

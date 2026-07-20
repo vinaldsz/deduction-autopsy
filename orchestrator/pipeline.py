@@ -13,6 +13,7 @@ from pydantic import BaseModel, ValidationError
 from agents.base import AgentResult, ToolCallRecord
 from agents.investigator import run_investigator
 from agents.reviewer import run_reviewer
+from orchestrator.config import SETTINGS
 from orchestrator.output import (
     write_dispute_packet_md,
     write_reasoning_trace_json,
@@ -20,7 +21,7 @@ from orchestrator.output import (
 )
 
 MCP_SERVER_SCRIPT = Path(__file__).resolve().parent.parent / "mcp_server" / "server.py"
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_BASE_URL = SETTINGS.openrouter_base_url
 
 Verdict = Literal["VALID", "INVALID", "ESCALATE"]
 ReviewerVerdict = Literal["CONFIRM", "OVERTURN", "ESCALATE"]
@@ -221,7 +222,7 @@ async def run_pipeline(
     openai_client: Any | None = None,
     mcp_client: Any | None = None,
     output_dir: str | Path = "outputs",
-    max_investigator_attempts: int = 3,
+    max_investigator_attempts: int = SETTINGS.max_investigator_attempts,
     on_investigator_tool_call: Callable[[ToolCallRecord], None] | None = None,
     on_reviewer_tool_call: Callable[[ToolCallRecord], None] | None = None,
 ) -> PipelineResult:

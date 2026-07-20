@@ -1,8 +1,9 @@
 from collections.abc import Callable
 
 from agents.base import AgentResult, AgentRunner, ToolCallRecord
+from orchestrator.config import SETTINGS
 
-INVESTIGATOR_MODEL = "anthropic/claude-haiku-4.5"
+INVESTIGATOR_MODEL = SETTINGS.investigator_model
 
 INVESTIGATOR_SYSTEM_PROMPT = """You are the Investigator in a two-agent CPG retailer deduction \
 reconciliation system. You gather evidence via MCP tools and propose a verdict; a separate \

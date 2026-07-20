@@ -6,6 +6,8 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 
+from orchestrator.config import SETTINGS
+
 
 @dataclass
 class ToolCallRecord:
@@ -63,8 +65,8 @@ class AgentRunner:
         mcp_client: Any,
         model: str,
         system_prompt: str,
-        temperature: float = 0.0,
-        max_iterations: int = 10,
+        temperature: float = SETTINGS.temperature,
+        max_iterations: int = SETTINGS.max_tool_iterations,
         on_tool_call: Callable[[ToolCallRecord], None] | None = None,
     ) -> None:
         self._openai_client = openai_client

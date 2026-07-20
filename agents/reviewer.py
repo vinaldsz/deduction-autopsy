@@ -3,8 +3,9 @@ from collections.abc import Callable
 from typing import Any
 
 from agents.base import AgentResult, AgentRunner, ToolCallRecord
+from orchestrator.config import SETTINGS
 
-REVIEWER_MODEL = "anthropic/claude-sonnet-4.5"
+REVIEWER_MODEL = SETTINGS.reviewer_model
 
 REVIEWER_SYSTEM_PROMPT = """You are the Reviewer in a two-agent CPG retailer deduction \
 reconciliation system. The Investigator has already built a case file and proposed a verdict. \

@@ -8,6 +8,7 @@ from rich.table import Table
 
 from agents.base import AgentRunnerError, ToolCallRecord
 from cli._common import ensure_api_key
+from orchestrator.config import SETTINGS
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline, strip_reasoning
 
 # Which MCP tool call, if any, independently re-verifies each of ReviewFindings' six checks —
@@ -30,7 +31,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--claim-id", required=True)
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--output-dir", default="outputs")
-    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument(
+        "--max-attempts", type=int, default=SETTINGS.max_investigator_attempts
+    )
     parser.add_argument(
         "--explain",
         action="store_true",
