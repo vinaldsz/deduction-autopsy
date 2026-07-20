@@ -1,7 +1,8 @@
 import json
+from collections.abc import Callable
 from typing import Any
 
-from agents.base import AgentResult, AgentRunner
+from agents.base import AgentResult, AgentRunner, ToolCallRecord
 
 REVIEWER_MODEL = "anthropic/claude-sonnet-4.5"
 
@@ -101,11 +102,13 @@ async def run_reviewer(
     mcp_client,
     case_file: dict[str, Any],
     model: str = REVIEWER_MODEL,
+    on_tool_call: Callable[[ToolCallRecord], None] | None = None,
 ) -> AgentResult:
     runner = AgentRunner(
         openai_client=openai_client,
         mcp_client=mcp_client,
         model=model,
         system_prompt=REVIEWER_SYSTEM_PROMPT,
+        on_tool_call=on_tool_call,
     )
     return await runner.run(_build_reviewer_user_message(case_file))

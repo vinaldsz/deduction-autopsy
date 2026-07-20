@@ -1,4 +1,6 @@
-from agents.base import AgentResult, AgentRunner
+from collections.abc import Callable
+
+from agents.base import AgentResult, AgentRunner, ToolCallRecord
 
 INVESTIGATOR_MODEL = "anthropic/claude-haiku-4.5"
 
@@ -89,11 +91,13 @@ async def run_investigator(
     claim_id: str,
     model: str = INVESTIGATOR_MODEL,
     extra_instructions: str | None = None,
+    on_tool_call: Callable[[ToolCallRecord], None] | None = None,
 ) -> AgentResult:
     runner = AgentRunner(
         openai_client=openai_client,
         mcp_client=mcp_client,
         model=model,
         system_prompt=INVESTIGATOR_SYSTEM_PROMPT,
+        on_tool_call=on_tool_call,
     )
     return await runner.run(_build_investigator_user_message(claim_id, extra_instructions))

@@ -1,5 +1,6 @@
 import dataclasses
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,6 +65,7 @@ class AgentRunner:
         system_prompt: str,
         temperature: float = 0.0,
         max_iterations: int = 10,
+        on_tool_call: Callable[[ToolCallRecord], None] | None = None,
     ) -> None:
         self._openai_client = openai_client
         self._mcp_client = mcp_client
@@ -71,6 +73,7 @@ class AgentRunner:
         self._system_prompt = system_prompt
         self._temperature = temperature
         self._max_iterations = max_iterations
+        self._on_tool_call = on_tool_call
 
     async def run(self, user_message: str) -> AgentResult:
         tools = await _build_tool_schemas(self._mcp_client)
@@ -128,7 +131,10 @@ class AgentRunner:
                         result_str = f"ERROR: {exc}"
                         is_error = True
 
-                trace.append(ToolCallRecord(name=name, args=args, result=result_str, is_error=is_error))
+                record = ToolCallRecord(name=name, args=args, result=result_str, is_error=is_error)
+                trace.append(record)
+                if self._on_tool_call is not None:
+                    self._on_tool_call(record)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_str})
 
         raise AgentRunnerError(

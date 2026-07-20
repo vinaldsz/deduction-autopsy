@@ -76,3 +76,27 @@ async def test_tool_call_round_trip_against_real_fixtures(monkeypatch):
     assert normalize_record.is_error is False
     assert json.loads(normalize_record.result) == 120
     assert result.final_text == '{"proposed_verdict": "INVALID"}'
+
+
+async def test_on_tool_call_is_forwarded_to_the_runner(monkeypatch):
+    monkeypatch.setenv("SCENARIO_ID", "s02_casepack_mismatch")
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(
+                tool_calls=[{"id": "call_1", "name": "get_po", "args": {"po_id": "PO-002"}}]
+            ),
+            make_completion(content='{"proposed_verdict": "INVALID"}'),
+        ]
+    )
+    observed = []
+
+    async with Client(mcp) as mcp_client:
+        result = await run_investigator(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            claim_id="CLM-002",
+            on_tool_call=observed.append,
+        )
+
+    assert observed == result.trace
+    assert [record.name for record in observed] == ["get_po"]

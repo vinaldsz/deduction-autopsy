@@ -167,6 +167,52 @@ async def test_max_iterations_raises(monkeypatch):
     assert len(stub.requests) == 3
 
 
+async def test_on_tool_call_hook_invoked_once_per_call_in_order(monkeypatch):
+    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(
+                tool_calls=[
+                    {"id": "call_1", "name": "get_po", "args": {"po_id": "PO-001"}},
+                    {"id": "call_2", "name": "get_invoice", "args": {"po_id": "PO-001"}},
+                ]
+            ),
+            make_completion(content="Done."),
+        ]
+    )
+    observed = []
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+            on_tool_call=observed.append,
+        )
+        result = await runner.run("Look up PO-001 and its invoice.")
+
+    assert observed == result.trace
+    assert [record.name for record in observed] == ["get_po", "get_invoice"]
+
+
+async def test_on_tool_call_hook_not_invoked_for_text_only_response():
+    stub = StubAsyncOpenAI([make_completion(content="No discrepancy found.")])
+    observed = []
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+            on_tool_call=observed.append,
+        )
+        await runner.run("Investigate claim CLM-001.")
+
+    assert observed == []
+
+
 async def test_mcp_tool_schema_translation():
     from agents.base import _build_tool_schemas
 

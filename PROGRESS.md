@@ -1,6 +1,80 @@
 # Progress
 
 ## Current layer
+**Layer 11 — CLI demo mode (`--explain` flag) complete**
+
+Built per `docs/PLAN.md`'s Layer 11 section: `cli/run_claim.py` previously only printed a final
+summary table, so the whole point of the two-agent segregation-of-duties design (Investigator
+proposes, Reviewer independently spot-checks) was invisible to anyone running the CLI. Added an
+additive `--explain` flag — no fixture, prompt, or verdict-logic changes.
+
+**Tool-call event hook (`agents/base.py`)**: `AgentRunner.__init__` gained
+`on_tool_call: Callable[[ToolCallRecord], None] | None = None`, invoked right after each
+`trace.append(...)` in `run()`. `run_investigator`/`run_reviewer` (`agents/investigator.py`,
+`agents/reviewer.py`) each gained a matching passthrough param. `orchestrator/pipeline.py`'s
+`run_pipeline` gained **two** separate params — `on_investigator_tool_call` and
+`on_reviewer_tool_call` — rather than one role-tagged hook, since the two agents are already
+called at distinct points in the pipeline; `_run_investigator_until_valid` forwards its hook
+across every retry attempt, so `--explain` shows retries live too. This hook is shared
+infrastructure per the plan — Layer 20's SSE web-UI streaming will reuse the exact same
+callback point.
+
+**Reuse, not duplication, for the reasoning-strip safeguard**: extracted `run_pipeline`'s
+existing inline reasoning-strip dict comprehension into a module-level
+`strip_reasoning(case_file: CaseFile) -> dict[str, Any]` in `orchestrator/pipeline.py`.
+`run_pipeline` calls it internally (no behavior change, confirmed by the existing
+`test_reviewer_receives_case_file_without_reasoning` test passing unchanged); `cli/run_claim.py`
+imports and calls the same function to render "the CaseFile handed to the Reviewer" so the
+displayed JSON is guaranteed identical to what the Reviewer actually received — not a
+CLI-side reimplementation that could silently drift.
+
+**Trap descriptions are data, not CLI string literals**: added a `"trap"` key to each of the 8
+entries in `orchestrator/ground_truth.py`'s `GROUND_TRUTH` list (text sourced from
+`docs/SPEC.md`'s ground-truth table and its "Eighth Scenario" section for s08).
+`cli/run_claim.py` looks up the current scenario's trap text from this single source of truth
+rather than hardcoding a switch statement, per the plan's explicit "data-driven off the same
+trap descriptions used in scenario docs, not hardcoded per-run" requirement.
+
+**`cli/run_claim.py`'s `--explain` flag**: prints an "Investigator" header before the pipeline
+runs, live tool-call lines for both agents (name, args, truncated result, red for errors,
+"Reviewer" header printed lazily on the Reviewer's first tool call), the stripped CaseFile via
+`strip_reasoning`, all six `ReviewFindings` checks annotated via a local `CHECK_RE_FETCH_TOOL`
+map (`uom_check`→`normalize_uom`, `split_shipment_check`→`get_asns_for_po`,
+`trade_agreement_check`→`get_trade_agreement`, `duplicate_check`→`list_claims_for_po`;
+`timeline_check`/`substitution_check` have no dedicated re-fetch tool since the Reviewer's own
+prompt re-derives them from documents it already fetched — shown as "verified from
+already-fetched documents"), and a closing trap note from `GROUND_TRUTH` only when
+`final_verdict != investigator_verdict` (i.e. an actual overturn). Default (non-`--explain`)
+output is byte-for-byte unchanged — confirmed both by a new regression test and by a live
+side-by-side run (see below).
+
+Wrote 2 new tests in `tests/test_agents_base.py` (hook fires once per call in order, never
+fires for a text-only response), 1 each in `tests/test_agents_investigator.py` /
+`tests/test_agents_reviewer.py` (hook forwarded to the underlying `AgentRunner`), 2 in
+`tests/test_orchestrator_pipeline.py` (`strip_reasoning` unit test; both pipeline-level hooks
+fire with real tool calls captured), and 3 in `tests/test_cli_run_claim.py`
+(`--explain` renders tool calls/CaseFile/review findings with correct re-fetch annotations
+against a stubbed s02 run; a scripted `OVERTURN` response prints the correct scenario's closing
+trap note from `GROUND_TRUTH`; without `--explain` none of the explain-only sections appear).
+
+**Live verification**: `python -m cli.run_claim --claim-id CLM-002 --scenario
+s02_casepack_mismatch --explain` against real OpenRouter — confirmed live tool-call lines for
+both agents (correctly labeled `investigator`/`reviewer`), the stripped CaseFile block (no
+`reasoning` field), all six review checks with correct re-fetch annotations
+(`uom_check`/`split_shipment_check`/`duplicate_check` showed "re-fetched via ...";
+`timeline_check`/`substitution_check` showed "verified from already-fetched documents";
+`trade_agreement_check` correctly showed "not re-fetched" since it's `N/A` for this scenario),
+and — since s02 resolves `INVALID`→`CONFIRM` (no overturn) — no closing trap note, as expected.
+Re-ran the identical claim without `--explain` immediately after: output was the unchanged
+summary table only, confirming no regression to default behavior.
+
+`pytest tests/` — 135 passed, 0 failed, 9 deselected (unit suite; +9 for this layer: 2 in
+`test_agents_base.py`, 1 each in `test_agents_investigator.py`/`test_agents_reviewer.py`, 2 in
+`test_orchestrator_pipeline.py`, 3 in `test_cli_run_claim.py`).
+
+---
+
+## Previous layer
 **Bugfix — s04 Reviewer regression (found during Layer 10, fixed this session)**
 
 Not a numbered layer — a targeted fix to the top-priority known issue Layer 10 logged and
@@ -643,15 +717,16 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-The Layer 1-10 build order is complete, and the s04 Reviewer regression (found during Layer
-10) is fixed and live-confirmed 6/6 (see "Current layer" above). Nothing outstanding is known
-to be broken. Suggested next steps, in rough priority order:
+Layers 1-11 are complete, including the s04 Reviewer regression bugfix (fixed and
+live-confirmed 6/6 in an earlier session) and Layer 11's CLI demo mode (this session, live
+double-confirmed with and without `--explain`). Nothing outstanding is known to be broken.
+Suggested next steps, in rough priority order:
 
-1. Start Layer 11 (`docs/PLAN.md`): CLI demo mode — a `--explain` flag on
-   `cli/run_claim.py` rendering the Investigator's tool calls, the stripped CaseFile handoff,
-   and each Reviewer check live via `rich`. Requires adding an optional
-   `on_tool_call: Callable[[ToolCallRecord], None] | None` hook to `AgentRunner.run()` in
-   `agents/base.py` — build this once, since Layer 20's SSE UI streaming reuses the same hook.
+1. Start Layer 12 (`docs/PLAN.md`): `orchestrator/config.py` — consolidate the model slugs,
+   `OPENROUTER_BASE_URL`, temperature, and `max_iterations` that are currently scattered across
+   `agents/investigator.py`, `agents/reviewer.py`, `orchestrator/pipeline.py`, and
+   `agents/base.py`'s default args into one `Settings`-style module. Prerequisite for Layers
+   13-14 (retry/backoff, token/cost usage capture), which add new tunables.
 2. Nothing else is currently flagged. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
    orchestration, SKU-to-product-name mapping, heterogeneous mock data sources, API-facing
    deployment concerns) only if the user asks to expand scope beyond the original 9-layer build.
@@ -671,17 +746,21 @@ to be broken. Suggested next steps, in rough priority order:
 | 8 | `cli/run_claim.py` + `cli/run_all.py` | ✅ Done |
 | 9 | Integration tests + README | ✅ Done |
 | 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
+| 11 | CLI demo mode (`--explain` flag) | ✅ Done |
 
 ## Tests passing
-`pytest tests/` — 126 passed, 0 failed, 9 deselected (the 9 deselected are
+`pytest tests/` — 135 passed, 0 failed, 9 deselected (the 9 deselected are
 `test_pipeline_scenarios.py`'s integration tests — 8 parametrized scenarios + the dedicated
 `test_reviewer_overturns_a_missed_duplicate`):
-- `test_cli_run_claim.py` (8): argparse required-flag enforcement and `--output-dir`/
-  `--max-attempts` defaults/overrides, happy path against s01 (exit 0, verdict fields printed,
-  `verdict.json` written under a custom `--output-dir`), `PipelineError` path (exit 1, clean
-  error message, no traceback), missing-`OPENROUTER_API_KEY` path (exit 1 without touching
-  `run_pipeline` at all).
-- `test_cli_run_all.py` (7): all-7-pass summary line and exit 0; one scenario's
+- `test_cli_run_claim.py` (9): argparse required-flag enforcement and `--output-dir`/
+  `--max-attempts`/`--explain` defaults/overrides, happy path against s01 (exit 0, verdict
+  fields printed, `verdict.json` written under a custom `--output-dir`), `PipelineError` path
+  (exit 1, clean error message, no traceback), missing-`OPENROUTER_API_KEY` path (exit 1
+  without touching `run_pipeline` at all); Layer 11's `--explain` tests: live tool-call lines/
+  stripped CaseFile/per-check re-fetch annotations against a stubbed s02 run, a scripted
+  `OVERTURN` response prints the matching scenario's `GROUND_TRUTH` trap note, and a regression
+  test that omitting `--explain` prints none of the explain-only sections.
+- `test_cli_run_all.py` (6): all-7-pass summary line and exit 0; one scenario's
   `investigator_verdict` mismatch fails only that row (exit 1, others still pass); a
   `PipelineError` on one scenario is recorded as an error row and the loop continues to the
   rest; missing-`OPENROUTER_API_KEY` returns 1 without ever calling `run_pipeline_fn`; explicit
@@ -689,12 +768,14 @@ to be broken. Suggested next steps, in rough priority order:
   against `"CONFIRM"`; `parse_args` regression test that `--help`/an unrecognized flag raises
   `SystemExit` rather than falling through to a real run (see Layer 8 notes above for why this
   matters).
-- `test_orchestrator_pipeline.py` (15): s01/s02 happy paths (investigator/reviewer wiring,
+- `test_orchestrator_pipeline.py` (23): s01/s02 happy paths (investigator/reviewer wiring,
   output-artifact presence/absence), missing-required-field and missing-required-tool-call
   correction retries, `max_investigator_attempts` exhaustion, reasoning-strip safeguard,
   full `_resolve_final_verdict` truth table, `_extract_json` parametrized cases (fenced,
   unfenced, prose-before-fence, prose-before-unfenced-brace) and a full-pipeline regression test
-  reproducing the exact live prose-before-fence failure.
+  reproducing the exact live prose-before-fence failure; Layer 11's `strip_reasoning` unit test
+  and a test that `on_investigator_tool_call`/`on_reviewer_tool_call` each capture real tool
+  calls from their own agent only.
 - `test_orchestrator_output.py` (5): `verdict.json`/`reasoning_trace.json`/`dispute_packet.md`
   writers — paths, JSON shape, markdown content, empty-dispute-grounds handling, nested
   output-dir creation.
@@ -715,19 +796,20 @@ to be broken. Suggested next steps, in rough priority order:
   round-trip through the real MCP protocol (in-process `fastmcp.Client`), `None` return
   serializes correctly (s06 promo mismatch), `ValueError` surfaces as `ToolError` through
   `call_tool` rather than being swallowed.
-- `test_agents_base.py` (7): text-only response, single/parallel tool-call round trips,
+- `test_agents_base.py` (9): text-only response, single/parallel tool-call round trips,
   real `ToolError` surfaced without crashing, malformed tool-call JSON handled, max-iterations
-  safety bound raises `AgentRunnerError`, and MCP→OpenAI tool-schema translation with a
-  non-empty-description regression guard.
-- `test_agents_investigator.py` (5): confirmed model slug, claim_id present in the user
-  message, default vs. overridden `model`, and a real `normalize_uom` tool-call round trip
-  against s02's fixtures.
-- `test_agents_reviewer.py` (6): confirmed model slug, `reasoning` field absent from the
+  safety bound raises `AgentRunnerError`, MCP→OpenAI tool-schema translation with a
+  non-empty-description regression guard, and Layer 11's `on_tool_call` hook tests (fires once
+  per call in order, never fires for a text-only response).
+- `test_agents_investigator.py` (6): confirmed model slug, claim_id present in the user
+  message, default vs. overridden `model`, a real `normalize_uom` tool-call round trip
+  against s02's fixtures, and Layer 11's `on_tool_call` passthrough test.
+- `test_agents_reviewer.py` (7): confirmed model slug, `reasoning` field absent from the
   actual prompt text sent to the model, case file XML-delimited and valid JSON inside the
   tags, default vs. overridden `model`, a real `list_claims_for_po` tool-call round trip
-  against s07's fixtures, and a static regression guard that the timeline-check bullet and
-  its liability-scoping carve-out (the s04 bugfix, see "Current layer" above) are both
-  present in the prompt text.
+  against s07's fixtures, a static regression guard that the timeline-check bullet and
+  its liability-scoping carve-out (the s04 bugfix, see below) are both present in the prompt
+  text, and Layer 11's `on_tool_call` passthrough test.
 
 ## Known issues / decisions pending
 - **Resolved (this session, see "Current layer" above)**: `agents/reviewer.py`'s prompt had

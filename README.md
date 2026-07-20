@@ -31,6 +31,7 @@ authoritative, up-to-date state). All layers are complete:
 | 8 | `cli/run_claim.py` + `cli/run_all.py` | ✅ Done |
 | 9 | Integration tests + README | ✅ Done |
 | 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
+| 11 | CLI demo mode (`--explain` flag) | ✅ Done |
 
 ## Setup
 
@@ -49,6 +50,14 @@ Investigate a single claim end-to-end:
 
 ```bash
 python -m cli.run_claim --claim-id CLM-002 --scenario s02_casepack_mismatch
+```
+
+Add `--explain` to watch the two-agent split live — each agent's tool calls as they happen,
+the stripped CaseFile handed from the Investigator to the Reviewer, and the Reviewer's six
+per-check findings (with which ones triggered a re-fetch):
+
+```bash
+python -m cli.run_claim --claim-id CLM-002 --scenario s02_casepack_mismatch --explain
 ```
 
 Run all 8 scenarios and print a pass/fail table against ground truth:

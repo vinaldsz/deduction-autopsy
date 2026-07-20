@@ -3,8 +3,16 @@ import json
 import pytest
 from fastmcp import Client
 
+from agents.base import ToolCallRecord
 from mcp_server.server import mcp
-from orchestrator.pipeline import PipelineError, _extract_json, _resolve_final_verdict, run_pipeline
+from orchestrator.pipeline import (
+    CaseFile,
+    PipelineError,
+    _extract_json,
+    _resolve_final_verdict,
+    run_pipeline,
+    strip_reasoning,
+)
 from tests.agent_stubs import StubAsyncOpenAI, make_completion
 
 VALID_CASE_FILE_JSON = json.dumps(
@@ -257,6 +265,50 @@ async def test_reviewer_receives_case_file_without_reasoning(monkeypatch, tmp_pa
         )
 
     assert "reasoning" not in captured["case_file"]
+
+
+def test_strip_reasoning_drops_only_the_reasoning_field():
+    case_file = CaseFile.model_validate(json.loads(VALID_CASE_FILE_JSON))
+    stripped = strip_reasoning(case_file)
+
+    assert "reasoning" not in stripped
+    assert stripped["claim_id"] == "CLM-001"
+    assert stripped["proposed_verdict"] == "VALID"
+    assert set(stripped.keys()) == set(case_file.model_dump().keys()) - {"reasoning"}
+
+
+async def test_tool_call_hooks_fire_only_for_their_own_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(
+                tool_calls=[{"id": "call_1", "name": "get_po", "args": {"po_id": "PO-001"}}]
+            ),
+            make_completion(content=VALID_CASE_FILE_JSON),
+            make_completion(
+                tool_calls=[{"id": "call_2", "name": "get_po", "args": {"po_id": "PO-001"}}]
+            ),
+            make_completion(content=confirm_json("CLM-001")),
+        ]
+    )
+
+    investigator_calls = []
+    reviewer_calls = []
+
+    async with Client(mcp) as mcp_client:
+        await run_pipeline(
+            claim_id="CLM-001",
+            scenario="s01_clean_shortage",
+            openai_client=stub,
+            mcp_client=mcp_client,
+            output_dir=tmp_path,
+            on_investigator_tool_call=investigator_calls.append,
+            on_reviewer_tool_call=reviewer_calls.append,
+        )
+
+    assert investigator_calls, "expected the Investigator to make at least one tool call"
+    assert reviewer_calls, "expected the Reviewer to make at least one tool call"
+    assert all(isinstance(record, ToolCallRecord) for record in investigator_calls + reviewer_calls)
 
 
 @pytest.mark.parametrize(

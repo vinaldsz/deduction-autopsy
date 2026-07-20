@@ -110,3 +110,29 @@ async def test_spot_check_tool_call_round_trip_against_real_fixtures(monkeypatch
     claim_ids = json.loads(result.trace[0].result)
     assert "CLM-007a" in claim_ids and "CLM-007b" in claim_ids
     assert result.final_text == '{"final_verdict": "CONFIRM"}'
+
+
+async def test_on_tool_call_is_forwarded_to_the_runner(monkeypatch):
+    monkeypatch.setenv("SCENARIO_ID", "s07_duplicate_claim")
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(
+                tool_calls=[
+                    {"id": "call_1", "name": "list_claims_for_po", "args": {"po_id": "PO-007"}}
+                ]
+            ),
+            make_completion(content='{"final_verdict": "CONFIRM"}'),
+        ]
+    )
+    observed = []
+
+    async with Client(mcp) as mcp_client:
+        result = await run_reviewer(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            case_file=SAMPLE_CASE_FILE,
+            on_tool_call=observed.append,
+        )
+
+    assert observed == result.trace
+    assert [record.name for record in observed] == ["list_claims_for_po"]

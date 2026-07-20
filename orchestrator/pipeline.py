@@ -143,6 +143,11 @@ def _required_tool_call_check(scenario: str) -> Callable[[list[ToolCallRecord]],
     return REQUIRED_TOOL_CALLS.get(scenario[:3])
 
 
+def strip_reasoning(case_file: CaseFile) -> dict[str, Any]:
+    """The CaseFile view the Reviewer actually receives (its own narrative reasoning removed)."""
+    return {key: value for key, value in case_file.model_dump().items() if key != "reasoning"}
+
+
 async def _run_investigator_until_valid(
     *,
     openai_client: Any,
@@ -150,6 +155,7 @@ async def _run_investigator_until_valid(
     claim_id: str,
     scenario: str,
     max_attempts: int,
+    on_tool_call: Callable[[ToolCallRecord], None] | None = None,
 ) -> tuple[AgentResult, CaseFile]:
     correction: str | None = None
     last_error = ""
@@ -161,6 +167,7 @@ async def _run_investigator_until_valid(
             mcp_client=mcp_client,
             claim_id=claim_id,
             extra_instructions=correction,
+            on_tool_call=on_tool_call,
         )
 
         try:
@@ -215,6 +222,8 @@ async def run_pipeline(
     mcp_client: Any | None = None,
     output_dir: str | Path = "outputs",
     max_investigator_attempts: int = 3,
+    on_investigator_tool_call: Callable[[ToolCallRecord], None] | None = None,
+    on_reviewer_tool_call: Callable[[ToolCallRecord], None] | None = None,
 ) -> PipelineResult:
     output_dir = Path(output_dir)
 
@@ -243,15 +252,15 @@ async def run_pipeline(
             claim_id=claim_id,
             scenario=scenario,
             max_attempts=max_investigator_attempts,
+            on_tool_call=on_investigator_tool_call,
         )
 
-        stripped_case_file = {
-            key: value for key, value in case_file.model_dump().items() if key != "reasoning"
-        }
+        stripped_case_file = strip_reasoning(case_file)
         reviewer_result = await run_reviewer(
             openai_client=openai_client,
             mcp_client=mcp_client,
             case_file=stripped_case_file,
+            on_tool_call=on_reviewer_tool_call,
         )
 
         try:
