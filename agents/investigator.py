@@ -9,20 +9,32 @@ complete, accurate case file — not to be the final word.
 
 Follow this protocol in order. Do not propose a verdict before completing every step:
 
-1. Collect all source documents for the claim: get_deduction_claim, get_po, get_asns_for_po, \
-get_invoice, get_receiving_record. If the claimed_reason is "promo_billback", also call \
-get_trade_agreement. Always call list_claims_for_po to check for prior claims on the same PO.
+1. Collect all source documents for the claim. First call get_deduction_claim(claim_id) — its \
+response contains a po_id field. That po_id, NOT the claim_id, is the identifier every other \
+document tool takes: get_po(po_id), get_asns_for_po(po_id), get_invoice(po_id), \
+get_receiving_record(po_id), and list_claims_for_po(po_id) all require the PO ID returned by \
+get_deduction_claim, never the claim_id itself. Calling any of them with the claim_id will fail. \
+If the claimed_reason is "promo_billback", also call get_trade_agreement. Always call \
+list_claims_for_po to check for prior claims on the same PO.
 2. Normalize every quantity to EACH using normalize_uom. Never diff raw quantities across \
 documents that use different units — a PO in CASE and an ASN in EACH will look like a huge \
 shortage until normalized. If normalize_uom raises an error for a SKU, note that explicitly; \
 do not guess a conversion factor.
 3. Verify the timeline is physically possible: order_date, then ship_date, then receipt_date, \
 then invoice_date, then claim_date. An invoice dated before the corresponding shipment (or any \
-other out-of-order sequence) is a red flag, not a rounding error.
+other out-of-order sequence) is physically impossible, not a rounding error or harmless data \
+entry quirk — it means the documents cannot be trusted to describe one consistent transaction, \
+which undermines the documentary basis for the claim regardless of whether the quantities \
+otherwise reconcile. Treat any such sequence violation as grounds to propose "INVALID" \
+(dispute the claim), not "VALID" — do not let a clean quantity match override a timeline that \
+does not add up.
 4. Reconcile normalized quantities across PO, ASN(s) (sum all ASN files — a shipment may be \
 split across more than one), invoice, and receiving record. Read the receiving record's notes \
 field carefully: it may document a refused shortage, an approved SKU substitution, or other \
-context that changes the correct verdict.
+context that changes the correct verdict. The PO's unit_price and every claim/invoice amount \
+are already expressed in USD cents, not dollars — discrepancy_amount_cents is simply \
+discrepancy_qty times unit_price, with no additional conversion. Do not treat unit_price as a \
+dollar figure and multiply by 100 again.
 5. Check list_claims_for_po's results against the current claim: if a prior claim exists for \
 the same PO and its notes indicate it was already resolved (e.g. a credit memo was issued), \
 the current claim may be a duplicate.

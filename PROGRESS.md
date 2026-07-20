@@ -65,6 +65,84 @@ exactly `test_pipeline_scenarios.py`'s parametrized integration cases — confir
 
 ---
 
+## Follow-up session — fixed the two live failures from Layer 9's first run
+
+Both issues flagged in Layer 9's "Known issues" (s04 wrong-ID tool calls, s01 spurious
+`OVERTURN`) turned out to be prompt gaps, not fixture problems — fixed per `CLAUDE.md`'s
+"change the agent prompts or tool logic instead" rule, with every fix confirmed against a real
+live run before moving to the next, not just unit tests. Two additional bugs surfaced live
+during that verification that hadn't been in the original "Known issues" list at all.
+
+**1. Investigator claim_id/po_id confusion (s04's root cause).** `INVESTIGATOR_SYSTEM_PROMPT`
+(`agents/investigator.py`) now spells out that `get_po`/`get_asns_for_po`/`get_invoice`/
+`get_receiving_record`/`list_claims_for_po` all take the `po_id` returned by
+`get_deduction_claim`, never the `claim_id` — previously the model had to infer this and Haiku
+got it wrong specifically on s04. Confirmed live: the Investigator's tool-call trace no longer
+shows any `po_id="CLM-004"` errors.
+
+**2. Same bug, independently, in the Reviewer — not previously noticed.** Re-running s04 live
+after fix #1 still errored, but now inside the *Reviewer's* trace: `agents/reviewer.py`'s
+`REVIEWER_SYSTEM_PROMPT` never told it how to get a `po_id` at all, and the stripped case file
+it receives only has `claim_id` — no `po_id` field. The Reviewer had been silently guessing
+`po_id` by pattern-matching the claim_id's format (`CLM-004` → `PO-004`), which only worked by
+coincidence of this fixture set's naming convention, then self-correcting after 4 tool errors
+per run. Fixed by telling the Reviewer explicitly to call `get_deduction_claim(claim_id)` itself
+first to resolve the real `po_id`, same as the Investigator now does.
+
+**3. Investigator found the s04 timeline violation but didn't act on it.** Even after fix #1,
+s04 still resolved to `VALID` instead of `INVALID` — the model's own reasoning identified
+"invoice dated before shipment ... physically impossible" but then proposed `VALID` anyway
+("the shortage itself is well-documented ... despite this timeline concern"). The prompt's
+step 3 said a sequence violation was "a red flag" but never said what verdict that implies,
+leaving it to the model's judgment call, which went the wrong way. Fixed by stating explicitly
+that any timeline sequence violation is grounds to propose `INVALID` and must not be overridden
+by an otherwise-clean quantity match. Confirmed live: s04 now resolves `INVALID` → `CONFIRM`.
+
+**4. Reviewer manufacturing an out-of-scope dispute (s01's root cause) — not a simple
+"try harder to agree" fix.** The first attempted fix (telling the Reviewer that `CONFIRM` is a
+valid, expected outcome, not a failure to find something) was not sufficient by itself — a
+follow-up live re-run of all 7 scenarios still failed s01 with `OVERTURN`. Read that run's
+actual reasoning trace rather than assuming the first fix worked: the Reviewer wasn't
+manufacturing a disagreement out of nothing, it was doing real (but out-of-scope) analysis —
+arguing that because the receiving record's carrier-signed BOL exception documents damage in
+transit, "this is a carrier claim, not a valid supplier deduction," i.e. relitigating *whose
+fault* the shortage was. That question isn't one of the six checks
+(`uom`/`split_shipment`/`timeline`/`trade_agreement`/`duplicate`/`substitution`) the Reviewer's
+own `review_findings` schema defines, and s01's designed trap is precisely that everything
+genuinely agrees — the carrier's BOL acknowledgment is supporting evidence *for* the shortage
+being real, not grounds to redirect liability. Fixed by scoping the Reviewer's prompt explicitly
+to those six checks and telling it not to introduce dispute grounds outside them, specifically
+calling out liability-apportionment arguments as out of scope. Confirmed live across two
+separate full-suite runs after this fix (see below).
+
+**5. Investigator cents/dollars calculation bug, found while diagnosing #4, not
+independently sought out.** The same s01 trace showed the Investigator's CaseFile had
+`discrepancy_amount_cents: 300000` where it should be `3000` (12 units × 250-cents-per-unit
+`unit_price` = 3000 cents = $30, matching `docs/SPEC.md`'s own worked example for this exact
+scenario) — the model read `unit_price: 250` as $250 and multiplied by 100 again converting to
+cents, a 100x error. Nothing in `INVESTIGATOR_SYSTEM_PROMPT` said `unit_price`/amounts were
+already in cents. This wasn't caught by any test because no test asserts on
+`discrepancy_amount_cents`'s value and it doesn't fail the ground-truth verdict check directly
+— but it was the reasoning fuel behind the Reviewer's fix #4 tangent, and is a real correctness
+bug in its own right (would corrupt dispute-packet dollar amounts). Fixed by stating explicitly
+in step 4 that `unit_price` and all amounts are already USD cents, with no additional
+conversion.
+
+**Verification discipline**: every fix in this session was confirmed by re-running the actual
+live pipeline (`cli.run_claim` and/or the integration test) and reading the resulting
+`reasoning_trace.json`, not just by re-running unit tests or assuming the prompt change worked.
+Fix #4 in particular was caught only because a second live full-suite run was done after the
+first (insufficient) attempt — a single passing live run should not be treated as proof a
+prompt fix actually addressed the root cause, given documented run-to-run model variance.
+
+`pytest tests/` — 118 passed, 0 failed, 7 deselected (unit suite unaffected by these prompt-only
+changes). **Live**: `pytest tests/test_pipeline_scenarios.py -m integration -v` — 7/7 passed,
+confirmed on a full run after all five fixes above (s06, previously flagged as flaky, also
+passed clean this run — consistent with the "genuine model variance, not a bug" read from
+Layer 9).
+
+---
+
 ## Previous layer
 **Layer 8 — `cli/run_claim.py` + `cli/run_all.py` complete**
 
@@ -437,27 +515,19 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-The Layer 1-9 build order is now complete. What's left is fixing the two reproducible live
-failures the Layer 9 integration run surfaced (see "Known issues" below), not new layers:
+The Layer 1-9 build order is complete, and the follow-up session above fixed and live-confirmed
+(7/7) both reproducible failures the Layer 9 integration run originally surfaced, plus two more
+bugs found while diagnosing them (see "Follow-up session" above for full detail on all five
+fixes). Nothing outstanding is known to be broken. Suggested next steps, in rough priority
+order:
 
-1. **Priority fix — s04's investigator uses the wrong ID.** `agents/investigator.py`'s
-   `INVESTIGATOR_SYSTEM_PROMPT` needs to explicitly say that `get_po`/`get_asns_for_po`/
-   `get_invoice`/`get_receiving_record` all take the PO ID *returned by* `get_deduction_claim`,
-   not the claim ID itself — right now the model has to infer that, and Haiku got it wrong on
-   s04 both times it was run live. This is a prompt fix per `CLAUDE.md` ("change agent prompts
-   or tool logic instead" of fixtures). After fixing, re-run
-   `pytest tests/test_pipeline_scenarios.py -m integration -v -k s04` live to confirm.
-2. **s01's reviewer overturns a clean-agreement case.** Reproducible across 2 live runs
-   (`OVERTURN` both times, expected `CONFIRM`). Worth a closer look at
-   `REVIEWER_SYSTEM_PROMPT` (`agents/reviewer.py`) — possibly it's too aggressive about finding
-   something to dispute even when the Investigator's case is genuinely solid. Re-run live after
-   any prompt change.
-3. **s06 was flaky, not reproducible** (failed once, passed once) — lower priority; revisit only
-   if it recurs.
-
-Re-run the full `pytest tests/test_pipeline_scenarios.py -m integration -v` suite after any
-fix, and budget for genuine run-to-run variance (see s06) rather than expecting bit-for-bit
-reproducibility even at `temperature=0`.
+1. **Run the live suite a few more times** before trusting 7/7 as stable — this project's own
+   experience this session (s01 needed a second live-verified fix after the first one looked
+   plausible but wasn't sufficient) is a specific reason not to treat one clean live run as
+   proof, even though unit tests can't catch prompt-level regressions at all.
+2. Nothing else is currently flagged. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
+   orchestration, SKU-to-product-name mapping, heterogeneous mock data sources, API-facing
+   deployment concerns) only if the user asks to expand scope beyond the original 9-layer build.
 
 ## Layer status
 
@@ -523,17 +593,30 @@ reproducibility even at `temperature=0`.
   against s07's fixtures.
 
 ## Known issues / decisions pending
-- **Open — found during Layer 9's first live 7-scenario run, not yet fixed**: s04's
-  Investigator calls `get_po`/`get_asns_for_po`/`get_invoice`/`get_receiving_record` with
-  `po_id="CLM-004"` (the claim ID) instead of the actual PO ID (`PO-004`), so every one of
-  those calls errors out and the Investigator proposes `ESCALATE` instead of `INVALID` on
-  almost no evidence. Reproduced on both live runs this session. Root cause: nothing in
-  `INVESTIGATOR_SYSTEM_PROMPT` explicitly says these tools take the PO ID from
-  `get_deduction_claim`'s response, not the claim ID — see "Next session" above for the fix.
-- **Open — found during Layer 9's first live 7-scenario run, not yet fixed**: s01's Reviewer
-  returns `OVERTURN` instead of `CONFIRM` for the scenario where every document genuinely
-  agrees. Reproduced on both live runs this session (not a one-off). Not yet root-caused —
-  see "Next session" above.
+- **Resolved (follow-up session, see above)**: s04's Investigator was calling
+  `get_po`/`get_asns_for_po`/`get_invoice`/`get_receiving_record` with `po_id="CLM-004"` (the
+  claim ID) instead of the actual PO ID (`PO-004`). Fixed by making `INVESTIGATOR_SYSTEM_PROMPT`
+  state explicitly that these tools take the PO ID from `get_deduction_claim`'s response, not
+  the claim ID. The identical bug was then found in the Reviewer too (not previously noticed)
+  and fixed the same way. Confirmed live, 7/7.
+- **Resolved (follow-up session, see above)**: s04's Investigator also identified its own
+  timeline violation finding but didn't act on it (proposed `VALID` despite noting the invoice
+  predates the shipment). Fixed by stating explicitly that a sequence violation is grounds for
+  `INVALID` regardless of otherwise-clean quantities.
+- **Resolved (follow-up session, see above)**: s01's Reviewer returned `OVERTURN` instead of
+  `CONFIRM` for the scenario where every document genuinely agrees — not a manufactured
+  disagreement but real, out-of-scope analysis (a carrier-liability argument outside the six
+  defined review checks). Fixed by scoping the Reviewer's prompt to exactly its six checks and
+  naming liability apportionment as explicitly out of scope. A first attempted fix ("CONFIRM is
+  a valid outcome, don't overturn just to justify the check") was insufficient by itself — this
+  was only caught by reading the actual reasoning trace from a second live full-suite run, not
+  by assuming the first fix worked.
+- **Resolved (follow-up session, see above)**: found while diagnosing the s01 issue — the
+  Investigator's `discrepancy_amount_cents` was 100x too large (300000 instead of 3000) because
+  it treated `unit_price` (already cents-per-unit per `docs/SPEC.md`) as dollars and converted
+  to cents again. Fixed by stating explicitly in the prompt that `unit_price`/amounts are
+  already in cents. Not caught by any test (nothing asserts on this field's value), only by
+  reading a live reasoning trace.
 - Cross-document referential integrity (po_id/sku consistency) is now enforced by
   `tests/test_fixtures.py`, not at the model layer — this is intentional; models stay
   single-document, fixture-level tests catch cross-file drift.
