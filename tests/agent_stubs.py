@@ -10,9 +10,10 @@ from openai.types.chat.chat_completion_message_tool_call import (
     ChatCompletionMessageToolCallUnion,
     Function,
 )
+from openai.types.completion_usage import CompletionUsage
 
 
-def make_completion(content=None, tool_calls=None):
+def make_completion(content=None, tool_calls=None, usage=None):
     parsed_tool_calls: list[ChatCompletionMessageToolCallUnion] | None = (
         [
             ChatCompletionMessageToolCall(
@@ -38,12 +39,21 @@ def make_completion(content=None, tool_calls=None):
         message=message,
         finish_reason="tool_calls" if tool_calls else "stop",
     )
+    parsed_usage = None
+    if usage is not None:
+        prompt_tokens, completion_tokens = usage
+        parsed_usage = CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
     return ChatCompletion(
         id="chatcmpl-test",
         choices=[choice],
         created=0,
         model="test-model",
         object="chat.completion",
+        usage=parsed_usage,
     )
 
 

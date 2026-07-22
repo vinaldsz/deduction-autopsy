@@ -5,7 +5,7 @@ from fastmcp import Client
 
 from openai import APIStatusError
 
-from agents.base import AgentRunner, AgentRunnerError
+from agents.base import AgentRunner, AgentRunnerError, TokenUsage
 from mcp_server.server import mcp
 from tests.agent_stubs import (
     StubAsyncOpenAI,
@@ -324,6 +324,60 @@ async def test_backoff_durations_grow_exponentially():
 
     assert result.final_text == "Done."
     assert sleep.calls == [1.0, 2.0]
+
+
+async def test_usage_accumulated_from_single_completion():
+    stub = StubAsyncOpenAI([make_completion(content="Done.", usage=(100, 20))])
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+        )
+        result = await runner.run("Investigate claim CLM-001.")
+
+    assert result.usage == TokenUsage(prompt_tokens=100, completion_tokens=20)
+
+
+async def test_usage_summed_across_tool_call_turns(monkeypatch):
+    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(
+                tool_calls=[{"id": "call_1", "name": "get_po", "args": {"po_id": "PO-001"}}],
+                usage=(50, 10),
+            ),
+            make_completion(content="Done.", usage=(30, 5)),
+        ]
+    )
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+        )
+        result = await runner.run("Look up PO-001.")
+
+    assert result.usage == TokenUsage(prompt_tokens=80, completion_tokens=15)
+
+
+async def test_usage_defaults_to_zero_when_response_usage_is_none():
+    stub = StubAsyncOpenAI([make_completion(content="No discrepancy found.")])
+
+    async with Client(mcp) as mcp_client:
+        runner = AgentRunner(
+            openai_client=stub,
+            mcp_client=mcp_client,
+            model="test-model",
+            system_prompt="You are a test agent.",
+        )
+        result = await runner.run("Investigate claim CLM-001.")
+
+    assert result.usage == TokenUsage()
 
 
 async def test_mcp_tool_schema_translation():

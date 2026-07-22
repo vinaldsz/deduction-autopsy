@@ -20,10 +20,23 @@ class ToolCallRecord:
 
 
 @dataclass
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+        )
+
+
+@dataclass
 class AgentResult:
     final_text: str
     trace: list[ToolCallRecord] = field(default_factory=list)
     messages: list[dict] = field(default_factory=list)
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 class AgentRunnerError(RuntimeError):
@@ -40,6 +53,13 @@ def _to_jsonable(value: Any) -> Any:
 
 def _serialize_tool_result(data: Any) -> str:
     return json.dumps(_to_jsonable(data))
+
+
+def _usage_from_response(response: Any) -> TokenUsage:
+    usage = response.usage
+    if usage is None:
+        return TokenUsage()
+    return TokenUsage(prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens)
 
 
 def _is_retryable_transport_error(exc: Exception) -> bool:
@@ -117,14 +137,16 @@ class AgentRunner:
             {"role": "user", "content": user_message},
         ]
         trace: list[ToolCallRecord] = []
+        usage = TokenUsage()
 
         for _ in range(self._max_iterations):
             response = await self._create_completion(messages, tools)
+            usage = usage + _usage_from_response(response)
             msg = response.choices[0].message
 
             if not msg.tool_calls:
                 messages.append({"role": "assistant", "content": msg.content})
-                return AgentResult(final_text=msg.content or "", trace=trace, messages=messages)
+                return AgentResult(final_text=msg.content or "", trace=trace, messages=messages, usage=usage)
 
             messages.append(
                 {

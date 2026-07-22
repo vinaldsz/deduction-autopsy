@@ -18,6 +18,7 @@ def write_verdict_json(
     final_verdict: str,
     confidence: float,
     timestamp: str,
+    usage: dict,
 ) -> Path:
     path = _claim_dir(output_dir, claim_id) / "verdict.json"
     path.write_text(
@@ -29,6 +30,7 @@ def write_verdict_json(
                 "final_verdict": final_verdict,
                 "confidence": confidence,
                 "timestamp": timestamp,
+                "usage": usage,
             },
             indent=2,
         )

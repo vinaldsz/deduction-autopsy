@@ -115,6 +115,10 @@ async def test_happy_path_valid_confirmed_no_dispute_packet(monkeypatch, tmp_pat
         "final_verdict": "VALID",
         "confidence": 0.97,
         "timestamp": verdict["timestamp"],
+        "usage": {
+            "investigator": {"prompt_tokens": 0, "completion_tokens": 0},
+            "reviewer": {"prompt_tokens": 0, "completion_tokens": 0},
+        },
     }
 
 
@@ -212,6 +216,36 @@ async def test_missing_required_field_triggers_correction_retry(monkeypatch, tmp
         m for m in stub.requests[1]["messages"] if m["role"] == "user"
     )
     assert "could not be parsed" in second_attempt_user_message["content"]
+
+
+async def test_verdict_json_sums_usage_across_investigator_retries(monkeypatch, tmp_path):
+    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
+    incomplete = json.dumps({"claim_id": "CLM-001"})  # missing po_summary/timeline/etc.
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(content=incomplete, usage=(40, 5)),
+            make_completion(content=VALID_CASE_FILE_JSON, usage=(60, 15)),
+            make_completion(content=confirm_json("CLM-001"), usage=(25, 8)),
+        ]
+    )
+
+    async with Client(mcp) as mcp_client:
+        result = await run_pipeline(
+            claim_id="CLM-001",
+            scenario="s01_clean_shortage",
+            openai_client=stub,
+            mcp_client=mcp_client,
+            output_dir=tmp_path,
+        )
+
+    expected_usage = {
+        "investigator": {"prompt_tokens": 100, "completion_tokens": 20},
+        "reviewer": {"prompt_tokens": 25, "completion_tokens": 8},
+    }
+    assert result.usage == expected_usage
+
+    verdict = json.loads((tmp_path / "CLM-001" / "verdict.json").read_text())
+    assert verdict["usage"] == expected_usage
 
 
 async def test_missing_required_tool_call_triggers_correction_retry(monkeypatch, tmp_path):

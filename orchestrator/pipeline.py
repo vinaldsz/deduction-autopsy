@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from agents.base import AgentResult, ToolCallRecord
+from agents.base import AgentResult, TokenUsage, ToolCallRecord
 from agents.investigator import run_investigator
 from agents.reviewer import run_reviewer
 from orchestrator.config import SETTINGS
@@ -87,6 +87,7 @@ class PipelineResult:
     final_verdict: str
     confidence: float
     output_dir: Path
+    usage: dict
 
 
 REQUIRED_TOOL_CALLS: dict[str, Callable[[list[ToolCallRecord]], bool]] = {
@@ -157,10 +158,11 @@ async def _run_investigator_until_valid(
     scenario: str,
     max_attempts: int,
     on_tool_call: Callable[[ToolCallRecord], None] | None = None,
-) -> tuple[AgentResult, CaseFile]:
+) -> tuple[AgentResult, CaseFile, TokenUsage]:
     correction: str | None = None
     last_error = ""
     check = _required_tool_call_check(scenario)
+    total_usage = TokenUsage()
 
     for _ in range(max_attempts):
         result = await run_investigator(
@@ -170,6 +172,7 @@ async def _run_investigator_until_valid(
             extra_instructions=correction,
             on_tool_call=on_tool_call,
         )
+        total_usage = total_usage + result.usage
 
         try:
             case_file = CaseFile.model_validate(json.loads(_extract_json(result.final_text)))
@@ -193,7 +196,7 @@ async def _run_investigator_until_valid(
             )
             continue
 
-        return result, case_file
+        return result, case_file, total_usage
 
     raise PipelineError(
         f"Investigator failed to produce a valid CaseFile for {claim_id} after "
@@ -248,7 +251,7 @@ async def run_pipeline(
             )
             mcp_client = await stack.enter_async_context(Client(transport))
 
-        investigator_result, case_file = await _run_investigator_until_valid(
+        investigator_result, case_file, investigator_usage = await _run_investigator_until_valid(
             openai_client=openai_client,
             mcp_client=mcp_client,
             claim_id=claim_id,
@@ -276,6 +279,16 @@ async def run_pipeline(
 
         final_verdict = _resolve_final_verdict(case_file.proposed_verdict, reviewer_output.final_verdict)
         timestamp = datetime.now(timezone.utc).isoformat()
+        usage = {
+            "investigator": {
+                "prompt_tokens": investigator_usage.prompt_tokens,
+                "completion_tokens": investigator_usage.completion_tokens,
+            },
+            "reviewer": {
+                "prompt_tokens": reviewer_result.usage.prompt_tokens,
+                "completion_tokens": reviewer_result.usage.completion_tokens,
+            },
+        }
 
         write_verdict_json(
             output_dir,
@@ -285,6 +298,7 @@ async def run_pipeline(
             final_verdict=final_verdict,
             confidence=reviewer_output.confidence,
             timestamp=timestamp,
+            usage=usage,
         )
         write_reasoning_trace_json(
             output_dir,
@@ -309,4 +323,5 @@ async def run_pipeline(
             final_verdict=final_verdict,
             confidence=reviewer_output.confidence,
             output_dir=output_dir,
+            usage=usage,
         )

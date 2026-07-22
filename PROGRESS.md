@@ -1,6 +1,87 @@
 # Progress
 
 ## Current layer
+**Layer 14 — Token/cost usage capture complete**
+
+Built per `docs/PLAN.md`'s Layer 14 section: nothing previously read `response.usage` from
+OpenRouter's chat-completions responses, so there was no way to answer "what did a claim
+actually cost" without external log-scraping. Added a `usage` block to `verdict.json` matching
+`docs/SPEC.md`'s documented schema (`{"investigator": {"prompt_tokens", "completion_tokens"},
+"reviewer": {...}}` — token counts only, no dollar-cost field, no `total_tokens`).
+
+**Two scope decisions confirmed with the user before implementing** (see this session's plan):
+sum usage across *all* Investigator attempts in `_run_investigator_until_valid`'s retry loop,
+including CaseFile-validation attempts that get discarded — every attempt burns real OpenRouter
+tokens regardless of whether its output survives, so the total must reflect actual spend, not
+just the winning attempt; and scope is `verdict.json` only, no CLI/UI display this layer (that
+stays future work, consistent with Layer 19+'s UI and any future CLI tweak).
+
+**`agents/base.py`**: new `TokenUsage` dataclass (`prompt_tokens`/`completion_tokens`, with
+`__add__` for the two call sites that need to sum it) alongside the existing
+`ToolCallRecord`/`AgentResult`. `AgentResult` gained a `usage: TokenUsage` field. A new
+`_usage_from_response(response)` helper is the single point of contact with the raw SDK
+response — it guards `response.usage is None` (OpenRouter/some responses omit it) by returning
+a zeroed `TokenUsage`, so no other layer needs its own None-check. `AgentRunner.run()`'s loop
+accumulates `usage = usage + _usage_from_response(response)` after every `_create_completion`
+call, since a single `run()` call can invoke `create()` multiple times across tool-turn round
+trips before its final text-only response — all of them are summed into that one call's
+`AgentResult`.
+
+**`orchestrator/pipeline.py`**: `_run_investigator_until_valid` now returns
+`tuple[AgentResult, CaseFile, TokenUsage]` — accumulates `total_usage` immediately after every
+`run_investigator(...)` call, before the JSON-parse/tool-call-check branches that `continue` on
+failure, so discarded attempts still count toward the total. `run_pipeline` combines that
+investigator total with `reviewer_result.usage` directly (the Reviewer has no retry loop, so
+its single `AgentResult.usage` is already the full total) into the two-key dict passed to
+`write_verdict_json`. `PipelineResult` gained a matching `usage: dict` field, mirroring the
+existing pattern where every other `verdict.json` field already has a `PipelineResult`
+counterpart — a plain data addition, not a CLI/UI change, so it doesn't conflict with the
+"verdict.json only" scope decision (confirmed `cli/run_claim.py` only accesses `PipelineResult`
+fields by keyword, so no CLI edit was needed).
+
+**`orchestrator/output.py`**: `write_verdict_json` gained a required `usage: dict` kwarg,
+written into the JSON in the position SPEC.md's schema shows it (after `timestamp`). No other
+writer changed.
+
+**`tests/agent_stubs.py`**: `make_completion` gained an optional `usage: tuple[int, int] | None
+= None` param — when given, builds a real `openai.types.completion_usage.CompletionUsage` and
+attaches it to the scripted `ChatCompletion`; default `None` preserves every existing call
+site's behavior exactly (`ChatCompletion.usage` already defaults to `None`).
+
+**Tests**: 3 new in `tests/test_agents_base.py` (single-completion accumulation; usage summed
+across a tool-call turn plus a final text-only turn; None-usage guards to zero). Updated the
+one exact-dict `verdict.json` assertion in `tests/test_orchestrator_pipeline.py` to include the
+new `usage` key; added `test_verdict_json_sums_usage_across_investigator_retries` (a discarded
+failed-JSON attempt and the succeeding attempt each carry distinct `usage=(...)`, plus a
+distinct reviewer usage — asserts the written `verdict.json`'s `usage.investigator` is the
+**sum** of both investigator attempts, proving discarded attempts are counted, and
+`usage.reviewer` is just the reviewer's tokens; also asserted directly on the returned
+`PipelineResult.usage`). Updated both `write_verdict_json` call sites in
+`tests/test_orchestrator_output.py` to pass the now-required `usage` kwarg, with
+`test_write_verdict_json`'s expected-dict assertion extended to match.
+
+`pytest tests/` — 150 passed, 0 failed, 9 deselected (unit suite; +4 for this layer: 3 in
+`tests/test_agents_base.py`, 1 in `tests/test_orchestrator_pipeline.py`).
+
+**Live verification**: ran `python -m cli.run_claim --claim-id CLM-002 --scenario
+s02_casepack_mismatch` twice against real OpenRouter. Both runs wrote a `verdict.json` with a
+correctly-shaped, non-zero `usage` block for both agents (e.g. second run:
+`investigator: {prompt_tokens: 11552, completion_tokens: 1598}`, `reviewer: {prompt_tokens:
+13394, completion_tokens: 1264}`) — confirming the real SDK's `response.usage` shape lines up
+with what the stub tests exercise. **Unrelated observation, not caused by this layer's change**
+(usage capture only reads an existing response field, it does not touch prompts/reasoning): the
+first of the two live runs resolved `reviewer_verdict: OVERTURN` → `final_verdict: VALID`
+instead of s02's expected `CONFIRM` → `INVALID`, with the Reviewer citing a timeline violation
+(`invoice_date` before `receipt_date`) as grounds — the second run resolved correctly
+(`CONFIRM` → `INVALID`), with the *same* timeline observation now listed as a second, non-fatal
+dispute ground alongside the UOM match. This looks like the same category of run-to-run model
+variance already documented for s06 in Layer 9 and s04 in Layer 10, not a regression from this
+session's change — logging it here per this project's discipline of reporting live results
+honestly, but not investigating further since it's out of scope for a token-usage-capture layer.
+
+---
+
+## Previous layer
 **Layer 13 — retry/backoff + timeout around OpenRouter calls complete**
 
 Built per `docs/PLAN.md`'s Layer 13 section, directly on top of Layer 12's

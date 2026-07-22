@@ -35,6 +35,10 @@ SAMPLE_REVIEWER_OUTPUT = ReviewerOutput.model_validate(
 
 
 def test_write_verdict_json(tmp_path):
+    usage = {
+        "investigator": {"prompt_tokens": 10, "completion_tokens": 2},
+        "reviewer": {"prompt_tokens": 8, "completion_tokens": 3},
+    }
     path = write_verdict_json(
         tmp_path,
         claim_id="CLM-002",
@@ -43,6 +47,7 @@ def test_write_verdict_json(tmp_path):
         final_verdict="INVALID",
         confidence=0.97,
         timestamp="2024-02-05T00:00:00+00:00",
+        usage=usage,
     )
 
     assert path == tmp_path / "CLM-002" / "verdict.json"
@@ -53,6 +58,7 @@ def test_write_verdict_json(tmp_path):
         "final_verdict": "INVALID",
         "confidence": 0.97,
         "timestamp": "2024-02-05T00:00:00+00:00",
+        "usage": usage,
     }
 
 
@@ -111,6 +117,7 @@ def test_claim_directory_is_created(tmp_path):
         final_verdict="INVALID",
         confidence=0.97,
         timestamp="2024-02-05T00:00:00+00:00",
+        usage={"investigator": {"prompt_tokens": 0, "completion_tokens": 0}, "reviewer": {"prompt_tokens": 0, "completion_tokens": 0}},
     )
 
     assert (output_dir / "CLM-002" / "verdict.json").exists()
