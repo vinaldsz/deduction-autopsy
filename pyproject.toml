@@ -19,6 +19,7 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["."]
 markers = [
     "integration: hits the real OpenRouter API (costs money, takes time); run explicitly with -m integration",
 ]
