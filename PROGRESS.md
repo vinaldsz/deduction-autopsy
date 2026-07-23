@@ -66,7 +66,10 @@ elsewhere), no changes to `packages.find` (that config was already correct — c
 same failed run reporting zero errors importing `orchestrator`/`cli`/`agents`/`mcp_server`,
 only `tests`).
 
-`gh run watch` result after pushing the fix: **[to fill in after the second push below]**
+`gh run watch` result after pushing the fix (run 29978845472): **both matrix jobs passed** —
+`test (3.11)` and `test (3.12)`, 26s/24s respectively. Confirmed via `gh run view --log`:
+`150 passed, 9 deselected in 2.91s` on both Python versions, matching Layer 14's local
+baseline exactly. First real green CI run for this project.
 
 ---
 
