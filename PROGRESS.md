@@ -1,6 +1,52 @@
 # Progress
 
 ## Current layer
+**Layer 15 — CI (`.github/workflows/tests.yml`) complete**
+
+Built per `docs/PLAN.md`'s Layer 15 section: no CI existed before this — the unit suite only
+ran when someone remembered to run `pytest tests/` locally. Added
+`.github/workflows/tests.yml`: triggers on `push`/`pull_request`, matrix over Python `3.11`
+and `3.12` (confirmed with the user rather than guessing which the plan's "3.11+ only" meant
+— chose the two-version matrix over just `3.11` alone, since this repo's actual dev
+environment runs 3.12 and a second matrix job costs an extra parallel Actions job, not extra
+wall-clock time), installs via `pip install -e ".[dev]"`, and runs `pytest tests/ -v`. No
+secrets/API key needed in CI: `pyproject.toml`'s existing `addopts = "-m 'not integration'"`
+already excludes the OpenRouter-hitting integration suite from a plain `pytest tests/` run,
+so the workflow never needs `OPENROUTER_API_KEY`. `.gitignore` already covered everything
+relevant (`.venv/`, `__pycache__/`, `outputs/`, etc.) — no changes needed there.
+
+Updated `README.md`: layer-status table extended with rows 12-15 (12-14 had been built in
+prior sessions but never backfilled into the table), plus a CI status badge at the top
+linking to the new workflow.
+
+**Local verification was blocked by unrelated system resource contention, not a code or
+workflow problem — diagnosed rather than assumed.** `pytest tests/ -v` hung indefinitely at
+"collecting ..." (one run sat for 31 minutes at ~0% CPU before being killed). Bisected
+methodically rather than guessing: single-file `--collect-only` eventually completed (slowly,
+13s+) but seemed to hang across multiple files; lowering to a bare `import openai` (no pytest,
+no test code at all) *still* hung the same way, ruling out both this session's changes (`git
+status` showed only `README.md` modified and `.github/` untracked — no test/source file
+touched) and the test suite's own code as the cause. `ps aux -r` found the real cause:
+`cloudd` (94% CPU), `fileproviderd` (65%), `ApplicationsStorageExtension` (63%), and `bird`
+(40%) — an iCloud/FileProvider sync or indexing storm — had pushed load average to ~18-20
+with ~60MB free memory, starving every other process on the machine of CPU regardless of what
+it was doing. Confirmed with the user this reads as local machine contention, not a project
+bug, and that OpenRouter couldn't be involved either way (unit tests use a stubbed client, and
+the hang reproduced on a bare import before any network call could occur).
+
+**Per explicit user decision, did not wait out the local contention** — pushing this layer and
+letting the actual GitHub Actions run (on a clean, unaffected runner) serve as the real
+verification was judged better proof of the workflow file's correctness than another local
+run blocked by an unrelated system issue. Last known-good local baseline remains Layer 14's
+session: `pytest tests/` — 150 passed, 0 failed, 9 deselected; nothing in `tests/`, `agents/`,
+`orchestrator/`, `mcp_server/`, or `cli/` changed this session, only `README.md` and the new
+`.github/workflows/tests.yml`.
+
+`gh run watch` result after pushing: **[to fill in after the push below]**
+
+---
+
+## Previous layer
 **Layer 14 — Token/cost usage capture complete**
 
 Built per `docs/PLAN.md`'s Layer 14 section: nothing previously read `response.usage` from

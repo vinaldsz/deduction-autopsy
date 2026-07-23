@@ -1,5 +1,7 @@
 # Deduction Autopsy
 
+[![Tests](https://github.com/vinaldsz/deduction-autopsy/actions/workflows/tests.yml/badge.svg)](https://github.com/vinaldsz/deduction-autopsy/actions/workflows/tests.yml)
+
 A two-agent reconciliation system that investigates CPG retailer deduction claims and
 determines whether they are **valid**, **invalid** (disputable), or **ambiguous**
 (escalate to a human).
@@ -32,6 +34,10 @@ authoritative, up-to-date state). All layers are complete:
 | 9 | Integration tests + README | ✅ Done |
 | 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
 | 11 | CLI demo mode (`--explain` flag) | ✅ Done |
+| 12 | `orchestrator/config.py` (consolidated settings) | ✅ Done |
+| 13 | Retry/backoff + timeout around OpenRouter calls | ✅ Done |
+| 14 | Token/cost usage capture | ✅ Done |
+| 15 | CI (`.github/workflows/tests.yml`) | ✅ Done |
 
 ## Setup
 
