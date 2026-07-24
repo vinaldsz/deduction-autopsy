@@ -190,7 +190,18 @@ scenarios/s0N_name/
 
 ---
 
-## Output Artifacts (`outputs/{claim_id}/`)
+## Output Artifacts (`outputs/{claim_id}/{run_id}/`)
+
+Each run writes into its own `run_id` subdirectory (default: a UTC timestamp,
+`YYYYMMDDThhmmssZ`; overridable via `--run-id`) so reruns are archived side by side instead
+of overwriting — `reasoning_trace.json` is a documented audit artifact and must not be
+clobbered. `outputs/{claim_id}/latest` is a relative symlink to the newest run for the common
+"show me the last run" case. `run_all` uses one shared `run_id` across every claim in the batch.
+
+```
+outputs/<claim_id>/<run_id>/{verdict.json, reasoning_trace.json, dispute_packet.md}
+outputs/<claim_id>/latest -> <run_id>
+```
 
 | File | When written | Contents |
 |---|---|---|

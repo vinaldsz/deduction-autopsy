@@ -102,12 +102,15 @@ async def test_happy_path_valid_confirmed_no_dispute_packet(monkeypatch, tmp_pat
     assert result.reviewer_verdict == "CONFIRM"
     assert result.final_verdict == "VALID"
 
-    claim_dir = tmp_path / "CLM-001"
-    assert (claim_dir / "verdict.json").exists()
-    assert (claim_dir / "reasoning_trace.json").exists()
-    assert not (claim_dir / "dispute_packet.md").exists()
+    run_dir = result.run_dir
+    assert run_dir == tmp_path / "CLM-001" / result.run_id
+    # `latest` symlink resolves to the run just written.
+    assert (tmp_path / "CLM-001" / "latest").resolve() == run_dir.resolve()
+    assert (run_dir / "verdict.json").exists()
+    assert (run_dir / "reasoning_trace.json").exists()
+    assert not (run_dir / "dispute_packet.md").exists()
 
-    verdict = json.loads((claim_dir / "verdict.json").read_text())
+    verdict = json.loads((run_dir / "verdict.json").read_text())
     assert verdict == {
         "claim_id": "CLM-001",
         "investigator_verdict": "VALID",
@@ -120,6 +123,63 @@ async def test_happy_path_valid_confirmed_no_dispute_packet(monkeypatch, tmp_pat
             "reviewer": {"prompt_tokens": 0, "completion_tokens": 0},
         },
     }
+
+
+async def test_reruns_are_archived_side_by_side_and_latest_repoints(monkeypatch, tmp_path):
+    """Layer 17: two runs with distinct run_ids both persist (no clobber) and `latest` follows
+    the newest run."""
+    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
+
+    async def _run(run_id: str):
+        stub = StubAsyncOpenAI(
+            [
+                make_completion(content=VALID_CASE_FILE_JSON),
+                make_completion(content=confirm_json("CLM-001")),
+            ]
+        )
+        async with Client(mcp) as mcp_client:
+            return await run_pipeline(
+                claim_id="CLM-001",
+                scenario="s01_clean_shortage",
+                openai_client=stub,
+                mcp_client=mcp_client,
+                output_dir=tmp_path,
+                run_id=run_id,
+            )
+
+    first = await _run("20240101T000000Z")
+    second = await _run("20240102T000000Z")
+
+    # Both runs' artifacts coexist — the earlier audit trail is not overwritten.
+    assert (first.run_dir / "verdict.json").exists()
+    assert (second.run_dir / "verdict.json").exists()
+    assert first.run_dir != second.run_dir
+    # `latest` points at the most recent run.
+    assert (tmp_path / "CLM-001" / "latest").resolve() == second.run_dir.resolve()
+
+
+async def test_run_id_defaults_to_a_generated_timestamp(monkeypatch, tmp_path):
+    """Omitting run_id auto-generates one so the default path is non-overwriting too."""
+    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
+    stub = StubAsyncOpenAI(
+        [
+            make_completion(content=VALID_CASE_FILE_JSON),
+            make_completion(content=confirm_json("CLM-001")),
+        ]
+    )
+
+    async with Client(mcp) as mcp_client:
+        result = await run_pipeline(
+            claim_id="CLM-001",
+            scenario="s01_clean_shortage",
+            openai_client=stub,
+            mcp_client=mcp_client,
+            output_dir=tmp_path,
+        )
+
+    assert result.run_id
+    assert result.run_dir == tmp_path / "CLM-001" / result.run_id
+    assert result.run_dir.is_dir()
 
 
 async def test_constructs_openai_client_with_configured_timeout(monkeypatch, tmp_path):
@@ -184,9 +244,8 @@ async def test_happy_path_invalid_confirmed_writes_dispute_packet(monkeypatch, t
         )
 
     assert result.final_verdict == "INVALID"
-    claim_dir = tmp_path / "CLM-002"
-    assert (claim_dir / "dispute_packet.md").exists()
-    packet = (claim_dir / "dispute_packet.md").read_text()
+    assert (result.run_dir / "dispute_packet.md").exists()
+    packet = (result.run_dir / "dispute_packet.md").read_text()
     assert "Normalized quantities match: 5 CASE = 120 EACH" in packet
     assert "120" in packet
 
@@ -244,7 +303,7 @@ async def test_verdict_json_sums_usage_across_investigator_retries(monkeypatch, 
     }
     assert result.usage == expected_usage
 
-    verdict = json.loads((tmp_path / "CLM-001" / "verdict.json").read_text())
+    verdict = json.loads((result.run_dir / "verdict.json").read_text())
     assert verdict["usage"] == expected_usage
 
 

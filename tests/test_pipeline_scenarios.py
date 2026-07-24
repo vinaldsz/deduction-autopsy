@@ -34,8 +34,8 @@ pytestmark = [
 ]
 
 
-def _investigator_tool_names(output_dir: Path, claim_id: str) -> set[str]:
-    trace_path = output_dir / claim_id / "reasoning_trace.json"
+def _investigator_tool_names(run_dir: Path) -> set[str]:
+    trace_path = run_dir / "reasoning_trace.json"
     trace = json.loads(trace_path.read_text())
     names = set()
     for message in trace["investigator"]:
@@ -55,10 +55,11 @@ async def test_scenario_matches_ground_truth(case, tmp_path):
     assert result.investigator_verdict == case["expected_investigator"]
     assert result.reviewer_verdict == case["expected_reviewer"]
 
-    claim_dir = tmp_path / case["claim_id"]
-    assert (claim_dir / "verdict.json").exists()
-    assert (claim_dir / "reasoning_trace.json").exists()
-    assert (claim_dir / "dispute_packet.md").exists() == (result.final_verdict == "INVALID")
+    run_dir = result.run_dir
+    assert (tmp_path / case["claim_id"] / "latest").resolve() == run_dir.resolve()
+    assert (run_dir / "verdict.json").exists()
+    assert (run_dir / "reasoning_trace.json").exists()
+    assert (run_dir / "dispute_packet.md").exists() == (result.final_verdict == "INVALID")
 
     required_check = REQUIRED_TOOL_CALLS.get(case["scenario"][:3])
     if required_check is not None:
@@ -69,7 +70,7 @@ async def test_scenario_matches_ground_truth(case, tmp_path):
             "s07": "list_claims_for_po",
             "s08": "list_claims_for_po",
         }[case["scenario"][:3]]
-        assert required_tool in _investigator_tool_names(tmp_path, case["claim_id"])
+        assert required_tool in _investigator_tool_names(result.run_dir)
 
 
 async def test_reviewer_overturns_a_missed_duplicate(monkeypatch):

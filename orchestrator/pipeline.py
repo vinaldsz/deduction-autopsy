@@ -16,6 +16,8 @@ from agents.investigator import run_investigator
 from agents.reviewer import run_reviewer
 from orchestrator.config import SETTINGS
 from orchestrator.output import (
+    make_run_id,
+    prepare_run_dir,
     write_dispute_packet_md,
     write_reasoning_trace_json,
     write_verdict_json,
@@ -102,6 +104,8 @@ class PipelineResult:
     final_verdict: str
     confidence: float
     output_dir: Path
+    run_id: str
+    run_dir: Path
     usage: dict
 
 
@@ -260,12 +264,14 @@ async def run_pipeline(
     openai_client: Any | None = None,
     mcp_client: Any | None = None,
     output_dir: str | Path = "outputs",
+    run_id: str | None = None,
     max_investigator_attempts: int = SETTINGS.max_investigator_attempts,
     on_investigator_tool_call: Callable[[ToolCallRecord], None] | None = None,
     on_reviewer_tool_call: Callable[[ToolCallRecord], None] | None = None,
 ) -> PipelineResult:
     output_dir = Path(output_dir)
-    logger.info("pipeline_start claim_id=%s scenario=%s", claim_id, scenario)
+    run_id = run_id or make_run_id()
+    logger.info("pipeline_start claim_id=%s scenario=%s run_id=%s", claim_id, scenario, run_id)
 
     async with AsyncExitStack() as stack:
         if openai_client is None:
@@ -339,8 +345,9 @@ async def run_pipeline(
             },
         }
 
+        run_dir = prepare_run_dir(output_dir, claim_id, run_id)
         write_verdict_json(
-            output_dir,
+            run_dir,
             claim_id=claim_id,
             investigator_verdict=case_file.proposed_verdict,
             reviewer_verdict=reviewer_output.final_verdict,
@@ -350,14 +357,14 @@ async def run_pipeline(
             usage=usage,
         )
         write_reasoning_trace_json(
-            output_dir,
+            run_dir,
             claim_id=claim_id,
             investigator_messages=investigator_result.messages,
             reviewer_messages=reviewer_result.messages,
         )
         if final_verdict == "INVALID":
             write_dispute_packet_md(
-                output_dir,
+                run_dir,
                 claim_id=claim_id,
                 case_file=case_file,
                 reviewer_output=reviewer_output,
@@ -372,5 +379,7 @@ async def run_pipeline(
             final_verdict=final_verdict,
             confidence=reviewer_output.confidence,
             output_dir=output_dir,
+            run_id=run_id,
+            run_dir=run_dir,
             usage=usage,
         )

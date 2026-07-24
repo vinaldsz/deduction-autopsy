@@ -26,6 +26,7 @@ def test_parse_args_requires_claim_id_and_scenario():
 def test_parse_args_defaults():
     args = parse_args(["--claim-id", "CLM-001", "--scenario", "s01_clean_shortage"])
     assert args.output_dir == "outputs"
+    assert args.run_id is None
     assert args.max_attempts == 3
     assert args.explain is False
 
@@ -39,12 +40,15 @@ def test_parse_args_overrides():
             "s01_clean_shortage",
             "--output-dir",
             "custom_outputs",
+            "--run-id",
+            "demo-run",
             "--max-attempts",
             "5",
             "--explain",
         ]
     )
     assert args.output_dir == "custom_outputs"
+    assert args.run_id == "demo-run"
     assert args.max_attempts == 5
     assert args.explain is True
 
@@ -61,7 +65,12 @@ async def test_happy_path_prints_verdict_and_returns_zero(monkeypatch, tmp_path)
 
     async with Client(mcp) as mcp_client:
         exit_code = await main(
-            ["--claim-id", "CLM-001", "--scenario", "s01_clean_shortage", "--output-dir", str(tmp_path)],
+            [
+                "--claim-id", "CLM-001",
+                "--scenario", "s01_clean_shortage",
+                "--output-dir", str(tmp_path),
+                "--run-id", "demo-run",
+            ],
             openai_client=stub,
             mcp_client=mcp_client,
             console=console,
@@ -71,8 +80,12 @@ async def test_happy_path_prints_verdict_and_returns_zero(monkeypatch, tmp_path)
     output = console.export_text()
     assert "VALID" in output
     assert "CONFIRM" in output
-    assert str(tmp_path / "CLM-001") in output
-    assert (tmp_path / "CLM-001" / "verdict.json").exists()
+    # Display shows the archived run dir and the `latest` pointer.
+    assert str(tmp_path / "CLM-001" / "demo-run") in output
+    assert str(tmp_path / "CLM-001" / "latest") in output
+    # Artifacts land in the run dir, reachable via `latest`.
+    assert (tmp_path / "CLM-001" / "demo-run" / "verdict.json").exists()
+    assert (tmp_path / "CLM-001" / "latest" / "verdict.json").exists()
 
 
 async def test_pipeline_error_prints_message_and_returns_one(monkeypatch, tmp_path):

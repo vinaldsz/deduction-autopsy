@@ -1,16 +1,37 @@
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-def _claim_dir(output_dir: Path, claim_id: str) -> Path:
+def make_run_id() -> str:
+    """Default run id: a UTC timestamp that is filesystem-safe (no colons) and lexically sortable."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def prepare_run_dir(output_dir: Path, claim_id: str, run_id: str) -> Path:
+    """Create outputs/<claim_id>/<run_id>/ and (re)point outputs/<claim_id>/latest at it.
+
+    Artifacts are archived per run instead of overwriting outputs/<claim_id>/, so
+    reasoning_trace.json (a documented audit artifact) survives reruns. `latest` is a
+    *relative* symlink to the newest run_id, giving the common "show me the last run" case a
+    stable path without duplicating files.
+    """
     claim_dir = Path(output_dir) / claim_id
-    claim_dir.mkdir(parents=True, exist_ok=True)
-    return claim_dir
+    run_dir = claim_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    latest = claim_dir / "latest"
+    if latest.is_symlink() or latest.exists():
+        latest.unlink()
+    os.symlink(run_id, latest, target_is_directory=True)
+
+    return run_dir
 
 
 def write_verdict_json(
-    output_dir: Path,
+    run_dir: Path,
     *,
     claim_id: str,
     investigator_verdict: str,
@@ -20,7 +41,7 @@ def write_verdict_json(
     timestamp: str,
     usage: dict,
 ) -> Path:
-    path = _claim_dir(output_dir, claim_id) / "verdict.json"
+    path = Path(run_dir) / "verdict.json"
     path.write_text(
         json.dumps(
             {
@@ -39,13 +60,13 @@ def write_verdict_json(
 
 
 def write_reasoning_trace_json(
-    output_dir: Path,
+    run_dir: Path,
     *,
     claim_id: str,
     investigator_messages: list[dict],
     reviewer_messages: list[dict],
 ) -> Path:
-    path = _claim_dir(output_dir, claim_id) / "reasoning_trace.json"
+    path = Path(run_dir) / "reasoning_trace.json"
     path.write_text(
         json.dumps(
             {
@@ -60,7 +81,7 @@ def write_reasoning_trace_json(
 
 
 def write_dispute_packet_md(
-    output_dir: Path,
+    run_dir: Path,
     *,
     claim_id: str,
     case_file: Any,
@@ -93,6 +114,6 @@ def write_dispute_packet_md(
     else:
         lines.append("- (none provided)")
 
-    path = _claim_dir(output_dir, claim_id) / "dispute_packet.md"
+    path = Path(run_dir) / "dispute_packet.md"
     path.write_text("\n".join(lines) + "\n")
     return path

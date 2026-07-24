@@ -38,6 +38,8 @@ authoritative, up-to-date state). All layers are complete:
 | 13 | Retry/backoff + timeout around OpenRouter calls | ✅ Done |
 | 14 | Token/cost usage capture | ✅ Done |
 | 15 | CI (`.github/workflows/tests.yml`) | ✅ Done |
+| 16 | Structured logging | ✅ Done |
+| 17 | Non-overwriting output runs (`--run-id` + `latest`) | ✅ Done |
 
 ## Setup
 
@@ -72,7 +74,10 @@ Run all 8 scenarios and print a pass/fail table against ground truth:
 python -m cli.run_all
 ```
 
-Each claim run writes its artifacts to `outputs/<claim_id>/`:
+Each claim run writes its artifacts to `outputs/<claim_id>/<run_id>/` (the `run_id` defaults
+to a UTC timestamp, or pass `--run-id`), so reruns are archived side by side instead of
+overwriting. `outputs/<claim_id>/latest` is a symlink to the most recent run; `run_all` uses
+one shared `run_id` across every claim in the batch.
 
 - `verdict.json` — investigator/reviewer/final verdicts, confidence, timestamp (always written)
 - `reasoning_trace.json` — full message history for both agents, including every tool call (always written)

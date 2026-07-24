@@ -1,6 +1,69 @@
 # Progress
 
 ## Current layer
+**Layer 17 — Non-overwriting output runs complete**
+
+Built per `docs/PLAN.md`'s Layer 17 section. Before this, `outputs/<claim_id>/` was silently
+overwritten on every rerun — clobbering `reasoning_trace.json`, which `CLAUDE.md` calls out as
+a meaningful audit artifact. Now each run writes into its own `outputs/<claim_id>/<run_id>/`
+subdir, with a `latest` symlink for the common "show me the last run" case.
+
+**`orchestrator/output.py`**: added `make_run_id()` (UTC `%Y%m%dT%H%M%SZ` — filesystem-safe,
+no colons, lexically sortable; the single source of the default id) and
+`prepare_run_dir(output_dir, claim_id, run_id)` which creates `outputs/<claim_id>/<run_id>/`
+and atomically re-points `outputs/<claim_id>/latest` at it via a **relative** `os.symlink`
+(target is `run_id`, so the tree stays portable if moved). The three writers
+(`write_verdict_json`/`write_reasoning_trace_json`/`write_dispute_packet_md`) now take the
+already-prepared `run_dir` as their first positional arg and write into it directly; the old
+`_claim_dir` helper (which re-derived the path and `mkdir`'d three times) was removed — the
+pipeline calls `prepare_run_dir` once instead.
+
+**`orchestrator/pipeline.py`**: `run_pipeline` gained `run_id: str | None = None`, defaulted
+via `run_id = run_id or make_run_id()` so every caller (including integration tests) is
+non-overwriting by default. It calls `prepare_run_dir` once and passes the returned `run_dir`
+to all three writers. `PipelineResult` gained `run_id: str` and `run_dir: Path` (the base
+`output_dir` field is kept for backward compat). The `pipeline_start` log line now includes
+`run_id=`. The existing `verdict.json` `timestamp` (isoformat) is unchanged — `run_id` is a
+separate, path-safe value.
+
+**CLIs**: `cli/run_claim.py` gained `--run-id` (default `None` → pipeline generates a
+timestamp); `_print_result` now shows the run dir and the `latest` path instead of the old
+`output_dir/claim_id`. `cli/run_all.py` gained `--run-id` and computes **one shared** run id
+for the whole batch (`args.run_id or make_run_id()`), passing it to every `run_pipeline_fn`
+call so a single `run_all` invocation is correlatable across claims.
+
+**Docs**: `docs/SPEC.md`'s "Output Artifacts" section rewritten to document the
+`outputs/<claim_id>/<run_id>/` layout + `latest` symlink; `README.md`'s layer table backfilled
+with rows 16 and 17 and its output-artifacts description updated.
+
+**Tests**: `tests/test_orchestrator_output.py` rewritten for the new `run_dir` writer
+signature, plus new unit tests for `make_run_id` (format), `prepare_run_dir` (nested dir +
+relative `latest` symlink that resolves to the run; a second run doesn't clobber the first and
+repoints `latest`). `tests/test_orchestrator_pipeline.py`: existing path assertions moved to
+`result.run_dir`; added `test_reruns_are_archived_side_by_side_and_latest_repoints` and
+`test_run_id_defaults_to_a_generated_timestamp`. `tests/test_pipeline_scenarios.py`
+(integration): file-existence + trace-path assertions read `result.run_dir` and check the
+`latest` symlink resolves. `tests/test_cli_run_claim.py`: `--run-id` parse-arg coverage +
+happy-path asserts artifacts land in the run dir and are reachable via `latest`.
+`tests/test_cli_run_all.py`: fake `run_pipeline_fn` signatures updated to accept `run_id`, plus
+`test_batch_shares_one_run_id_across_all_claims` and
+`test_batch_run_id_defaults_to_one_shared_generated_id`.
+
+`pytest tests/` — **162 passed, 0 failed, 9 deselected** (unit suite; +7 for this layer: 3 in
+`test_orchestrator_output.py`, 2 in `test_orchestrator_pipeline.py`, 2 in
+`test_cli_run_all.py`). Run from a throwaway `/private/tmp` venv per this project's documented
+iCloud-eviction workaround (the on-Desktop `.venv` stalls pytest at collection).
+
+**Live smoke test** against real OpenRouter: ran `cli.run_claim --claim-id CLM-002 --scenario
+s02_casepack_mismatch` twice with `--run-id run-A` then `--run-id run-B`. Confirmed on the real
+filesystem: both `run-A/` and `run-B/` coexist (run-A retained all three artifacts including
+`reasoning_trace.json` — no clobber), and `latest -> run-B` (relative symlink to the newest
+run). No prompt/verdict logic changed this layer — purely output-path plumbing — so no
+full-scenario live re-verification was needed.
+
+---
+
+## Previous layer
 **Layer 16 — Structured logging complete**
 
 Built per `docs/PLAN.md`'s Layer 16 section. Before this, the only operator feedback was

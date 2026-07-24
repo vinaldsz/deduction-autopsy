@@ -12,12 +12,20 @@ from agents.base import AgentRunnerError
 from cli._common import configure_logging, ensure_api_key
 from orchestrator.config import SETTINGS
 from orchestrator.ground_truth import GROUND_TRUTH
+from orchestrator.output import make_run_id
 from orchestrator.pipeline import OPENROUTER_BASE_URL, PipelineError, run_pipeline
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run all 7 ground-truth scenarios end-to-end and print a pass/fail table."
+        description="Run all ground-truth scenarios end-to-end and print a pass/fail table."
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Shared run id for this batch (defaults to a UTC timestamp). Every scenario's "
+        "artifacts land under outputs/<claim_id>/<run-id>/, so one run_all invocation is "
+        "correlatable across claims.",
     )
     return parser.parse_args(argv)
 
@@ -29,14 +37,17 @@ async def main(
     console: Console | None = None,
     run_pipeline_fn: Callable[..., Awaitable[Any]] = run_pipeline,
 ) -> int:
-    # Takes no real options — this exists so `--help` and unrecognized arguments (e.g. a typo'd
-    # flag) fail fast with argparse's usage message instead of silently running all 7 scenarios
-    # for real against a live API key. Note: default here means "no args", NOT "use sys.argv" —
-    # argparse.parse_args(None) would fall back to real sys.argv, which breaks callers (tests)
-    # that omit argv entirely. Real __main__ invocation passes sys.argv[1:] explicitly below.
-    parse_args([] if argv is None else argv)
+    # parse_args also makes `--help`/unrecognized flags fail fast with a usage message instead
+    # of silently running every scenario for real against a live API key. Note: default here
+    # means "no args", NOT "use sys.argv" — argparse.parse_args(None) would fall back to real
+    # sys.argv, which breaks callers (tests) that omit argv entirely. Real __main__ invocation
+    # passes sys.argv[1:] explicitly below.
+    args = parse_args([] if argv is None else argv)
     configure_logging()
     console = console or Console()
+
+    # One shared run id across the whole batch so a single run_all is correlatable across claims.
+    run_id = args.run_id or make_run_id()
 
     if openai_client is None and not ensure_api_key(console):
         return 1
@@ -69,6 +80,7 @@ async def main(
                 claim_id=case["claim_id"],
                 scenario=case["scenario"],
                 openai_client=openai_client,
+                run_id=run_id,
             )
         except (PipelineError, AgentRunnerError) as exc:
             table.add_row(case["scenario"], case["claim_id"], "ERROR", str(exc), "[bold red]FAIL[/]")

@@ -1,6 +1,9 @@
 import json
+import re
 
 from orchestrator.output import (
+    make_run_id,
+    prepare_run_dir,
     write_dispute_packet_md,
     write_reasoning_trace_json,
     write_verdict_json,
@@ -34,6 +37,39 @@ SAMPLE_REVIEWER_OUTPUT = ReviewerOutput.model_validate(
 )
 
 
+def test_make_run_id_is_filesystem_safe_and_sortable():
+    run_id = make_run_id()
+    assert re.fullmatch(r"\d{8}T\d{6}Z", run_id)
+    assert "/" not in run_id and ":" not in run_id
+
+
+def test_prepare_run_dir_creates_nested_dir_and_relative_latest_symlink(tmp_path):
+    run_dir = prepare_run_dir(tmp_path, "CLM-002", "20240205T000000Z")
+
+    assert run_dir == tmp_path / "CLM-002" / "20240205T000000Z"
+    assert run_dir.is_dir()
+
+    latest = tmp_path / "CLM-002" / "latest"
+    assert latest.is_symlink()
+    # Relative target (not absolute) so the tree stays portable if moved.
+    import os
+
+    assert os.readlink(latest) == "20240205T000000Z"
+    assert latest.resolve() == run_dir.resolve()
+
+
+def test_prepare_run_dir_second_run_does_not_clobber_and_repoints_latest(tmp_path):
+    first = prepare_run_dir(tmp_path, "CLM-002", "20240205T000000Z")
+    (first / "marker.txt").write_text("first")
+
+    second = prepare_run_dir(tmp_path, "CLM-002", "20240206T111111Z")
+
+    # First run's artifacts survive the second run.
+    assert (first / "marker.txt").read_text() == "first"
+    # latest now points at the newest run.
+    assert (tmp_path / "CLM-002" / "latest").resolve() == second.resolve()
+
+
 def test_write_verdict_json(tmp_path):
     usage = {
         "investigator": {"prompt_tokens": 10, "completion_tokens": 2},
@@ -50,7 +86,7 @@ def test_write_verdict_json(tmp_path):
         usage=usage,
     )
 
-    assert path == tmp_path / "CLM-002" / "verdict.json"
+    assert path == tmp_path / "verdict.json"
     assert json.loads(path.read_text()) == {
         "claim_id": "CLM-002",
         "investigator_verdict": "INVALID",
@@ -107,10 +143,10 @@ def test_write_dispute_packet_md_handles_no_dispute_grounds(tmp_path):
     assert "(none provided)" in path.read_text()
 
 
-def test_claim_directory_is_created(tmp_path):
-    output_dir = tmp_path / "nested" / "outputs"
+def test_writers_land_inside_the_prepared_run_dir(tmp_path):
+    run_dir = prepare_run_dir(tmp_path, "CLM-002", "20240205T000000Z")
     write_verdict_json(
-        output_dir,
+        run_dir,
         claim_id="CLM-002",
         investigator_verdict="INVALID",
         reviewer_verdict="CONFIRM",
@@ -120,4 +156,4 @@ def test_claim_directory_is_created(tmp_path):
         usage={"investigator": {"prompt_tokens": 0, "completion_tokens": 0}, "reviewer": {"prompt_tokens": 0, "completion_tokens": 0}},
     )
 
-    assert (output_dir / "CLM-002" / "verdict.json").exists()
+    assert (tmp_path / "CLM-002" / "20240205T000000Z" / "verdict.json").exists()

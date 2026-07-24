@@ -32,6 +32,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Subdirectory under outputs/<claim_id>/ for this run's artifacts (defaults to a "
+        "UTC timestamp). Reruns are archived side by side; outputs/<claim_id>/latest points "
+        "at the newest run.",
+    )
+    parser.add_argument(
         "--max-attempts", type=int, default=SETTINGS.max_investigator_attempts
     )
     parser.add_argument(
@@ -84,6 +91,7 @@ async def main(
             openai_client=openai_client,
             mcp_client=mcp_client,
             output_dir=args.output_dir,
+            run_id=args.run_id,
             max_investigator_attempts=args.max_attempts,
             on_investigator_tool_call=on_investigator_tool_call,
             on_reviewer_tool_call=on_reviewer_tool_call,
@@ -137,7 +145,8 @@ def _print_result(console: Console, result: PipelineResult) -> None:
     table.add_row("Reviewer verdict", result.reviewer_verdict)
     table.add_row("Final verdict", result.final_verdict)
     table.add_row("Confidence", f"{result.confidence:.2f}")
-    table.add_row("Output dir", str(result.output_dir / result.claim_id))
+    table.add_row("Run dir", str(result.run_dir))
+    table.add_row("Latest", str(result.output_dir / result.claim_id / "latest"))
     console.print(table)
 
     if result.reviewer_output.dispute_grounds:
