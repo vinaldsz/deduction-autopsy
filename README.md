@@ -40,6 +40,7 @@ authoritative, up-to-date state). All layers are complete:
 | 15 | CI (`.github/workflows/tests.yml`) | ✅ Done |
 | 16 | Structured logging | ✅ Done |
 | 17 | Non-overwriting output runs (`--run-id` + `latest`) | ✅ Done |
+| 18 | Prompt-injection regression test | ✅ Done |
 
 ## Setup
 
