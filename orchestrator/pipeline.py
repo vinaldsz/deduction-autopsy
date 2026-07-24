@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -20,8 +21,22 @@ from orchestrator.output import (
     write_verdict_json,
 )
 
+logger = logging.getLogger(__name__)
+
 MCP_SERVER_SCRIPT = Path(__file__).resolve().parent.parent / "mcp_server" / "server.py"
 OPENROUTER_BASE_URL = SETTINGS.openrouter_base_url
+
+
+def _safe_for_log(text: Any, limit: int = 300) -> str:
+    """Neutralize untrusted text (model output / fixture notes) before it enters a log message.
+
+    Validation-error strings embed raw model output derived from fixture notes/retailer_notes
+    — the same prompt-injection surface CLAUDE.md wraps in <case_file> delimiters. Collapsing
+    newlines/control chars stops a crafted value from forging a second log line, and the cap
+    bounds log volume.
+    """
+    collapsed = " ".join(str(text).split())
+    return collapsed[:limit] + ("…" if len(collapsed) > limit else "")
 
 Verdict = Literal["VALID", "INVALID", "ESCALATE"]
 ReviewerVerdict = Literal["CONFIRM", "OVERTURN", "ESCALATE"]
@@ -164,7 +179,7 @@ async def _run_investigator_until_valid(
     check = _required_tool_call_check(scenario)
     total_usage = TokenUsage()
 
-    for _ in range(max_attempts):
+    for attempt in range(1, max_attempts + 1):
         result = await run_investigator(
             openai_client=openai_client,
             mcp_client=mcp_client,
@@ -178,6 +193,13 @@ async def _run_investigator_until_valid(
             case_file = CaseFile.model_validate(json.loads(_extract_json(result.final_text)))
         except (json.JSONDecodeError, ValidationError) as exc:
             last_error = str(exc)
+            logger.warning(
+                "case_file_validation_failed claim_id=%s attempt=%d/%d error=%s",
+                claim_id,
+                attempt,
+                max_attempts,
+                _safe_for_log(last_error),
+            )
             correction = (
                 "Your previous response could not be parsed as a valid CaseFile: "
                 f"{last_error}. Respond again with ONLY the complete CaseFile JSON object "
@@ -188,6 +210,13 @@ async def _run_investigator_until_valid(
 
         if check is not None and not check(result.trace):
             last_error = f"required tool call for scenario {scenario!r} is missing from the trace"
+            logger.warning(
+                "required_tool_call_missing claim_id=%s scenario=%s attempt=%d/%d",
+                claim_id,
+                scenario,
+                attempt,
+                max_attempts,
+            )
             correction = (
                 "Your investigation is incomplete: you did not make the tool call required to "
                 "detect this claim's discrepancy. Re-investigate using the full tool-call "
@@ -198,6 +227,12 @@ async def _run_investigator_until_valid(
 
         return result, case_file, total_usage
 
+    logger.warning(
+        "investigator_exhausted claim_id=%s attempts=%d error=%s",
+        claim_id,
+        max_attempts,
+        _safe_for_log(last_error),
+    )
     raise PipelineError(
         f"Investigator failed to produce a valid CaseFile for {claim_id} after "
         f"{max_attempts} attempts: {last_error}"
@@ -230,6 +265,7 @@ async def run_pipeline(
     on_reviewer_tool_call: Callable[[ToolCallRecord], None] | None = None,
 ) -> PipelineResult:
     output_dir = Path(output_dir)
+    logger.info("pipeline_start claim_id=%s scenario=%s", claim_id, scenario)
 
     async with AsyncExitStack() as stack:
         if openai_client is None:
@@ -273,11 +309,24 @@ async def run_pipeline(
                 json.loads(_extract_json(reviewer_result.final_text))
             )
         except (json.JSONDecodeError, ValidationError) as exc:
+            logger.warning(
+                "reviewer_invalid_verdict claim_id=%s error=%s",
+                claim_id,
+                _safe_for_log(exc),
+            )
             raise PipelineError(
                 f"Reviewer failed to produce a valid verdict for {claim_id}: {exc}"
             ) from exc
 
         final_verdict = _resolve_final_verdict(case_file.proposed_verdict, reviewer_output.final_verdict)
+        logger.info(
+            "final_verdict claim_id=%s investigator=%s reviewer=%s final=%s confidence=%s",
+            claim_id,
+            case_file.proposed_verdict,
+            reviewer_output.final_verdict,
+            final_verdict,
+            reviewer_output.confidence,
+        )
         timestamp = datetime.now(timezone.utc).isoformat()
         usage = {
             "investigator": {

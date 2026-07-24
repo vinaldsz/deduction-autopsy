@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from agents.base import AgentRunnerError
-from cli._common import ensure_api_key
+from cli._common import configure_logging, ensure_api_key
 from orchestrator.config import SETTINGS
 from orchestrator.ground_truth import GROUND_TRUTH
 from orchestrator.pipeline import OPENROUTER_BASE_URL, PipelineError, run_pipeline
@@ -35,6 +35,7 @@ async def main(
     # argparse.parse_args(None) would fall back to real sys.argv, which breaks callers (tests)
     # that omit argv entirely. Real __main__ invocation passes sys.argv[1:] explicitly below.
     parse_args([] if argv is None else argv)
+    configure_logging()
     console = console or Console()
 
     if openai_client is None and not ensure_api_key(console):

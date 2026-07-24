@@ -20,6 +20,7 @@ def test_defaults_match_confirmed_values():
         openrouter_timeout_seconds=60.0,
         max_transport_attempts=3,
         retry_backoff_base_seconds=1.0,
+        log_level="INFO",
     )
 
 
@@ -33,6 +34,7 @@ def test_load_settings_honors_env_var_overrides(monkeypatch):
     monkeypatch.setenv("OPENROUTER_TIMEOUT_SECONDS", "30.0")
     monkeypatch.setenv("MAX_TRANSPORT_ATTEMPTS", "5")
     monkeypatch.setenv("RETRY_BACKOFF_BASE_SECONDS", "2.0")
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
 
     settings = load_settings()
 
@@ -46,6 +48,7 @@ def test_load_settings_honors_env_var_overrides(monkeypatch):
         openrouter_timeout_seconds=30.0,
         max_transport_attempts=5,
         retry_backoff_base_seconds=2.0,
+        log_level="DEBUG",
     )
 
 

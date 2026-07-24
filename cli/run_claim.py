@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from agents.base import AgentRunnerError, ToolCallRecord
-from cli._common import ensure_api_key
+from cli._common import configure_logging, ensure_api_key
 from orchestrator.config import SETTINGS
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline, strip_reasoning
 
@@ -51,6 +51,7 @@ async def main(
     console: Console | None = None,
 ) -> int:
     args = parse_args(argv)
+    configure_logging()
     console = console or Console()
 
     if openai_client is None and mcp_client is None and not ensure_api_key(console):

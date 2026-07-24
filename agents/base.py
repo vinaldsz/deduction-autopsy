@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -9,6 +10,8 @@ from fastmcp.exceptions import ToolError
 from openai import APIStatusError, APITimeoutError
 
 from orchestrator.config import SETTINGS
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -128,6 +131,14 @@ class AgentRunner:
                 if not _is_retryable_transport_error(exc) or attempts_made >= self._max_transport_attempts:
                     raise
                 backoff = self._retry_backoff_base_seconds * (2 ** (attempts_made - 1))
+                logger.warning(
+                    "transport_retry model=%s attempt=%d/%d error=%s backoff=%s",
+                    self._model,
+                    attempts_made,
+                    self._max_transport_attempts,
+                    type(exc).__name__,
+                    backoff,
+                )
                 await self._sleep(backoff)
 
     async def run(self, user_message: str) -> AgentResult:

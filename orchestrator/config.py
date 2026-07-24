@@ -13,6 +13,7 @@ class Settings:
     openrouter_timeout_seconds: float
     max_transport_attempts: int
     retry_backoff_base_seconds: float
+    log_level: str
 
 
 def load_settings() -> Settings:
@@ -38,6 +39,7 @@ def load_settings() -> Settings:
         retry_backoff_base_seconds=float(
             os.environ.get("RETRY_BACKOFF_BASE_SECONDS", "1.0")
         ),
+        log_level=os.environ.get("LOG_LEVEL", "INFO"),
     )
 
 

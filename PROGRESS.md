@@ -1,6 +1,61 @@
 # Progress
 
 ## Current layer
+**Layer 16 — Structured logging complete**
+
+Built per `docs/PLAN.md`'s Layer 16 section. Before this, the only operator feedback was
+`rich.Console` output on the CLI success/failure paths — every retry, schema-validation
+failure, and `PipelineError` was silent, so a failure from a non-interactive caller (CI, a
+future scheduled run, or the Layer 19+ UI calling `run_pipeline` directly) left nothing to
+diagnose from. There was zero `logging` usage anywhere in the repo before this layer.
+
+Followed the standard library/application split: `orchestrator/pipeline.py` and
+`agents/base.py` each get a module-level `logging.getLogger(__name__)` and only *emit*
+events — they never configure handlers. Handler config lives at the entrypoint: a new
+`configure_logging()` in `cli/_common.py` calls `logging.basicConfig(stream=sys.stderr, ...)`
+once, at a level from the new `LOG_LEVEL` setting (added to `orchestrator/config.py`'s
+`Settings`, default `INFO`), and both CLI `main()` functions call it at the top. Logs go to
+**stderr** so they never interleave with the `rich` verdict output on stdout.
+
+Five events emitted (claim_id-correlated, inline `key=value`, `%s` lazy args):
+`pipeline_start` (INFO), `case_file_validation_failed` / `required_tool_call_missing`
+(WARNING, in `_run_investigator_until_valid`), `transport_retry` (WARNING, in
+`agents/base.py`'s Layer 13 retry loop — where the retry physically lives), `final_verdict`
+(INFO), and warnings at each `PipelineError` raise (`investigator_exhausted`,
+`reviewer_invalid_verdict`).
+
+**Security — log-forging guard (flagged by the user during planning).** The validation-error
+branch logs `str(exc)`, which embeds raw model output derived from fixture `notes`/
+`retailer_notes` — the exact prompt-injection surface `CLAUDE.md` wraps in `<case_file>`
+delimiters. An injected newline + forged prefix could otherwise fabricate a fake
+`final_verdict ...` log line, defeating the audit-trail purpose. Added `_safe_for_log()` in
+`pipeline.py` (collapses whitespace/control chars via `" ".join(text.split())` + truncates)
+and wrapped every model-/fixture-derived value in it; trusted scalars (claim_id, scenario,
+verdicts, confidence) log directly. `tests/test_logging.py` case
+`test_validation_failure_log_cannot_forge_a_second_line` is the regression guard.
+
+**Tests: `155 passed, 9 deselected in 2.18s`** — the prior 150 plus 5 new logging tests in
+`tests/test_logging.py` (establishes the repo's first `caplog` usage, all stub-based, no
+OpenRouter). Also updated the two `tests/test_orchestrator_config.py` assertions to include
+the new `log_level` field (the override test now also exercises `LOG_LEVEL=DEBUG`).
+
+**Local verification, and the recurring iCloud problem — worked around this session.** The
+same iCloud/FileProvider contention documented in Layer 15's notes recurred, and this time
+was diagnosed to root cause: the project's `.venv` lives under `~/Desktop/AI-Curiosity/...`,
+which macOS "Desktop & Documents in iCloud" **evicts to the cloud** (1,483 `openai` +
+261 `fastmcp` files were dataless). Every `import openai` blocked for minutes on on-demand
+iCloud downloads (~0% CPU, `faulthandler` traceback pinned it at
+`openai/types/graders/__init__.py`), and files re-evicted faster than they could be
+materialized — so materializing in place was futile. Worked around it by building a fresh
+throwaway venv **outside** iCloud (`/private/tmp/.../scratchpad/venv`, deps installed from
+PyPI — resolved to the same `fastmcp 3.4.4`, so no API skew) and running the suite with that
+interpreter against the repo source. Recommended to the user (not yet done): move the project
+out of `~/Desktop`/`~/Documents` (e.g. `~/dev/`) and recreate the venv there to fix this
+permanently.
+
+---
+
+## Previous layer
 **Layer 15 — CI (`.github/workflows/tests.yml`) complete**
 
 Built per `docs/PLAN.md`'s Layer 15 section: no CI existed before this — the unit suite only
