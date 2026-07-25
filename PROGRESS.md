@@ -1,6 +1,47 @@
 # Progress
 
 ## Current layer
+**Layer 19 — Web UI: FastAPI investigate endpoint complete**
+
+First layer of the Layer 19+ Web-UI phase (approved 2026-07-19, see `CLAUDE.md` "UI is
+additive"). Adds `ui/server.py` — a FastAPI app that is a second entry point onto the same
+`orchestrator/pipeline.run_pipeline`, `127.0.0.1`-only, no auth/rate-limiting, same trust model
+as the CLI. `cli/` is untouched and kept.
+
+**`ui/server.py`**: `POST /api/claims/{claim_id}/investigate?scenario=<id>` awaits `run_pipeline`
+and returns the SPEC's "UI API Contract" shape (`claim_id`, three verdicts, `confidence`,
+`dispute_grounds` from `reviewer_output`, Layer-14 `usage` block) via a `_result_payload(result)`
+helper. That helper is deliberately factored out now because Layer 20's SSE `done` event emits
+the identical shape — one mapping, reused, not two that can drift. Unknown scenario (no matching
+`scenarios/<id>/` dir, checked via `_scenario_exists`) → **404** `{"error": ...}` *before* the
+pipeline runs (no wasted OpenRouter spend); `PipelineError`/`AgentRunnerError` (upstream agent
+failures, not client input) → **502** `{"error": str(exc)}` via `JSONResponse`. Both error
+bodies use `{"error": ...}` (not FastAPI's default `{"detail": ...}`) to match the SPEC. Static
+mount deferred to Layer 21 — no `index.html` exists yet, so mounting now would be dead code.
+
+**Packaging**: added `fastapi`/`uvicorn` to `pyproject.toml` `dependencies` and `httpx` to the
+`dev` extra (Starlette's `TestClient` needs it); added `ui*` to
+`[tool.setuptools.packages.find]` and an empty `ui/__init__.py`.
+
+**Tests** (`tests/test_ui_server.py`, minimal smoke per the plan — Layer 22 expands): stubs
+`run_pipeline` via `monkeypatch.setattr(server, "run_pipeline", ...)` so nothing hits OpenRouter
+or spawns MCP. Three cases: happy path asserts exact 200 body shape; unknown scenario asserts
+404 *and* that the stubbed pipeline was never called; parametrized `PipelineError`/
+`AgentRunnerError` both assert 502 `{"error": str(exc)}`. Uses a `SimpleNamespace` stand-in for
+`PipelineResult` carrying only the fields `_result_payload` reads.
+
+**Verification**: full unit suite green in the throwaway `/private/tmp` venv (per the documented
+iCloud-eviction workaround; installed deps resolved to `fastapi 0.140.0`, `fastmcp 3.4.4` — same
+as prior sessions, no API skew) — **167 passed, 10 deselected** (163 prior + 4 new UI tests; the
+502 case is parametrized over `PipelineError` and `AgentRunnerError`). Also did a real
+`uvicorn ui.server:app` boot (not covered by `TestClient`): the investigate route appears in
+`/openapi.json`, and the unknown-scenario 404 path works over real HTTP with no network to
+OpenRouter. No live pipeline run needed for this layer — the endpoint is a thin await over the
+already-live pipeline, and the shape/error mapping is fully exercised by the stubbed tests.
+
+---
+
+## Previous layer
 **Layer 18 — Prompt-injection regression test complete**
 
 Built per `docs/PLAN.md`'s Layer 18 section. `CLAUDE.md` documents the XML-delimited

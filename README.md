@@ -41,6 +41,7 @@ authoritative, up-to-date state). All layers are complete:
 | 16 | Structured logging | ✅ Done |
 | 17 | Non-overwriting output runs (`--run-id` + `latest`) | ✅ Done |
 | 18 | Prompt-injection regression test | ✅ Done |
+| 19 | Web UI — FastAPI investigate endpoint | ✅ Done |
 
 ## Setup
 
@@ -83,6 +84,25 @@ one shared `run_id` across every claim in the batch.
 - `verdict.json` — investigator/reviewer/final verdicts, confidence, timestamp (always written)
 - `reasoning_trace.json` — full message history for both agents, including every tool call (always written)
 - `dispute_packet.md` — normalized quantities, timeline, and dispute grounds (only when `final_verdict` is `INVALID`)
+
+## Running the Web UI
+
+The UI is an additive second entry point onto the same pipeline (the CLI is kept). It binds to
+`127.0.0.1` only, with no auth or rate limiting — same trust model as the CLI.
+
+```bash
+uvicorn ui.server:app --host 127.0.0.1 --port 8000
+```
+
+`POST /api/claims/{claim_id}/investigate?scenario=<id>` runs the pipeline and returns the
+verdict JSON (same fields as `verdict.json`, plus `dispute_grounds`):
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/claims/CLM-002/investigate?scenario=s02_casepack_mismatch"
+```
+
+An unknown `scenario` returns 404; an upstream (OpenRouter/agent) failure returns 502
+`{"error": ...}`.
 
 ## Running tests
 
