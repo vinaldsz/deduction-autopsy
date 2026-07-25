@@ -1,16 +1,17 @@
-"""Smoke tests for the FastAPI UI (Layer 19).
+"""Smoke tests for the FastAPI UI (Layers 19-20).
 
 Stubs `run_pipeline` so nothing hits OpenRouter or spawns the real MCP subprocess — the tests
-exercise route shapes and status codes only. Layer 22 expands this file.
+exercise route shapes, status codes, and SSE framing only. Layer 22 expands this file.
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 import ui.server as server
-from agents.base import AgentRunnerError
+from agents.base import AgentRunnerError, ToolCallRecord
 from orchestrator.pipeline import PipelineError
 
 client = TestClient(server.app)
@@ -32,6 +33,9 @@ def _fake_result(claim_id="CLM-002"):
             "reviewer": {"prompt_tokens": 20, "completion_tokens": 3},
         },
     )
+
+
+# --- Layer 19: POST /investigate ------------------------------------------------
 
 
 def test_investigate_returns_result_shape(monkeypatch):
@@ -86,3 +90,73 @@ def test_investigate_pipeline_failure_is_502(monkeypatch, exc):
 
     assert resp.status_code == 502
     assert resp.json() == {"error": str(exc)}
+
+
+# --- Layer 20: GET /stream (SSE) ------------------------------------------------
+
+
+def _sse_events(text):
+    """Parse raw SSE text into a list of (event, data-line) pairs."""
+    events = []
+    for block in text.strip().split("\n\n"):
+        lines = block.splitlines()
+        event = next(l[len("event: ") :] for l in lines if l.startswith("event: "))
+        data = next(l[len("data: ") :] for l in lines if l.startswith("data: "))
+        events.append((event, data))
+    return events
+
+
+def test_stream_emits_tool_calls_then_done(monkeypatch):
+    async def fake_pipeline(
+        *, claim_id, scenario, on_investigator_tool_call=None, on_reviewer_tool_call=None, **kwargs
+    ):
+        on_investigator_tool_call(ToolCallRecord(name="get_po", args={"po_id": "PO-002"}, result="{}"))
+        on_reviewer_tool_call(ToolCallRecord(name="normalize_uom", args={}, result="{}"))
+        return _fake_result(claim_id)
+
+    monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
+
+    resp = client.get("/api/claims/CLM-002/stream?scenario=s02_casepack_mismatch")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    events = _sse_events(resp.text)
+    assert [e for e, _ in events] == ["tool_call", "tool_call", "done"]
+
+    first = json.loads(events[0][1])
+    assert first == {
+        "agent": "investigator",
+        "name": "get_po",
+        "args": {"po_id": "PO-002"},
+        "is_error": False,
+    }
+    second = json.loads(events[1][1])
+    assert second["agent"] == "reviewer" and second["name"] == "normalize_uom"
+    done = json.loads(events[2][1])
+    assert done["claim_id"] == "CLM-002" and done["final_verdict"] == "INVALID"
+
+
+def test_stream_unknown_scenario_is_404(monkeypatch):
+    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+        return _fake_result(claim_id)
+
+    monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
+
+    resp = client.get("/api/claims/CLM-002/stream?scenario=s99_nope")
+
+    assert resp.status_code == 404
+    assert "error" in resp.json()
+
+
+def test_stream_pipeline_failure_emits_error_event(monkeypatch):
+    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+        raise PipelineError("boom")
+
+    monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
+
+    resp = client.get("/api/claims/CLM-002/stream?scenario=s02_casepack_mismatch")
+
+    assert resp.status_code == 200  # stream opens, failure surfaces as an in-band event
+    events = _sse_events(resp.text)
+    assert [e for e, _ in events] == ["error"]
+    assert json.loads(events[0][1]) == {"error": "boom"}

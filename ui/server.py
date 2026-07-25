@@ -6,13 +6,15 @@ Additive second entry point (the CLI is kept — see CLAUDE.md's "UI is additive
     uvicorn ui.server:app --host 127.0.0.1 --port 8000
 """
 
+import asyncio
+import json
 import logging
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from agents.base import AgentRunnerError
+from agents.base import AgentRunnerError, ToolCallRecord
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline
 
 logger = logging.getLogger(__name__)
@@ -49,3 +51,61 @@ async def investigate(claim_id: str, scenario: str):
         logger.warning("ui_investigate_failed claim_id=%s scenario=%s", claim_id, scenario)
         return JSONResponse(status_code=502, content={"error": str(exc)})
     return _result_payload(result)
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@app.get("/api/claims/{claim_id}/stream")
+async def stream(claim_id: str, scenario: str):
+    if not _scenario_exists(scenario):
+        return JSONResponse(status_code=404, content={"error": f"unknown scenario: {scenario!r}"})
+
+    async def event_generator():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def make_hook(agent: str):
+            def hook(record: ToolCallRecord) -> None:
+                # The pipeline's tool-call hooks fire synchronously on this same event loop,
+                # so put_nowait onto the unbounded queue is safe from here.
+                queue.put_nowait(
+                    _sse(
+                        "tool_call",
+                        {
+                            "agent": agent,
+                            "name": record.name,
+                            "args": record.args,
+                            "is_error": record.is_error,
+                        },
+                    )
+                )
+
+            return hook
+
+        async def run() -> None:
+            try:
+                result = await run_pipeline(
+                    claim_id=claim_id,
+                    scenario=scenario,
+                    on_investigator_tool_call=make_hook("investigator"),
+                    on_reviewer_tool_call=make_hook("reviewer"),
+                )
+                queue.put_nowait(_sse("done", _result_payload(result)))
+            except (PipelineError, AgentRunnerError) as exc:
+                logger.warning("ui_stream_failed claim_id=%s scenario=%s", claim_id, scenario)
+                queue.put_nowait(_sse("error", {"error": str(exc)}))
+            finally:
+                queue.put_nowait(None)  # sentinel: no more events
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            await task
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

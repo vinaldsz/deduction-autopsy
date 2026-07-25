@@ -1,6 +1,44 @@
 # Progress
 
 ## Current layer
+**Layer 20 — Web UI: SSE streaming endpoint complete**
+
+Adds `GET /api/claims/{claim_id}/stream?scenario=<id>` to `ui/server.py` — runs the same
+`run_pipeline` as Layer 19's sync endpoint but streams progress as Server-Sent Events, reusing
+Layer 11's `on_investigator_tool_call`/`on_reviewer_tool_call` hooks (built as shared
+infrastructure exactly for this). One `tool_call` event per tool call in call order, then a
+final `done` event carrying the identical `_result_payload` body as `/investigate`.
+
+**Producer/consumer bridge**: the endpoint returns a `StreamingResponse(event_generator(),
+media_type="text/event-stream")`. Inside, an unbounded `asyncio.Queue` bridges the pipeline's
+**synchronous** tool-call hooks to the async SSE generator: `make_hook(agent)` closes over the
+queue and `put_nowait`s a pre-formatted SSE `tool_call` chunk (tagging `agent` —
+`"investigator"`/`"reviewer"` — which `ToolCallRecord` itself doesn't carry, so the producer
+adds it per SPEC). `put_nowait` is safe from the sync hook because the hooks fire on the same
+event loop and the queue is unbounded. `run_pipeline` runs as an `asyncio.create_task`; on
+completion it enqueues a `done` chunk, on `PipelineError`/`AgentRunnerError` an `error` chunk
+instead, then always a `None` sentinel. The generator drains the queue until the sentinel and
+`await`s the task in a `finally` so exceptions surface and the task can't leak. Unknown scenario
+still returns a plain **404** `{"error": ...}` *before* the stream opens (a client error, not an
+in-band stream event); a pipeline failure *after* the stream opens surfaces as a single
+`event: error` (HTTP is already 200 by then — matches SPEC). A tiny `_sse(event, data)` helper
+centralizes the `event: ...\ndata: <json>\n\n` framing.
+
+**Tests** (`tests/test_ui_server.py`, +3): a fake `run_pipeline` that invokes both hooks then
+returns a fake result — asserts the exact event *order* (`tool_call`, `tool_call`, `done`), the
+`agent`-tagged tool_call payloads, and the `done` body; unknown scenario → 404; a
+`PipelineError`-raising fake → HTTP 200 with a single in-band `error` event. A local `_sse_events`
+parser splits the raw SSE text into `(event, data)` pairs.
+
+**Verification**: `pytest tests/test_ui_server.py` — **7 passed** in the throwaway `/private/tmp`
+venv. Real `uvicorn ui.server:app` boot confirmed both routes in `/openapi.json` and the stream
+404 path over real HTTP (`application/json`, no network to OpenRouter). No live pipeline run this
+layer — the streaming plumbing is fully exercised by the stubbed hook-driven tests, and no
+prompt/agent/verdict logic changed. Full suite total with Layer 19: **170 passed, 10 deselected**.
+
+---
+
+## Previous layer
 **Layer 19 — Web UI: FastAPI investigate endpoint complete**
 
 First layer of the Layer 19+ Web-UI phase (approved 2026-07-19, see `CLAUDE.md` "UI is

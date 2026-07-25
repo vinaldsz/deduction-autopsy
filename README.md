@@ -42,6 +42,7 @@ authoritative, up-to-date state). All layers are complete:
 | 17 | Non-overwriting output runs (`--run-id` + `latest`) | ✅ Done |
 | 18 | Prompt-injection regression test | ✅ Done |
 | 19 | Web UI — FastAPI investigate endpoint | ✅ Done |
+| 20 | Web UI — SSE streaming endpoint | ✅ Done |
 
 ## Setup
 
@@ -103,6 +104,15 @@ curl -X POST "http://127.0.0.1:8000/api/claims/CLM-002/investigate?scenario=s02_
 
 An unknown `scenario` returns 404; an upstream (OpenRouter/agent) failure returns 502
 `{"error": ...}`.
+
+`GET /api/claims/{claim_id}/stream?scenario=<id>` runs the same pipeline as a Server-Sent
+Events stream — one `tool_call` event per tool call (tagged with the `agent` that made it) in
+call order, then a final `done` event carrying the same body as `/investigate` (or a single
+`error` event if the pipeline fails):
+
+```bash
+curl -N "http://127.0.0.1:8000/api/claims/CLM-002/stream?scenario=s02_casepack_mismatch"
+```
 
 ## Running tests
 
