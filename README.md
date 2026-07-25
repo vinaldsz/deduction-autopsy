@@ -43,6 +43,7 @@ authoritative, up-to-date state). All layers are complete:
 | 18 | Prompt-injection regression test | ✅ Done |
 | 19 | Web UI — FastAPI investigate endpoint | ✅ Done |
 | 20 | Web UI — SSE streaming endpoint | ✅ Done |
+| 21 | Web UI — static frontend (`ui/static/`) | ✅ Done |
 
 ## Setup
 
@@ -94,6 +95,14 @@ The UI is an additive second entry point onto the same pipeline (the CLI is kept
 ```bash
 uvicorn ui.server:app --host 127.0.0.1 --port 8000
 ```
+
+Open http://127.0.0.1:8000/ for the minimal browser UI: pick a scenario from the dropdown
+(the claim ID auto-fills), hit **Run investigation**, and watch each agent's tool calls stream
+in live, followed by a verdict card (and, on an `INVALID` final verdict, the Reviewer's dispute
+grounds). It's a dependency-free static client (`ui/static/`, no build step) over the same SSE
+endpoint below.
+
+`GET /api/scenarios` lists the eight scenarios and their claim IDs (the dropdown's data source).
 
 `POST /api/claims/{claim_id}/investigate?scenario=<id>` runs the pipeline and returns the
 verdict JSON (same fields as `verdict.json`, plus `dispute_grounds`):

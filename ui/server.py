@@ -13,19 +13,36 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from agents.base import AgentRunnerError, ToolCallRecord
+from orchestrator.ground_truth import GROUND_TRUTH
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline
 
 logger = logging.getLogger(__name__)
 
 SCENARIOS_DIR = Path(__file__).resolve().parent.parent / "scenarios"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="Deduction Autopsy")
 
 
 def _scenario_exists(scenario: str) -> bool:
     return (SCENARIOS_DIR / scenario).is_dir()
+
+
+@app.get("/api/scenarios")
+async def scenarios():
+    """The picker data for the UI dropdown — scenario id + its fixed claim id.
+
+    Sourced from GROUND_TRUTH (the same single source cli/run_all.py uses) so the list can't
+    drift. Expected verdicts are deliberately omitted — the UI must not pre-empt the live result.
+    """
+    return {
+        "scenarios": [
+            {"scenario": g["scenario"], "claim_id": g["claim_id"]} for g in GROUND_TRUTH
+        ]
+    }
 
 
 def _result_payload(result: PipelineResult) -> dict:
@@ -109,3 +126,8 @@ async def stream(claim_id: str, scenario: str):
             await task
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# Mounted LAST so the explicit /api/* routes above take precedence — FastAPI matches routes
+# before mounts. html=True serves index.html at "/". (Static mount deferred here from Layer 19.)
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

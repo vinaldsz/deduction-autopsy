@@ -1,6 +1,50 @@
 # Progress
 
 ## Current layer
+**Layer 21 — Web UI: minimal static frontend complete**
+
+Adds the browser surface that finishes the Web-UI phase: a dependency-free static client
+(`ui/static/index.html` + `ui/static/app.js`, no framework, no build step) over the Layer 19/20
+API, plus a small `GET /api/scenarios` endpoint and the static mount that Layer 19 explicitly
+deferred here.
+
+**`ui/server.py`**: `GET /api/scenarios` returns `[{scenario, claim_id}, ...]` built from
+`orchestrator/ground_truth.GROUND_TRUTH` (the same single source `cli/run_all.py` uses, so the
+dropdown can't drift). Expected verdicts are deliberately **not** exposed — the UI must not
+pre-empt the live result. The static mount `app.mount("/", StaticFiles(directory=STATIC_DIR,
+html=True))` is registered **last**, after all three `/api/*` routes: FastAPI matches explicit
+routes before mounts, so the API keeps working and `/` serves `index.html`. `STATIC_DIR` reuses
+the existing `Path(__file__).resolve().parent` idiom.
+
+**`ui/static/index.html`**: scenario `<select>` (filled at load), a read-only claim-id field
+that syncs on selection, a Run button, a live tool-call trace `<ol>`, a verdict card (three
+verdicts + confidence + token usage), a dispute-grounds `<ul>` shown only on `INVALID`, and an
+error banner. All styling is one inline `<style>` block — no external CSS.
+
+**`ui/static/app.js`** (vanilla): loads `/api/scenarios` → dropdown; Run opens an `EventSource`
+on the **SSE `/stream`** endpoint (not `/investigate` — the live trace is the whole point of the
+two-agent demo). `tool_call` events append trace rows (agent-tagged, `is_error` styled); `done`
+renders the verdict card + dispute list (hidden unless `final_verdict === "INVALID"` with
+non-empty grounds) and closes the stream; the in-band SSE `error` event shows the banner; the
+native `EventSource.onerror` (CLOSED) covers connection-level failures so a dropped/404 stream
+doesn't hang. `index.html` references `/app.js` (served from `static/` by the same root mount).
+
+**Verification**: `TestClient` checks — `/api/scenarios` → 200 with 8 entries, each exactly
+`{scenario, claim_id}` (no `expected_*` leak); `/` → 200 `text/html` containing the title;
+`/app.js` → 200 `text/javascript`; `/api/scenarios` still JSON after the mount (not shadowed).
+Real `uvicorn ui.server:app` boot on 127.0.0.1: `/api/scenarios`, `/`, and the unknown-scenario
+404 all correct over HTTP. **Live end-to-end SSE run** against real OpenRouter
+(`s02_casepack_mismatch`): all 7 Investigator + 7 Reviewer `tool_call` events streamed in call
+order, then a `done` event — `INVALID`/`CONFIRM`/`INVALID`, confidence 0.98, two dispute grounds
+(incl. a timeline-violation observation), and non-zero per-agent usage. The VALID-hides-dispute
+branch is trivial client-side conditional logic and was not separately live-run to save
+OpenRouter spend — the `done` payload shape is identical across scenarios. No
+prompt/agent/pipeline logic changed this layer — purely the browser client + two additive routes.
+`README.md` layer table (+row 21) and Web-UI section updated. Layer 22 (UI tests) is next.
+
+---
+
+## Previous layer
 **Layer 20 — Web UI: SSE streaming endpoint complete**
 
 Adds `GET /api/claims/{claim_id}/stream?scenario=<id>` to `ui/server.py` — runs the same
