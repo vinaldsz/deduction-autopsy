@@ -409,3 +409,91 @@ data: {"claim_id": "CLM-002", "investigator_verdict": "INVALID", "reviewer_verdi
 not present on `ToolCallRecord` itself today, so the Layer 20 SSE producer tags it when
 forwarding from each agent's separate hook invocation. On failure, a single
 `event: error` with `{"error": "<message>"}` replaces the `done` event.
+
+---
+
+## Semantic/DB Layer + Real-World Deductions Dashboard (planned, Layers 23–31)
+
+Approved 2026-07-25. Data flows **source systems → ETL → relational SQLite (`data/deductions.db`)
+→ MCP tools → agents**, and the scenario-picker UI becomes a **daily-lot dashboard/worklist**.
+See `docs/PLAN.md` "Layers 23–31" for the build order and `CLAUDE.md` "Semantic/DB layer" for the
+design decision. Runtime is **claim-id-driven — `scenario` is retired from the runtime path.**
+
+### Sections above that this phase supersedes
+- **"Scenario Fixture File Layout"** — the per-scenario JSON dirs are no longer the runtime store;
+  they remain in the repo purely as the ETL **fidelity oracle** (below). Runtime data lives in the DB.
+- **"MCP Tools"** — same tool names/signatures the agents see, but implemented against the DB and
+  keyed by `po_id`/`claim_id` (no active-scenario assumption). `normalize_uom` is unchanged (still
+  reads `data/sku_uom_conversions.json`, which stays a reference file).
+- **"Seven Scenarios — Ground Truth"** — the claim_id → verdict table stays authoritative; the
+  "Scenario dir" column becomes a test label, not a runtime selector.
+- **"Required Tool Calls Per Scenario"** — re-keyed **by claim_id** (Layer 29): `CLM-002`→
+  `normalize_uom`, `CLM-003`→`get_asns_for_po` (≥2), `CLM-006`→`get_trade_agreement`,
+  `CLM-007b`/`CLM-008`→`list_claims_for_po`. Universal completeness + ESCALATE-on-missing is deferred
+  to Layer 31 (needs sign-off; touches agent prompts).
+- **"UI API Contract"** — the `scenario` query param is dropped; dashboard/batch endpoints added
+  (see "UI API Contract v2" below).
+
+### Relational schema — DRAFT (finalized in the Layer 23 user-led design session, in progress)
+
+Business entities are 1:1 with `mcp_server/models.py`. Operational tables support the ETL. DB =
+union of all entities deduped by primary key (`trade_agreements` is standalone; multiple claims per
+PO allowed, e.g. CLM-007a/007b → PO-007).
+
+| Table | PK | FKs | Notes |
+|---|---|---|---|
+| `purchase_orders` | `po_id` | — | retailer, sku, ordered_qty, ordered_uom, unit_price, order_date |
+| `asns` | `asn_id` | `po_id` | 0..N per PO (split shipment = 2 rows) |
+| `invoices` | `invoice_id` | `po_id` | |
+| `receiving_records` | `receipt_id` | `po_id` | includes free-text `notes` |
+| `trade_agreements` | `agreement_id` | — | standalone lifecycle; queried by retailer+sku+promo_code |
+| `deduction_claims` | `claim_id` | `po_id`, `batch_id` | claimed_reason, claimed_amount, claim_date, retailer_notes |
+| `batches` | `batch_id` | — | load_date, status (`complete`/`incomplete`/`complete_with_exceptions`) |
+| `claim_resolutions` | `claim_id` | claim | verdicts, confidence, resolved_at, run_id — seeded for 007a/008a, else written by the pipeline |
+| `reject_rows` | `id` | batch | quarantine/dead-letter: source, raw_row, reason, rejected_at |
+| `load_audit` | `id` | batch | source, rows_read/loaded/rejected, loaded_at |
+| `lineage` | `id` | batch | entity_table, entity_pk, source_file, source_row_ref, loaded_at |
+
+Open decisions for the Layer 23 session: (1) retailer/sku as columns vs lookup dimensions;
+(2) UOM conversions stay a JSON reference file vs a `uom_conversions` table; (3) lineage as a
+separate table vs `_source_*` columns; (4) `batch_id` scheme (dated `LOT-2026-07-25` vs surrogate);
+(5) confirm money = INTEGER cents, quantities = INTEGER, UOM floats computed at query time.
+
+### ETL contract (Layers 24–27)
+
+- **Sources (`source_systems/`, high divergence):** ERP CSV (POs, invoices), carrier EDI-ish flat
+  text (ASNs; split shipment = two loops for one PO), WMS/portal/TPM JSON (receiving / claims /
+  agreements). Genuinely divergent schemas: different field names, `$`-vs-cents money, mixed date
+  formats, UOM synonyms (EA/CS/PLT), whitespace/case quirks. Generated from the frozen JSON by
+  `tools/generate_source_systems.py` so they can't drift.
+- **Load strategy:** incremental **merge-upsert by PK**, transactional, idempotent (run twice →
+  identical DB). Earlier lots (with 007a/008a resolved) load first; today's lot merges on top.
+- **Bad data:** malformed/non-conforming rows are **quarantined** to `reject_rows` with a reason;
+  good rows continue; a per-source **data-quality report** is emitted; a batch may be
+  `complete_with_exceptions`.
+- **Lineage/audit:** every business row's source file+row recorded in `lineage`; per-load counts in
+  `load_audit`.
+- **Fidelity oracle (`tests/test_etl.py`):** after `build_db()`, every business entity read from the
+  DB must equal the corresponding frozen `scenarios/*/*.json` field-for-field. Guarantees the
+  JSON→sources→ETL→DB chain is lossless, so the 8 ground-truth verdicts cannot drift. Plus
+  idempotency, referential-integrity, batch-completeness, and seeded-resolution assertions.
+
+### Daily-lot workflow
+
+Deductions arrive as a daily lot. One active lot = **"today"** (CLM-001..006, 007b, 008); prior
+claims (CLM-007a, CLM-008a) are pre-seeded into `claim_resolutions` as resolved in earlier lots, so
+`list_claims_for_po` duplicate detection is authentic and the dashboard has history. When the lot is
+complete, one **"Run investigation"** action bulk-runs the pipeline over its unresolved claims into a
+worklist the analyst eyeballs (ESCALATE = human attention).
+
+### UI API Contract v2 (planned, Layer 30)
+
+- `GET /api/dashboard` → `{unresolved_count, resolved_this_month, dollars_at_risk,
+  priority_breakdown, batch: {batch_id, status}}`.
+- `GET /api/batches/{batch_id}` → the lot's claims, each with the `DeductionClaim` fields + derived
+  `priority` (from amount + aging) + `status`/verdict if resolved.
+- `POST /api/batches/{batch_id}/investigate` (SSE) → bulk-run over unresolved claims: per-claim
+  `tool_call` and `claim_done` events, ending with a `batch_done` summary.
+- `GET /api/claims/{claim_id}/stream` (SSE) kept for single-claim drill-in/re-run — **`scenario`
+  query param removed.** `POST /api/claims/{claim_id}/investigate` likewise loses `scenario`.
+- `GET /api/scenarios` is **removed**. 404 now means unknown claim/batch (checked against the DB).

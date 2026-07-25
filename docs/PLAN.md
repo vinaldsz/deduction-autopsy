@@ -346,3 +346,117 @@ introduces for the CLI's `--explain` flag. No auth, no rate limiting, bound to
 **Rule:** same as above — Layer 20 depends on Layer 11's hook existing first; don't start
 Layer 20 before Layer 11 has passing tests, even though they're in different numbered
 sections of this document.
+
+---
+
+## Layers 23–31 — Semantic/DB layer + real-world deductions dashboard (approved 2026-07-25)
+
+Reverses `CLAUDE.md`'s "Heterogeneous mock data sources" out-of-scope item, whose gate ("once
+the in-scope build, layers 1-9, is complete") is satisfied. Replaces the scenario-picker UI with
+a real deductions workflow: **source systems → ETL → relational SQLite → MCP → agents**, and a
+**daily-lot dashboard/worklist** in place of the dropdown. Two structural changes underpin it:
+
+- **"Scenario" is retired from the runtime path.** Investigations are keyed by `claim_id` alone;
+  the agent navigates the entity graph itself. Audit confirmed this is collision-free (unique
+  `po_id`/`claim_id`, docs join on `po_id`, `normalize_uom` already global, only one trade
+  agreement / one `promo_billback` claim). `GROUND_TRUTH` keeps its `scenario` field only as an
+  oracle/label for tests.
+- **Frozen `scenarios/*/*.json` become the ETL fidelity oracle.** A test asserts the DB equals
+  them field-for-field, so the 8 ground-truth verdicts cannot drift through the ETL.
+
+ETL is planned to DE standards: **incremental merge-upsert** by PK (idempotent), **quarantine +
+data-quality report** for bad rows (a batch can be "complete with exceptions"), **high-divergence**
+sources (different field names, `$`-vs-cents, mixed date formats, UOM synonyms), and **lineage +
+load-audit** provenance.
+
+Deductions arrive as a **daily lot/batch**: one active lot = "today" (CLM-001..006, 007b, 008);
+prior claims (CLM-007a, CLM-008a) are pre-seeded into `claim_resolutions` as resolved in earlier
+lots. One "Run investigation" button bulk-investigates the lot into a worklist the analyst eyeballs.
+
+Data model + relational schema, ETL contract, and the updated UI API contract live in `docs/SPEC.md`
+(extended per layer, not a separate file). `data/deductions.db` is gitignored; path via `DEDUCTIONS_DB`.
+
+### 23. Data model & source-mapping design (USER-LED)
+
+- Design session, not bulk implementation. Deliverables: the normalized relational schema in
+  `docs/SPEC.md` (business entities from `mcp_server/models.py` + `batches`, `claim_resolutions`,
+  `reject_rows`, `load_audit`, `lineage`), PKs/FKs, load order, and the source→target
+  mapping/divergence spec; DDL + create/migrate helper in `mcp_server/db.py`.
+- **Verify:** DDL creates a clean empty DB; schema reviewed/approved by the user. Gates 24+.
+
+### 24. Heterogeneous source-system fixtures + generator
+
+- `source_systems/` organized by system (ERP CSV, carrier EDI-ish flat text, WMS/portal/TPM JSON)
+  in genuinely divergent schemas per the Layer 23 mapping spec; entities deduped by PK.
+- `tools/generate_source_systems.py` — one-off dev script reading frozen `scenarios/*/*.json`,
+  pooling entities by PK, assigning active claims to the `today` lot and 007a/008a to earlier
+  lots, emitting the divergent source files (provably faithful, no drift).
+- **Verify:** generator runs; files parse; each distinct entity appears once; lots assigned right.
+
+### 25. ETL Extract — per-source parsers
+
+- `semantic_layer/extract/` — one parser per source. Gnarly bits: ERP CSV quoting so free-text
+  notes + the injection payload round-trip byte-exact; carrier 856 flat text state machine
+  (hierarchical loops; split shipment = 2 ASN records for one PO). Output: raw typed records
+  tagged with source file + row ref (lineage seed).
+- `tests/test_extract.py` — per-parser unit tests on messy inputs incl. malformed rows.
+
+### 26. ETL Transform + Data Quality — quarantine + DQ report
+
+- `semantic_layer/transform.py` — canonical mapping; coercion (money→int cents with `$`/decimal
+  detection, dates→ISO-8601, UOM synonym folding, trim/case); Pydantic + enum validation;
+  referential integrity (orphan detection, parents-before-children); dedup/merge with
+  conflict detection (same PK disagreeing = hard reject). Non-conforming rows → `reject_rows`.
+- `semantic_layer/dq_report.py` — per-source read/loaded/rejected counts + reasons.
+- `tests/test_transform.py` — coercion, RI, merge-conflict, quarantine/DQ behavior.
+
+### 27. ETL Load — merge-upsert + lineage + batch gate; fidelity oracle
+
+- `semantic_layer/load.py` + `semantic_layer/etl.py` (`build_db()`): incremental merge-upsert by
+  PK in a transaction; write lineage + `load_audit`; create `batches`, mark complete only when all
+  manifest files loaded (complete-with-exceptions if any quarantined); seed 007a/008a resolutions.
+  Runnable as `python -m semantic_layer.etl`; DB path via `DEDUCTIONS_DB` (added to
+  `orchestrator/config.py`).
+- `tests/test_etl.py` — **fidelity oracle** (DB == frozen JSON, field-by-field) + idempotency
+  (run twice → identical DB) + referential integrity + batch-completeness + seeded resolutions.
+- `.gitignore`: add `data/deductions.db`.
+
+### 28. DB-backed `FixtureLoader` + document tools (scenario-less)
+
+- Rewrite `mcp_server/fixtures.py` internals to query SQLite globally; keyed methods (class name
+  `FixtureLoader` stays — the prompt-injection monkeypatch seam): `get_po(po_id)`,
+  `get_asns(po_id)`, `get_invoice(po_id)`, `get_receiving_record(po_id)`, `get_claim(claim_id)`,
+  `get_claims_for_po(po_id)`, `get_trade_agreement(retailer, sku, promo_code)`.
+- `mcp_server/tools/document_tools.py` uses the keyed methods; `mcp_server/server.py` drops the
+  `SCENARIO_ID` dependency. Tool signatures/docstrings agents see are unchanged.
+
+### 29. Scenario-less pipeline + CLI + resolution persistence
+
+- `orchestrator/pipeline.py`: drop `scenario`; remove the `SCENARIO_ID` transport env; re-key
+  `REQUIRED_TOOL_CALLS` by `claim_id`; write a `claim_resolutions` row after each run. `outputs/`
+  artifacts stay (additive). `cli/run_claim.py` drops `--scenario`; `cli/run_all.py` iterates by
+  `claim_id`. Update scenario-referencing tests + a `conftest.py` that builds the DB into a temp
+  `DEDUCTIONS_DB` before tests.
+- **Verify:** offline suite green; live `test_pipeline_scenarios.py` yields the exact 8 verdicts
+  driving `run_pipeline(claim_id=…)` with no scenario.
+
+### 30. Dashboard + daily-lot worklist UI
+
+- `ui/server.py`: `GET /api/dashboard` (unresolved count, resolved-this-month, $ at risk,
+  priority breakdown, today's batch status); `GET /api/batches/{batch_id}` (the lot's claims +
+  derived priority + status/verdict); `POST /api/batches/{batch_id}/investigate` SSE (bulk-run
+  over unresolved claims, per-claim + `batch_done` events); keep single-claim stream for drill-in.
+  Remove `/api/scenarios`.
+- `ui/static/`: replace the two dropdowns with a dashboard header + lot worklist; one "Run
+  investigation" button; rows fill live with verdict/dispute-grounds/priority (ESCALATE flagged);
+  row drill-in reuses the existing trace/verdict rendering. Update `tests/test_ui_server.py`.
+
+### 31. (deferred, needs sign-off) Universal completeness + escalate-on-missing
+
+- Replace claim-keyed `REQUIRED_TOOL_CALLS` with a universal minimum-investigation requirement and
+  update Investigator/Reviewer prompts to ESCALATE on genuinely missing/contradictory source data
+  (powered by the ETL's quarantine/DQ signals). Touches agent prompts → separate sign-off. Not
+  built now; kept here + in README as future work.
+
+**Rule:** same as every prior phase — one commit per layer; do not start layer N+1 until layer N
+has passing tests. Layers 23 and 24 gate the rest (schema, then sources, before any ETL code).

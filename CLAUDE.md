@@ -23,7 +23,9 @@ segregation-of-duties control, not architectural decoration.
 
 **MCP server is the only data access path.** Agents must call MCP tools to get document
 data. They must not have fixture files on their context directly. This is what makes the
-tool-call trace meaningful as an audit trail.
+tool-call trace meaningful as an audit trail. (As of the Layer 23–31 phase the MCP tools
+read a relational SQLite DB instead of per-scenario JSON — the abstraction is unchanged;
+agents still see only tools, never the backing store. See "Semantic/DB layer" below.)
 
 **Seven scenarios are ground truth.** The expected verdicts in `docs/SPEC.md` are fixed.
 Do not change fixture data to make a failing scenario pass — change the agent prompts or
@@ -35,6 +37,17 @@ decision. `cli/run_claim.py`/`cli/run_all.py` are kept, not deprecated — they 
 scriptable/CI path (see Layer 15). The UI calls the same `orchestrator/pipeline.py`, binds
 to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust model.
 
+**Semantic/DB layer backs the MCP (approved 2026-07-25).** Data flows source systems → ETL
+(extract/transform/load, in `semantic_layer/`) → relational SQLite (`data/deductions.db`) → the
+MCP tools → agents. This *strengthens*, not weakens, "MCP server is the only data access path":
+agents still see only MCP tools, never the backing store — the store just changed from per-
+scenario JSON to a DB. "Scenario" is retired from the runtime path: investigations are keyed by
+`claim_id` alone and the agent navigates the entity graph (claim → PO → ASN/invoice/receiving/
+prior claims) itself. The frozen `scenarios/*/*.json` remain in the repo as the ETL **fidelity
+oracle** (a test asserts the DB equals them field-for-field), so the 8 ground-truth verdicts
+cannot drift. ETL is DE-grade: heterogeneous sources, incremental merge-upsert, quarantine +
+data-quality report, lineage + load audit. Full roadmap: Layers 23–31 in `docs/PLAN.md`.
+
 ---
 
 ## Explicit out of scope
@@ -45,12 +58,13 @@ to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust mode
 - SKU-to-product-name mapping — SKUs stay opaque codes (e.g. "SKU-001") everywhere, no
   product master/catalog; mention as future work in README (display-only, cosmetic for
   dispute packets), do not build
-- Heterogeneous mock data sources — fixtures stay plain JSON for all 7 scenarios; no
-  relational DB, CSV/Excel, or other mixed backing stores behind `FixtureLoader`. The goal
-  (recreating the messiness of real multi-system data landscapes, and testing that the
-  MCP-tool abstraction hides the backing store from agents) is worth pursuing once the
-  in-scope build (layers 1-9) is complete — mention as future work in README, do not build
-  now
+- ~~Heterogeneous mock data sources~~ **Reversed 2026-07-25 — now IN scope (Layers 23–31,
+  `docs/PLAN.md`).** The original gate ("worth pursuing once the in-scope build, layers 1-9, is
+  complete") is satisfied (build is complete through Layer 22). A real ETL now ingests
+  heterogeneous source systems (ERP CSV, carrier EDI-ish flat text, WMS/portal/TPM JSON) into a
+  relational SQLite DB the MCP reads — see "Semantic/DB layer" under design decisions above.
+  Data model + ETL contract live in `docs/SPEC.md`; the SKU→UOM conversion table stays a JSON
+  reference file (global, outside the claim graph).
 - Production concerns: auth, multi-tenancy, persistence beyond local files
 - API-facing deployment (auth, per-user/per-IP rate limiting, per-user cost caps on OpenRouter
   usage) — the Layer 19+ UI (see below) does not change this: it's still a local, single-user,
@@ -72,7 +86,10 @@ to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust mode
     slug `anthropic/claude-haiku-4.5` (Layer 6, checked against OpenRouter's live catalog).
   - Reviewer: Claude Sonnet 4.5 (subtle reasoning for trap detection) — confirmed OpenRouter
     slug `anthropic/claude-sonnet-4.5` (Layer 6, same check).
-- Fixtures as plain JSON, checked into repo
+- Fixtures as plain JSON, checked into repo (also the ETL fidelity oracle as of Layer 23+)
+- SQLite (stdlib `sqlite3`) as the relational backing store the MCP reads — approved
+  2026-07-25, Layers 23–31; heterogeneous source files under `source_systems/`, ETL in
+  `semantic_layer/`, DB at `data/deductions.db` (gitignored), path via `DEDUCTIONS_DB`
 - `pytest` for unit tests; `rich` for CLI output
 - Temperature 0 for both agents (deterministic, debuggable)
 - FastAPI + `uvicorn` for the Layer 19+ UI; plain HTML/JS served as static files (no
@@ -91,6 +108,21 @@ to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust mode
 7. `orchestrator/pipeline.py` + `orchestrator/output.py`
 8. `cli/run_claim.py` + `cli/run_all.py`
 9. Integration tests + README
+
+Layers 10–22 (see `docs/PLAN.md` / PROGRESS.md): Reviewer-overturn scenario, config, retry,
+usage tracking, CLI batch, hooks, prompt-injection test, and the Web UI phase (19–22).
+
+**Semantic/DB layer phase — Layers 23–31 (approved 2026-07-25, full detail in `docs/PLAN.md`):**
+
+23. Data model & source-mapping design (USER-LED) → `docs/SPEC.md` schema + DDL in `mcp_server/db.py`
+24. Heterogeneous source-system fixtures (`source_systems/`) + generator
+25. ETL Extract — per-source parsers (`semantic_layer/extract/`) + lineage seed
+26. ETL Transform + Data Quality — coerce/RI/dedup, quarantine + DQ report
+27. ETL Load — incremental merge-upsert + lineage + batch gate; **fidelity oracle** test
+28. DB-backed `FixtureLoader` + document tools (scenario-less, keyed by po_id/claim_id)
+29. Scenario-less pipeline + CLI + `claim_resolutions` persistence
+30. Dashboard + daily-lot worklist UI (replaces the scenario dropdown)
+31. (deferred, needs sign-off) Universal completeness check + ESCALATE on missing source data
 
 **Rule:** Do not start layer N+1 until layer N has passing tests. Check PROGRESS.md for
 current state before starting any session.
