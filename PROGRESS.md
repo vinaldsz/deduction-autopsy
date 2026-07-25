@@ -1,6 +1,30 @@
 # Progress
 
 ## Current layer
+**Layer 22 — Web UI: UI tests complete (Web-UI phase finished)**
+
+Closes the Web-UI phase (Layers 19–22). Extends `tests/test_ui_server.py` (7 → 10 tests, same
+`TestClient` + stubbed-`run_pipeline` pattern, no OpenRouter, no MCP subprocess) to cover the
+Layer 21 additions:
+
+- `test_scenarios_endpoint_lists_all_ground_truth` — `GET /api/scenarios` returns one entry per
+  `GROUND_TRUTH` row, in order, each with exactly `{scenario, claim_id}`; asserts against
+  `GROUND_TRUTH` itself so it can't drift, and that no `expected_*` field leaks to the UI.
+- `test_index_html_is_served_at_root` — `GET /` → 200 `text/html` containing the page title,
+  proving the static mount is wired.
+- `test_static_mount_does_not_shadow_api_routes` — the ordering regression the `"/"` mount is
+  most likely to cause: confirms `/api/scenarios` and a stubbed `/investigate` still return JSON
+  (not `index.html`) with the mount registered last.
+
+**Verification**: `pytest tests/test_ui_server.py` — **10 passed**. Full unit suite from the
+throwaway `/private/tmp` venv (per the documented iCloud-eviction workaround) — **173 passed,
+10 deselected** (170 prior + 3 new). No live OpenRouter run needed — these are pure route/shape
+assertions against a stubbed pipeline, and no prompt/agent/pipeline logic changed. `README.md`
+layer table extended with row 22. **Build order complete through Layer 22.**
+
+---
+
+## Previous layer
 **Layer 21 — Web UI: minimal static frontend complete**
 
 Adds the browser surface that finishes the Web-UI phase: a dependency-free static client

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import ui.server as server
 from agents.base import AgentRunnerError, ToolCallRecord
+from orchestrator.ground_truth import GROUND_TRUTH
 from orchestrator.pipeline import PipelineError
 
 client = TestClient(server.app)
@@ -160,3 +161,44 @@ def test_stream_pipeline_failure_emits_error_event(monkeypatch):
     events = _sse_events(resp.text)
     assert [e for e, _ in events] == ["error"]
     assert json.loads(events[0][1]) == {"error": "boom"}
+
+
+# --- Layer 22: /api/scenarios + static frontend ---------------------------------
+
+
+def test_scenarios_endpoint_lists_all_ground_truth():
+    resp = client.get("/api/scenarios")
+
+    assert resp.status_code == 200
+    scenarios = resp.json()["scenarios"]
+    # One entry per ground-truth row, in the same order, with exactly scenario + claim_id.
+    assert scenarios == [
+        {"scenario": g["scenario"], "claim_id": g["claim_id"]} for g in GROUND_TRUTH
+    ]
+    # Expected verdicts must not leak to the UI (it must not pre-empt the live result).
+    assert all(set(s) == {"scenario", "claim_id"} for s in scenarios)
+
+
+def test_index_html_is_served_at_root():
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "Deduction Autopsy" in resp.text  # marker from index.html
+
+
+def test_static_mount_does_not_shadow_api_routes(monkeypatch):
+    # The "/" mount is registered last; explicit /api/* routes must still win over it.
+    monkeypatch.setattr(server, "run_pipeline", lambda **kw: _fake_result(kw["claim_id"]))
+
+    scenarios_resp = client.get("/api/scenarios")
+    assert scenarios_resp.headers["content-type"].startswith("application/json")
+    assert "scenarios" in scenarios_resp.json()
+
+    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+        return _fake_result(claim_id)
+
+    monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
+    invest_resp = client.post("/api/claims/CLM-002/investigate?scenario=s02_casepack_mismatch")
+    assert invest_resp.headers["content-type"].startswith("application/json")
+    assert invest_resp.json()["claim_id"] == "CLM-002"

@@ -44,6 +44,7 @@ authoritative, up-to-date state). All layers are complete:
 | 19 | Web UI — FastAPI investigate endpoint | ✅ Done |
 | 20 | Web UI — SSE streaming endpoint | ✅ Done |
 | 21 | Web UI — static frontend (`ui/static/`) | ✅ Done |
+| 22 | Web UI — UI tests (`tests/test_ui_server.py`) | ✅ Done |
 
 ## Setup
 
