@@ -1,6 +1,7 @@
 # Deduction Autopsy — Claude Code Briefing
 
 ## What this project is
+
 A two-agent reconciliation system that investigates CPG retailer deduction claims and
 determines whether they are valid, invalid (disputable), or ambiguous (escalate to human).
 
@@ -37,6 +38,7 @@ to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust mode
 ---
 
 ## Explicit out of scope
+
 - Real EDI X12 parsing — fixtures only need to resemble real documents, not be valid EDI
 - Any third-party integrations (NetSuite, Shopify, Amazon, etc.)
 - Parallel/concurrent orchestration — mention as future work in README, do not build
@@ -59,6 +61,7 @@ to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust mode
 ---
 
 ## Tech stack
+
 - Python 3.11+
 - FastMCP (Python MCP SDK) for the MCP server
 - OpenRouter (OpenAI-compatible chat completions API) via the `openai` Python SDK's
@@ -78,6 +81,7 @@ to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust mode
 ---
 
 ## Build order — do not skip ahead
+
 1. `mcp_server/models.py` + `data/sku_uom_conversions.json`
 2. All 7 scenario fixture JSON files (verified against Pydantic models)
 3. `mcp_server/fixtures.py` + `mcp_server/tools/` + unit tests passing
@@ -90,6 +94,71 @@ to `127.0.0.1` only, and carries no auth, matching the CLI's existing trust mode
 
 **Rule:** Do not start layer N+1 until layer N has passing tests. Check PROGRESS.md for
 current state before starting any session.
+
+---
+
+## Clean Code Principles
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
 ---
 
@@ -120,6 +189,7 @@ against prompt injection via fixture `notes` fields.
 **One commit per layer.** Commit only when the layer's tests pass. Never commit broken code.
 
 **Commit message format:**
+
 ```
 Layer N: <what was built>
 
@@ -127,6 +197,7 @@ Layer N: <what was built>
 ```
 
 **Branch per layer** (optional but recommended):
+
 ```
 main          ← only receives merges when a layer is complete and tests pass
 layer/1-models
@@ -135,6 +206,7 @@ layer/2-fixtures
 ```
 
 **.gitignore must include:**
+
 ```
 .env
 __pycache__/
@@ -144,6 +216,7 @@ outputs/
 ```
 
 **Never commit:**
+
 - `.env` (contains OPENROUTER_API_KEY)
 - `outputs/` (generated artifacts, not source)
 
@@ -152,6 +225,7 @@ outputs/
 ---
 
 ## Session workflow
+
 - Check `PROGRESS.md` before starting — it tells you what layer we're on and what tests pass
 - Use plan mode (`/plan`) for anything that touches more than one file
 - One session = one layer from the build order
@@ -160,6 +234,7 @@ outputs/
 ---
 
 ## Context management
+
 - Run `/compact` when messages reach ~500k tokens (roughly 50% of the 967k window)
 - Auto-compaction is enabled in `.claude/settings.json` as a backstop — but compact manually before that to preserve useful context in the summary
 - Use `/clear` when switching to a completely unrelated task (not just a new layer)
