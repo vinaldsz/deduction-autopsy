@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from dotenv import load_dotenv
@@ -64,25 +65,28 @@ async def main(
     if openai_client is None and mcp_client is None and not ensure_api_key(console):
         return 1
 
-    on_investigator_tool_call = None
-    on_reviewer_tool_call = None
+    on_investigator_tool_call: Callable[[ToolCallRecord], None] | None = None
+    on_reviewer_tool_call: Callable[[ToolCallRecord], None] | None = None
     reviewer_trace: list[ToolCallRecord] = []
 
     if args.explain:
         console.print("[bold]Investigator[/]")
 
-        def on_investigator_tool_call(record: ToolCallRecord) -> None:
+        def _on_investigator_tool_call(record: ToolCallRecord) -> None:
             _print_tool_call(console, "investigator", record)
 
         reviewer_header_printed = False
 
-        def on_reviewer_tool_call(record: ToolCallRecord) -> None:
+        def _on_reviewer_tool_call(record: ToolCallRecord) -> None:
             nonlocal reviewer_header_printed
             if not reviewer_header_printed:
                 console.print("\n[bold]Reviewer[/]")
                 reviewer_header_printed = True
             reviewer_trace.append(record)
             _print_tool_call(console, "reviewer", record)
+
+        on_investigator_tool_call = _on_investigator_tool_call
+        on_reviewer_tool_call = _on_reviewer_tool_call
 
     try:
         result = await run_pipeline(

@@ -18,6 +18,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "httpx",
+    "pyright==1.1.411",
 ]
 
 [tool.pytest.ini_options]
@@ -34,3 +35,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["mcp_server*", "agents*", "orchestrator*", "cli*", "ui*", "semantic_layer*"]
+
+[tool.pyright]
+# Type-gate the shipped application code. tests/ is deliberately excluded: its stubs and
+# monkeypatching produce high-friction false positives (e.g. pydantic attrs on BaseModel-typed
+# values) that aren't worth satisfying. venv is resolved locally and in CI (both create ./.venv).
+include = ["agents", "cli", "mcp_server", "orchestrator", "semantic_layer", "ui", "tools"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"  # check against the requires-python floor

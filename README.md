@@ -138,6 +138,9 @@ pytest tests/ -v
 # OPENROUTER_API_KEY. Excluded from the default `pytest tests/` run (see pyproject.toml);
 # opt in explicitly:
 pytest tests/test_pipeline_scenarios.py -m integration -v
+
+# Static type check (same gate CI runs; config in pyproject.toml [tool.pyright])
+pyright
 ```
 
 Unit tests mock OpenRouter responses (`tests/agent_stubs.py`) but always exercise the real
