@@ -1,6 +1,53 @@
 # Progress
 
 ## Current layer
+**Layer 26 — ETL Transform + Data Quality complete**
+
+Builds the **T + DQ** of the ETL. `semantic_layer/transform.py` consumes the Layer-25 `RawRecord`s
+(source vocabulary, raw strings) and produces **validated canonical entities** (the
+`mcp_server/models.py` Pydantic models), quarantining everything non-conforming; `dq_report.py`
+summarizes what loaded vs was rejected and why. This reverses the Layer-24 divergences and enforces
+the Layer-23 schema — the input the Layer-27 loader + fidelity oracle consume. **Separation of
+concerns:** everything is **in memory** — no DB writes, no `batch_id`, no `batches`/`lineage`/
+`reject_rows` persistence (Layer-27 Load's job). Transform *produces* clean entities + reject records
+(reason attached); Load persists them. Scope: two new modules + tests; no DB/pipeline/agent/prompt/CLI
+changes.
+
+**Fidelity constraint (drives coercion):** the Layer-27 oracle asserts DB == frozen
+`scenarios/*.json`, so coercions are exactly reversible and free text is **trim-only, never
+case-folded** (carrier `"XPO Logistics"`, `signed_by "M. Alvarez"`, notes survive byte-exact). Money
+via `Decimal` (no float): `"$2.50"`/`"2.50"`→`250`, `"$300.00"`→`30000`. Dates: `MM/DD/YYYY`|ISO →
+ISO, validated with `strptime` (bad date → reject). UOM fold (case-insensitive): `EA/CS/PLT` →
+`EACH/CASE/PALLET`, canonical passes through, unknown → reject via the model's `UOM` Literal.
+
+**`semantic_layer/transform.py`:** table-driven `MAPPING` (per target, `canonical_col →
+(source_field, coercer)`) covering all 6 entities in the exact Extract vocabulary; coercers `to_int`,
+`to_cents`, `to_iso_date`, `to_uom`, `trim` (each raises `ValueError` on bad input). `transform(records)
+→ TransformResult(clean, rejects)`. Per-record pipeline: Extract-flagged (`error`) → reject with that
+reason; missing source field → reject; coercer `ValueError` → `bad <col>` reject; `Model.model_validate`
+`ValidationError` → concise reason (e.g. enum violation). Then across candidates: **dedup/merge** by
+`(target, pk)` — identical duplicates collapse to one, a same-PK **conflict** hard-rejects the whole
+group; **referential integrity** — after the clean PO set is final, any child (`asns/invoices/
+receiving_records/deduction_claims`) whose `po_id` isn't present → `orphan` reject. `CleanRecord`
+carries the validated model + lineage (`source_file`/`source_row_ref`) + raw fields for Layer-27.
+
+**`semantic_layer/dq_report.py`:** `build_dq_report(records, result) → DQReport` (per-`source_file`
+`rows_read/rows_loaded/rows_rejected` + `Counter` of reasons + totals) and `render_dq_report`.
+
+**Verification:** new `tests/test_transform.py` (offline, no LLM): coercer unit tests; full happy path
+over `extract_all("source_systems")` → **44 clean, 0 rejects**, per-target counts (8/8/9/8/1/10),
+values coerced (int cents / ISO dates / folded UOM / trimmed notes); **fidelity spot-check** —
+transformed PO-001 / RCP-001 / CLM-006 equal the frozen `scenarios/*.json` models field-for-field (a
+Transform-level preview of the Layer-27 oracle); quarantine paths — Extract-flagged, bad money/date/UOM,
+missing field, RI orphan (siblings survive), merge conflict (identical dedup to one); DQ report
+reconciles (read == loaded + rejected per source) and captures reasons. `pytest -q` — **218 passed,
+10 deselected** (201 prior + 17 new); integration still deselected. No live OpenRouter run — pure
+in-memory transform + offline tests, no agent/prompt/pipeline/verdict logic changed. `README.md` layer
+table extended with row 26.
+
+---
+
+## Previous layer
 **Layer 25 — ETL Extract (per-source parsers) complete**
 
 Builds the **E** of the ETL: `semantic_layer/extract/` — one parser per source *format* that turns

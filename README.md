@@ -48,6 +48,7 @@ authoritative, up-to-date state). All layers are complete:
 | 23 | Data model & source-mapping design (schema + `mcp_server/db.py`) | ✅ Done |
 | 24 | Heterogeneous source-system fixtures + generator (`source_systems/`, `tools/generate_source_systems.py`) | ✅ Done |
 | 25 | ETL Extract — per-source parsers (`semantic_layer/extract/`) | ✅ Done |
+| 26 | ETL Transform + Data Quality (`semantic_layer/transform.py`, `dq_report.py`) | ✅ Done |
 
 ## Setup
 
