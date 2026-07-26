@@ -434,30 +434,131 @@ design decision. Runtime is **claim-id-driven — `scenario` is retired from the
 - **"UI API Contract"** — the `scenario` query param is dropped; dashboard/batch endpoints added
   (see "UI API Contract v2" below).
 
-### Relational schema — DRAFT (finalized in the Layer 23 user-led design session, in progress)
+### Relational schema — FINAL (Layer 23)
 
-Business entities are 1:1 with `mcp_server/models.py`. Operational tables support the ETL. DB =
-union of all entities deduped by primary key (`trade_agreements` is standalone; multiple claims per
-PO allowed, e.g. CLM-007a/007b → PO-007).
+Finalized in the Layer 23 user-led design session (2026-07-26). DDL lives in `mcp_server/db.py`
+(`SCHEMA_SQL`, idempotent). This is an **operational reconciliation** model — a normalized 3NF
+business core plus a DE-grade metadata/ops layer — not a Kimball star schema (per-claim entity
+navigation, not analytics). 11 tables + 1 view. DB = union of all entities deduped by primary key
+(`trade_agreements` is standalone; multiple claims per PO allowed, e.g. CLM-007a/007b → PO-007).
 
-| Table | PK | FKs | Notes |
+**Resolved design decisions:**
+
+1. **retailer / sku → plain TEXT columns**, not dimension tables — 3NF is driven by functional
+   dependencies, and these codes carry no dependent attributes; there is no retailer/product master
+   (out of scope, `CLAUDE.md`). `GROUP BY retailer` still works on a column, so nothing analytical
+   is lost.
+2. **Lineage → separate `lineage` table**, not `_source_*` columns — provenance is metadata; keeping
+   it out of the business tables preserves their 1:1 mapping to `models.py`.
+3. **`batch_id` → dated natural key** (`LOT-2026-07-25`) — readable in traces and the Layer 30 UI.
+4. **Foreign keys declared AND enforced** (`PRAGMA foreign_keys = ON` per connection). RI is a
+   stated DE goal; Transform (Layer 26) quarantines orphans before Load, so enforcement is a safe
+   backstop, not a load-breaker.
+5. **Money = INTEGER cents, quantities = INTEGER**; UOM float conversions computed at query time.
+6. **UOM conversions stay a JSON reference file** (`data/sku_uom_conversions.json`), not a table
+   (`normalize_uom` unchanged).
+7. **`v_batch_summary` = plain (non-materialized) VIEW** — SQLite has no materialized views, and
+   on-read aggregation at this scale is free and always fresh.
+
+**Business tables (6)** — column-for-column identical to `mcp_server/models.py` (`batch_id` on
+`deduction_claims` is a DB augmentation, not a model field):
+
+| Table | PK | FKs | Columns |
 |---|---|---|---|
-| `purchase_orders` | `po_id` | — | retailer, sku, ordered_qty, ordered_uom, unit_price, order_date |
-| `asns` | `asn_id` | `po_id` | 0..N per PO (split shipment = 2 rows) |
-| `invoices` | `invoice_id` | `po_id` | |
-| `receiving_records` | `receipt_id` | `po_id` | includes free-text `notes` |
-| `trade_agreements` | `agreement_id` | — | standalone lifecycle; queried by retailer+sku+promo_code |
-| `deduction_claims` | `claim_id` | `po_id`, `batch_id` | claimed_reason, claimed_amount, claim_date, retailer_notes |
-| `batches` | `batch_id` | — | load_date, status (`complete`/`incomplete`/`complete_with_exceptions`) |
-| `claim_resolutions` | `claim_id` | claim | verdicts, confidence, resolved_at, run_id — seeded for 007a/008a, else written by the pipeline |
-| `reject_rows` | `id` | batch | quarantine/dead-letter: source, raw_row, reason, rejected_at |
-| `load_audit` | `id` | batch | source, rows_read/loaded/rejected, loaded_at |
-| `lineage` | `id` | batch | entity_table, entity_pk, source_file, source_row_ref, loaded_at |
+| `purchase_orders` | `po_id` | — | retailer, sku, ordered_qty INT, ordered_uom, unit_price INT, order_date |
+| `asns` | `asn_id` | `po_id`→purchase_orders | sku, shipped_qty INT, shipped_uom, ship_date, carrier — 0..N per PO (split shipment = 2 rows) |
+| `invoices` | `invoice_id` | `po_id`→purchase_orders | sku, invoiced_qty INT, invoiced_uom, invoice_date, amount INT |
+| `receiving_records` | `receipt_id` | `po_id`→purchase_orders | sku, received_qty INT, received_uom, receipt_date, lot_id, notes (free text) |
+| `trade_agreements` | `agreement_id` | — | retailer, sku, promo_code, discount_terms, valid_from, valid_to, signed_by — standalone; queried by (retailer, sku, promo_code) |
+| `deduction_claims` | `claim_id` | `po_id`→purchase_orders, `batch_id`→batches | retailer, claimed_reason, claimed_amount INT, claim_date, retailer_notes |
 
-Open decisions for the Layer 23 session: (1) retailer/sku as columns vs lookup dimensions;
-(2) UOM conversions stay a JSON reference file vs a `uom_conversions` table; (3) lineage as a
-separate table vs `_source_*` columns; (4) `batch_id` scheme (dated `LOT-2026-07-25` vs surrogate);
-(5) confirm money = INTEGER cents, quantities = INTEGER, UOM floats computed at query time.
+**Operational / metadata tables (5):**
+
+| Table | PK | FKs | Columns |
+|---|---|---|---|
+| `batches` | `batch_id` (TEXT) | — | load_date, status, created_at |
+| `claim_resolutions` | `claim_id` | `claim_id`→deduction_claims | investigator_verdict, final_verdict, confidence, resolved_at, run_id — seeded for 007a/008a, else written by the pipeline (Layer 29) |
+| `reject_rows` | `id` (INTEGER) | `batch_id`→batches | source, raw_row, reason, rejected_at — quarantine/dead-letter |
+| `load_audit` | `id` (INTEGER) | `batch_id`→batches | source, rows_read INT, rows_loaded INT, rows_rejected INT, loaded_at |
+| `lineage` | `id` (INTEGER) | `batch_id`→batches | entity_table, entity_pk, source_file, source_row_ref, loaded_at |
+
+**View:**
+
+- `v_batch_summary` — per `batch_id`: `claims_total`, `claims_resolved`, `needs_human_review`
+  (`final_verdict = 'ESCALATE'`), `dollars_at_risk_cents` (sum of unresolved `claimed_amount`).
+  `deduction_claims` LEFT JOIN `claim_resolutions`, `GROUP BY batch_id`. Feeds the Layer 30
+  `/api/dashboard` and the `run_all` CLI summary — dashboard/CLI read aggregates from it rather than
+  re-deriving in Python.
+
+**CHECK constraints** (mirror the `models.py` `UOM` / `ClaimReason` Literals): all `*_uom` columns
+IN `('EACH','CASE','PALLET')`; `claimed_reason` IN `('shortage','promo_billback','compliance',
+'wrong_item')`; `batches.status` IN `('complete','incomplete','complete_with_exceptions')`.
+
+**Indexes.** SQLite auto-indexes every `PRIMARY KEY`, so `po_id`/`claim_id`/`asn_id` PK lookups are
+already covered. Named indexes are declared on the non-PK **FK / lookup** columns that the Layer 28
+MCP tools and Layer 30 dashboard actually query: `asns.po_id`, `invoices.po_id`,
+`receiving_records.po_id`, `deduction_claims.po_id`, `deduction_claims.batch_id`,
+`trade_agreements(retailer, sku, promo_code)` (composite), `batch_id` on `reject_rows` /
+`load_audit` / `lineage`, and `lineage(entity_table, entity_pk)` (composite, for reverse-provenance
+lookup — see below). At the daily-lot scale these are correctness-neutral; they document the
+intended access paths and keep the schema DE-grade.
+
+**Auditability** is carried by the metadata layer, not by inline row columns. Two provenance spines:
+
+- *How a row entered the DB* — `lineage` links each business row (`entity_table` + `entity_pk`) to
+  its exact source (`source_file` + `source_row_ref`) with `loaded_at`, so backtracking is
+  bidirectional: DB row → source is `SELECT source_file, source_row_ref FROM lineage WHERE
+  entity_table = ? AND entity_pk = ?` (backed by `idx_lineage_entity`), and source → DB row is the
+  reverse on the same columns. `load_audit` records per-source read/loaded/rejected counts +
+  `loaded_at`; `batches.created_at`/`load_date` timestamp the lot. An ETL load is identified by
+  `batch_id` (there is no separate ETL "load run id"; idempotent merge-upsert means a re-load simply
+  refreshes the same batch's lineage).
+- *How a claim was resolved* — `claim_resolutions(resolved_at, run_id)`, where `run_id` is the
+  **investigation** run id from `orchestrator.output.make_run_id()`, tying a resolution to its
+  `outputs/<claim_id>/<run_id>/` trace artifacts. The two spines deliberately do not share an id.
+
+No inline `created_at`/`created_by` on business tables (would duplicate `lineage.loaded_at` and
+break the 1:1 mapping to `models.py`; single-user/no-auth means `created_by` carries no signal) and
+**no SCD Type-2 history** — this is an operational reconciliation store with incremental merge-upsert
+(SCD Type-1 / overwrite by PK), not a warehouse; source rows are immutable documents and the history
+that matters is the resolution history in `claim_resolutions` + `batches`.
+
+**Load order** (parents before children, for the Layer 27 loader): `batches` → `purchase_orders` →
+(`asns`, `invoices`, `receiving_records`, `deduction_claims`) → `claim_resolutions`;
+`trade_agreements` any time (standalone); `lineage` / `load_audit` / `reject_rows` after their
+`batch_id` exists.
+
+### Source→target mapping / divergence spec (drives Layer 24 fixtures + Layer 25 parsers)
+
+Each source system is deliberately divergent from the canonical schema; Transform (Layer 26)
+reconciles them. Money→INTEGER cents, dates→ISO-8601, and UOM-synonym folding all happen in
+Transform, not at the source.
+
+| Source system | Format | Feeds entities | Deliberate divergences |
+|---|---|---|---|
+| ERP | CSV | `purchase_orders`, `invoices` | `$`/decimal money (not cents), field-name aliases, mixed date formats, quoted free-text |
+| Carrier | EDI-ish flat text (856-like) | `asns` | hierarchical loops; split shipment = 2 ASN records for one PO; UOM synonyms (EA/CS/PLT) |
+| WMS / portal / TPM | JSON | `receiving_records`, `deduction_claims`, `trade_agreements` | nested keys, whitespace/case quirks, UOM synonyms, dates as ISO or `MM/DD/YYYY` |
+
+Representative field-level mappings (source field → canonical column):
+
+- **ERP CSV → `purchase_orders`:** `PO_NUMBER`→`po_id`, `RETAILER`→`retailer`, `ITEM`→`sku`,
+  `QTY`→`ordered_qty`, `UOM`→`ordered_uom`, `UNIT_PRICE` (`"$2.50"`/`2.50`)→`unit_price` (cents,
+  `250`), `ORDER_DT` (`01/10/2024` or `2024-01-10`)→`order_date` (ISO).
+- **Carrier flat text → `asns`:** one `ASN*` header loop per record — `SHIPMENT_ID`→`asn_id`,
+  `REF_PO`→`po_id`, `ITEM`→`sku`, `SHIP_QTY`→`shipped_qty`, `UOM` (`EA`/`CS`/`PLT`)→`shipped_uom`
+  (`EACH`/`CASE`/`PALLET`), `SHIP_DT`→`ship_date`, `SCAC`/carrier name→`carrier`. A split shipment
+  emits two loops sharing one `REF_PO`.
+- **WMS JSON → `receiving_records`:** `receipt.id`→`receipt_id`, `receipt.po`→`po_id`,
+  `receipt.item`→`sku`, `receipt.qtyReceived`→`received_qty`, `receipt.uom`→`received_uom`,
+  `receipt.date`→`receipt_date`, `receipt.lot`→`lot_id`, `receipt.notes` (trimmed)→`notes`.
+
+**Forward-looking (recorded here for later layers — schema is volume-agnostic, do NOT build in
+Layer 23):** a realistic daily lot targets ~50 claims (the canonical 8 ground-truth claims + ~42
+synthetic claims cloned from the archetypes with a distinct `CLM-SYN-####` id prefix so the fidelity
+oracle isolates the canonical 8) — Layer 24 fixtures + Layer 30 pagination. Bulk "Run investigation"
+(Layer 29/30) investigates all unresolved claims but with a configurable cap (default ~10, override
+for the full lot) so demo cost/time stays bounded; CI/offline never calls LLMs (stays on the 8).
 
 ### ETL contract (Layers 24–27)
 
