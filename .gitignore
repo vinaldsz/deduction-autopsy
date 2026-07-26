@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 outputs/
+data/deductions.db
 .venv/
 dist/
 *.egg-info/

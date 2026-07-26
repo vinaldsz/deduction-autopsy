@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
 
+from mcp_server.db import DEFAULT_DB_PATH
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -14,6 +16,7 @@ class Settings:
     max_transport_attempts: int
     retry_backoff_base_seconds: float
     log_level: str
+    deductions_db: str
 
 
 def load_settings() -> Settings:
@@ -40,6 +43,7 @@ def load_settings() -> Settings:
             os.environ.get("RETRY_BACKOFF_BASE_SECONDS", "1.0")
         ),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        deductions_db=os.environ.get("DEDUCTIONS_DB", str(DEFAULT_DB_PATH)),
     )
 
 
