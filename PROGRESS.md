@@ -1,6 +1,55 @@
 # Progress
 
 ## Current layer
+**Layer 25 — ETL Extract (per-source parsers) complete**
+
+Builds the **E** of the ETL: `semantic_layer/extract/` — one parser per source *format* that turns
+each `source_systems/` file into **raw, lineage-tagged records** (`RawRecord`), the input Layer 26
+(Transform) will coerce/validate/map. **Deliberate separation of concerns:** Extract does *format
+parsing only* — it keeps **source-vocabulary field names** (`PO_NUMBER`, `receipt.id`, carrier
+segment fields) and **raw string values** (money still `"$2.50"`, dates still `"01/10/2024"`, UOM
+still `"EA"`, WMS notes still whitespace-padded). It does **not** map to canonical columns, coerce,
+fold UOM synonyms, trim, or Pydantic-validate (all Layer 26), so it never imports
+`mcp_server/models.py`. **Tolerant parsing:** structurally-broken units are flagged via a
+`RawRecord.error` field (raw text kept in `fields["_raw"]`) and good units keep flowing — quarantine
+to `reject_rows`/DB writes are Layers 26/27. Scope: new package + tests only; no Transform, DB,
+pipeline/agent/prompt, or CLI changes.
+
+**`semantic_layer/extract/`** (NEW package):
+- `records.py` — `RawRecord(source_file, source_row_ref, target, fields, error)`. `source_file` +
+  `source_row_ref` (a 0-based `"record {i}"` ordinal, uniform across parsers) are the **lineage
+  seed** the Layer-27 loader writes into `lineage` (`entity_pk` resolved later once the canonical PK
+  is known).
+- `erp_csv.py` — stdlib `csv` (RFC-4180 quoting, so quoted free-text / the injection surface
+  round-trips byte-exact); a row whose column count ≠ header is flagged (`error="column count
+  mismatch"`), parsing continues.
+- `carrier_856.py` — a **state machine**: `ASN*` starts a record, `ITEM*`/`SHIP*` fill it, the next
+  `ASN*` (or EOF) flushes; the PO-003 split shipment → two records sharing `ref_po=PO-003` falls out
+  naturally. Flags orphan `ITEM*/SHIP*` (no preceding ASN), short segments (wrong element count),
+  and unknown tags.
+- `json_sources.py` — `parse_wms_json`/`parse_tpm_json` (arrays of single-key-wrapped objects) +
+  `parse_portal_json` (`{"lot_date","claims":[...]}`, one record per claim), sharing a `_flatten`
+  that flattens nested objects to **dotted keys** (`receipt.id`, `agreement.promoCode`); whitespace
+  preserved. Flags missing wrapper / missing `claims` array / invalid JSON.
+- `__init__.py` — `PARSERS` (format → parser) + `extract_all(source_root)`, which reads
+  `manifest.json`, dispatches by `format`, and tags each record with the manifest's
+  `source_file` + `target`. Public API Layer 26 consumes.
+
+**Verification:** new `tests/test_extract.py` (offline, no LLM): per-parser happy paths asserting raw
+values stay uncoerced; CSV byte-exact round-trip of a comma+quote value; carrier split-shipment → two
+records sharing `ref_po`; malformed inputs (CSV column mismatch, carrier orphan/short segment, JSON
+missing wrapper, invalid JSON, portal missing `claims`) each set `.error` while good records still
+parse; and `extract_all()` over the committed `source_systems/` returns **44 records** (8 PO + 8 inv +
+9 ASN + 8 receiving + 1 TA + 10 claims), each correctly tagged with the manifest `target`/`source_file`
+and a non-empty lineage ref, all `error=None`. `pytest -q` — **201 passed, 10 deselected** (190 prior
++ 11 new); integration still deselected. No live OpenRouter run — pure parsing + offline tests, no
+agent/prompt/pipeline/verdict logic changed. `pyproject.toml` adds `semantic_layer*` to
+`packages.find` (core app code, unlike the dev-only `tools/`); `README.md` layer table extended with
+row 25.
+
+---
+
+## Previous layer
 **Layer 24 — Heterogeneous source-system fixtures + generator complete**
 
 Second gate of the Semantic/DB phase: produces the **bronze-layer source data** the ETL (Layers
