@@ -186,11 +186,15 @@ These are deliberately out of scope for the current build (see [`CLAUDE.md`](CLA
 - **Parallel/concurrent orchestration** — scenarios and claims currently run sequentially.
 - **SKU-to-product-name mapping** — SKUs stay opaque codes (e.g. `SKU-001`) everywhere; a
   display-only product catalog for dispute packets would be cosmetic, not functional.
-- **Heterogeneous mock data sources** — fixtures are plain JSON for all 7 scenarios today.
-  Backing `FixtureLoader` with a mix of a relational DB, CSV/Excel, etc. would better
-  recreate the messiness of real multi-system data landscapes and more thoroughly test that
-  the MCP-tool abstraction hides the backing store from agents — worth pursuing once the
-  in-scope build is stable.
+- **Incremental / CDC source extraction** — extraction reads whole source files each run;
+  there is no "pull only what changed since last watermark." Modelling the sources as stateful
+  stores with change-data-capture is real DE depth, but it changes nothing the agents or the
+  reconciliation demo exercise, so it stays deferred. (Note: the *load* side already does
+  incremental merge-upsert by PK — earlier lots then today's lot on top.)
+- **Transient / streaming landing zone** — `source_systems/` is a mock landing zone whose files
+  are git-tracked for reproducibility (see `docs/SPEC.md`). Making it a genuinely transient drop
+  (gitignored, feeds "arrive" and are archived) or a streamed feed would be more faithful to real
+  ingestion topology, but buys little for a local, single-user, secondary-DE build.
 - **API-facing deployment concerns** — auth, per-user/per-IP rate limiting, and per-user
   cost caps on OpenRouter usage only become a real concern if this sits behind a
   frontend/web UI instead of a locally-run CLI.

@@ -567,6 +567,19 @@ for the full lot) so demo cost/time stays bounded; CI/offline never calls LLMs (
   agreements). Genuinely divergent schemas: different field names, `$`-vs-cents money, mixed date
   formats, UOM synonyms (EA/CS/PLT), whitespace/case quirks. Generated from the frozen JSON by
   `tools/generate_source_systems.py` so they can't drift.
+  - **What `source_systems/` represents.** It is a mock **landing / raw-bronze zone**: the feeds
+    that upstream systems (ERP, carrier EDI, WMS/portal/TPM) *drop* for the pipeline to pick up —
+    the generator plays the role of those upstream exports. A file landing zone is faithful to how
+    much real ingestion actually works (EDI 856 literally arrives as SFTP/AS2 files; ERP/WMS
+    extracts are commonly scheduled flat-file drops), and keeping an immutable copy of what arrived
+    is itself a real lakehouse raw-zone pattern. The files are git-tracked purely for
+    **reproducibility** (diffable fixtures + a drift guard); git is standing in for "a durable
+    archive of what the source systems sent," *not* claiming the source systems themselves live in
+    the repo. The reconciliation DB (`data/deductions.db`) is a derived read model rebuilt from this
+    zone — so losing it is a rebuild, not data loss. Modelling the sources as separate stateful
+    stores with **incremental/CDC extraction**, or as a genuinely *transient* streamed landing zone,
+    is deferred as future DE work (see README); it would not change what the agents or the
+    reconciliation demo exercise.
 - **Load strategy:** incremental **merge-upsert by PK**, transactional, idempotent (run twice →
   identical DB). Earlier lots (with 007a/008a resolved) load first; today's lot merges on top.
 - **Bad data:** malformed/non-conforming rows are **quarantined** to `reject_rows` with a reason;
