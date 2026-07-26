@@ -1,0 +1,47 @@
+{
+  "sources": [
+    {
+      "file": "erp/purchase_orders.csv",
+      "format": "erp_csv",
+      "target": "purchase_orders"
+    },
+    {
+      "file": "erp/invoices.csv",
+      "format": "erp_csv",
+      "target": "invoices"
+    },
+    {
+      "file": "carrier/asn_856.txt",
+      "format": "carrier_856",
+      "target": "asns"
+    },
+    {
+      "file": "wms/receiving.json",
+      "format": "wms_json",
+      "target": "receiving_records"
+    },
+    {
+      "file": "tpm/trade_agreements.json",
+      "format": "tpm_json",
+      "target": "trade_agreements"
+    },
+    {
+      "file": "portal/claims_2024-06-08.json",
+      "format": "portal_json",
+      "target": "deduction_claims",
+      "lot_date": "2024-06-08"
+    },
+    {
+      "file": "portal/claims_2024-08-10.json",
+      "format": "portal_json",
+      "target": "deduction_claims",
+      "lot_date": "2024-08-10"
+    },
+    {
+      "file": "portal/claims_2024-09-15.json",
+      "format": "portal_json",
+      "target": "deduction_claims",
+      "lot_date": "2024-09-15"
+    }
+  ]
+}

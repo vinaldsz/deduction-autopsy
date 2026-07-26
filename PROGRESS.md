@@ -1,6 +1,52 @@
 # Progress
 
 ## Current layer
+**Layer 24 — Heterogeneous source-system fixtures + generator complete**
+
+Second gate of the Semantic/DB phase: produces the **bronze-layer source data** the ETL (Layers
+25–27) will ingest. Re-emits the frozen `scenarios/*/*.json` as *deliberately divergent*
+source-system files so the ETL has genuine extract/transform work — generated from the frozen JSON
+so they provably can't drift. **Scope:** data + a one-off generator + offline tests; no ETL parsing
+(Layer 25), no DB writes, no pipeline/agent/prompt changes. Confirmed decisions this session:
+canonical 8-scenario graph only (the ~42 `CLM-SYN` synthetics deferred to Layer 30 — the ETL is
+volume-agnostic, so they drop in later with no rework and the fidelity oracle stays clean); and the
+generated `source_systems/` tree is **committed** (reviewable ETL input) guarded by a byte-equality
+reproducibility test.
+
+**`tools/generate_source_systems.py`** (NEW; new `tools/` package): reads all 8 scenarios via the
+existing Pydantic models (`mcp_server/models.py`), pools every entity by PK (dedupe with conflict
+detection), and emits `source_systems/`: `erp/purchase_orders.csv` + `erp/invoices.csv` (aliased
+headers, `$`/decimal money, mixed `MM/DD/YYYY`/ISO dates, RFC-4180 CSV via stdlib `csv`),
+`carrier/asn_856.txt` (856-ish `ASN*/ITEM*/SHIP*` loops, UOM synonyms EA/CS/PLT, the PO-003 split
+shipment = two loops sharing `REF_PO=PO-003`), `wms/receiving.json` (nested `receipt.*` keys, UOM
+synonyms, whitespace-padded notes to exercise trimming, mixed dates), `portal/claims_<lot-date>.json`
+(one file per daily lot, nested-ish keys, `$`/decimal amounts, mixed dates, notes verbatim to
+preserve the Layer-18 injection surface), `tpm/trade_agreements.json` (nested `agreement.*`, mixed
+dates), and `manifest.json` (file → format/target/lot_date, the Layer-27 load contract). Divergences
+are deterministic (even/odd row index picks the format) and exactly reversible; money uses integer
+cents math (no floats). `main()` takes `--out DIR` (default `source_systems/`); runnable as
+`python -m tools.generate_source_systems`.
+
+**Lot assignment (encoded in the source layout):** today's lot `claims_2024-09-15.json` =
+`max(claim_date)` over the active claims, holding CLM-001…006/007b/008; the two prior claims each get
+their own earlier lot (`claims_2024-06-08.json` = CLM-007a, `claims_2024-08-10.json` = CLM-008a),
+which become the pre-seeded resolved history in Layer 27. `<TODAY>` is derived from data (not
+wall-clock) so the drift test is stable.
+
+**Verification:** new `tests/test_generate_source_systems.py` (offline, no LLM): drift guard
+(regenerate into `tmp_path`, assert every file byte-identical to the committed tree), completeness
+(8 POs / 8 invoices / 9 ASNs incl. the split pair / 8 receiving / 1 TA / 10 claims, each PK once),
+lot assignment (today's lot = the active claims; each prior claim its own lot; manifest lists every
+file with correct targets/lot dates), parse-ability (CSV via `csv`, JSON via `json`, 9 carrier
+loops), and reversibility spot-checks (money ÷100 == cents; MM/DD/YYYY → ISO; EA/CS/PLT → canonical;
+WMS notes trim back and portal notes are verbatim byte-exact). `pytest -q` — **190 passed, 10
+deselected** (179 prior + 11 new); integration still deselected. No live OpenRouter run — pure
+data/generator/offline tests, no agent/prompt/pipeline/verdict logic changed. `source_systems/` is
+committed (not gitignored — it's ETL input); `README.md` layer table extended with row 24.
+
+---
+
+## Previous layer
 **Layer 23 — Data model & source-mapping design complete (Semantic/DB phase opens)**
 
 First layer of the approved Layers 23–31 Semantic/DB phase (source systems → ETL → relational

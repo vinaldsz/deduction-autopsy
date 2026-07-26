@@ -1,0 +1,77 @@
+{
+  "lot_date": "2024-09-15",
+  "claims": [
+    {
+      "claimId": "CLM-001",
+      "po": "PO-001",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "$30.00",
+      "claimDate": "01/20/2024",
+      "notes": "Received 108 of 120 ordered EACH units. Deducting for 12-unit shortage per carrier BOL exception noted at receipt."
+    },
+    {
+      "claimId": "CLM-002",
+      "po": "PO-002",
+      "retailer": "target",
+      "reason": "shortage",
+      "amount": "115.00",
+      "claimDate": "2024-02-10",
+      "notes": "PO ordered 5 CASE but ASN and receipt only show 120 EACH units - appears to be a 115-unit shortage against the ordered case quantity."
+    },
+    {
+      "claimId": "CLM-003",
+      "po": "PO-003",
+      "retailer": "kroger",
+      "reason": "shortage",
+      "amount": "$180.00",
+      "claimDate": "03/12/2024",
+      "notes": "Only received first shipment of 360 EACH against a PO for 720 EACH - deducting for a 360-unit shortage."
+    },
+    {
+      "claimId": "CLM-004",
+      "po": "PO-004",
+      "retailer": "costco",
+      "reason": "shortage",
+      "amount": "9.00",
+      "claimDate": "2024-04-15",
+      "notes": "Invoice INV-004 dated 2024-04-08 covers 240 EACH, but only 228 EACH were received - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-005",
+      "po": "PO-005",
+      "retailer": "publix",
+      "reason": "wrong_item",
+      "amount": "$180.00",
+      "claimDate": "05/10/2024",
+      "notes": "Received SKU-005-ALT instead of ordered SKU-005 - deducting full invoice amount for wrong item shipped."
+    },
+    {
+      "claimId": "CLM-006",
+      "po": "PO-006",
+      "retailer": "safeway",
+      "reason": "promo_billback",
+      "amount": "38.40",
+      "claimDate": "2024-06-15",
+      "notes": "Deducting 10% promo billback per agreement PROMO-SUMMER-2024 covering this SKU."
+    },
+    {
+      "claimId": "CLM-007b",
+      "po": "PO-007",
+      "retailer": "albertsons",
+      "reason": "shortage",
+      "amount": "$18.00",
+      "claimDate": "07/15/2024",
+      "notes": "Received 132 of 144 ordered EACH units on PO-007 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-008",
+      "po": "PO-008",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "24.00",
+      "claimDate": "2024-09-15",
+      "notes": "Received 138 of 150 ordered EACH units on PO-008 - deducting for 12-unit shortage."
+    }
+  ]
+}
