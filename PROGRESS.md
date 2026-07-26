@@ -1,6 +1,54 @@
 # Progress
 
 ## Current layer
+**Layer 27 — ETL Load (merge-upsert + lineage + batch gate; fidelity oracle) complete**
+
+The **L** of the ETL: the pipeline finally writes to SQLite. `semantic_layer/load.py` persists a
+Layer-26 `TransformResult` into the Layer-23 schema; `semantic_layer/etl.py::build_db()` runs
+extract→transform→load end-to-end and is runnable as `python -m semantic_layer.etl`.
+`tests/test_etl.py` is the **fidelity oracle** — every business row in the DB must equal the frozen
+`scenarios/*.json` field-for-field, proving the JSON→sources→ETL→DB chain is lossless so the 8
+ground-truth verdicts can't drift. **Scope:** builds the DB only — does *not* rewire the MCP
+tools/`FixtureLoader`/pipeline to read from it (Layer 28); no agent/prompt changes.
+
+**`semantic_layer/load.py`** — `load(conn, result, report, manifest)` in one transaction (the
+`db.connect()` handle has `PRAGMA foreign_keys = ON`). **Batch attribution:** every source file
+belongs to a batch — a portal file with `lot_date` L → `LOT-L`; all other (shared) sources → the
+current batch `LOT-<max lot_date>`; this one rule drives `batch_id` on claims/lineage/load_audit/
+reject_rows. Steps (parents-before-children): upsert `batches` (status `complete`, or
+`complete_with_exceptions` if the batch has any reject); upsert business entities by PK via
+`INSERT … ON CONFLICT(pk) DO UPDATE` (true merge-upsert, idempotent, FK-safe), claims also getting
+`batch_id`; write `lineage` (one per clean row), `load_audit` (per source, from the DQ report),
+`reject_rows` (per `RejectRecord`); seed prior-lot resolutions for 007a/008a (both credited in their
+notes → `VALID`, `run_id="seed-earlier-lot"`) via existence-guarded `INSERT OR IGNORE`.
+**Idempotency:** business/`batches` upsert, seeds `INSERT OR IGNORE`, and the append-only metadata
+tables are deleted-per-batch before re-insert, so a re-load refreshes rather than accumulates
+(wall-clock `loaded_at`/`created_at` differ by design — the guarantee is structural).
+
+**`semantic_layer/etl.py`** — `build_db(source_root, db_path=None)`: `init_db` → `extract_all` →
+`transform` → `build_dq_report` → `load` (in a `with conn:` transaction) → returns the `DQReport`;
+`__main__` prints `render_dq_report` + a one-line summary. `db_path` defaults to
+`SETTINGS.deductions_db`.
+
+**Config/ignore:** `orchestrator/config.py` gains `deductions_db` (`DEDUCTIONS_DB` env, default
+`mcp_server.db.DEFAULT_DB_PATH`); `.env.example` documents it; `.gitignore` adds
+`data/deductions.db` (derived artifact). `tests/test_orchestrator_config.py` updated for the new
+field.
+
+**Verification:** `tests/test_etl.py` (offline, no LLM) — the fidelity oracle parametrized over all
+44 frozen entities (DB row → Pydantic model == frozen model, `batch_id` excluded), business-row
+counts, referential integrity (`PRAGMA foreign_key_check` empty), the batch gate (3 lot batches all
+`complete`; claim→batch mapping), seeded resolutions (only 007a/008a, `VALID`), lineage/load_audit
+(44 lineage rows, reverse-provenance lookup, per-source audit counts, 0 rejects), idempotency
+(rebuild → identical business dump + unchanged metadata counts), and a load-level quarantine unit
+test (a `RejectRecord` → a `reject_rows` row + `complete_with_exceptions`). `pytest -q` — **269
+passed, 10 deselected** (218 prior + 51 new); `pyright` — 0 errors. `python -m semantic_layer.etl`
+builds `data/deductions.db` (gitignored) and prints an all-loaded DQ report. No live OpenRouter run —
+pure ETL + offline tests. `README.md` layer table extended with row 27.
+
+---
+
+## Previous layer
 **Layer 26 — ETL Transform + Data Quality complete**
 
 Builds the **T + DQ** of the ETL. `semantic_layer/transform.py` consumes the Layer-25 `RawRecord`s

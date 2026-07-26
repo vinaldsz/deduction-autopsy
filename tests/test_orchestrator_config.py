@@ -3,6 +3,7 @@ from agents.investigator import INVESTIGATOR_MODEL
 from agents.reviewer import REVIEWER_MODEL
 from fastmcp import Client
 from mcp_server.server import mcp
+from mcp_server.db import DEFAULT_DB_PATH
 from orchestrator.config import SETTINGS, Settings, load_settings
 from orchestrator.pipeline import OPENROUTER_BASE_URL
 from tests.agent_stubs import StubAsyncOpenAI, make_completion
@@ -21,6 +22,7 @@ def test_defaults_match_confirmed_values():
         max_transport_attempts=3,
         retry_backoff_base_seconds=1.0,
         log_level="INFO",
+        deductions_db=str(DEFAULT_DB_PATH),
     )
 
 
@@ -35,6 +37,7 @@ def test_load_settings_honors_env_var_overrides(monkeypatch):
     monkeypatch.setenv("MAX_TRANSPORT_ATTEMPTS", "5")
     monkeypatch.setenv("RETRY_BACKOFF_BASE_SECONDS", "2.0")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("DEDUCTIONS_DB", "/tmp/test-deductions.db")
 
     settings = load_settings()
 
@@ -49,6 +52,7 @@ def test_load_settings_honors_env_var_overrides(monkeypatch):
         max_transport_attempts=5,
         retry_backoff_base_seconds=2.0,
         log_level="DEBUG",
+        deductions_db="/tmp/test-deductions.db",
     )
 
 
