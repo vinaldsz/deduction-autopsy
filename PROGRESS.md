@@ -1,6 +1,62 @@
 # Progress
 
 ## Current layer
+**Layer 23 — Data model & source-mapping design complete (Semantic/DB phase opens)**
+
+First layer of the approved Layers 23–31 Semantic/DB phase (source systems → ETL → relational
+SQLite → MCP → agents). Explicitly a **design session, not bulk implementation**: it finalizes the
+relational schema and ships the DDL that gates every later layer — 24+ cannot start until the schema
+is approved and creates a clean empty DB. No ETL, no source fixtures, no pipeline changes.
+
+**`docs/SPEC.md`**: replaced the DRAFT schema + "Open decisions" block with the **FINAL** schema —
+11 tables + 1 view, an operational-reconciliation 3NF business core (1:1 with `mcp_server/models.py`)
+plus a DE-grade metadata/ops layer (batches, claim_resolutions, reject_rows, load_audit, lineage),
+**not** a Kimball star. All 5 open decisions resolved (recorded in-doc): retailer/sku as plain TEXT
+columns (no dimension tables — no dependent attributes, no product master); lineage as a separate
+table (provenance is metadata, keeps business tables 1:1 with the models); dated natural `batch_id`
+(`LOT-2026-07-25`); FKs declared AND enforced (`PRAGMA foreign_keys = ON`, with Transform quarantining
+orphans before Load as the real guard); money = INTEGER cents / quantities = INTEGER / UOM floats at
+query time. Added a **load order** (parents before children) and a **source→target mapping /
+divergence spec** (ERP CSV / carrier EDI-ish flat text / WMS-portal-TPM JSON → entities, with a
+representative field-level mapping per source and the deliberate divergences that Layer 26 Transform
+reconciles). Recorded forward-looking notes (~50-claim daily lot with `CLM-SYN-####` synthetics; bulk
+"Run investigation" with a configurable cap) as later-layer work — the schema is volume-agnostic.
+
+**`mcp_server/db.py`** (NEW; only code artifact, stdlib `sqlite3`, matches `fixtures.py` style):
+`SCHEMA_SQL` (idempotent `CREATE TABLE/VIEW/INDEX IF NOT EXISTS` for all 11 tables +
+`v_batch_summary` + 10 named indexes, with PKs, FK clauses, CHECK constraints mirroring the
+`UOM`/`ClaimReason` Literals, INTEGER money/qty); `connect(db_path)` (opens + `PRAGMA foreign_keys =
+ON` per connection); `init_db(db_path)` (`executescript` + commit; default `data/deductions.db`).
+`DEDUCTIONS_DB` env wiring is deliberately deferred to Layer 27 per PLAN — a plain path param/default
+here, `orchestrator/config.py` untouched.
+
+**Indexes + auditability (raised in the design session):** added named indexes on the non-PK FK /
+lookup columns the Layer 28 tools + Layer 30 dashboard query (`*.po_id`, `deduction_claims.batch_id`,
+`trade_agreements(retailer,sku,promo_code)`, `batch_id` on the metadata tables, and
+`lineage(entity_table,entity_pk)` for reverse-provenance lookup "where did this exact row come
+from?") — PKs are already auto-indexed by SQLite, so these fill the gap; correctness-neutral at this
+scale, but they document access paths and keep the schema DE-grade. Clarified the two provenance
+spines in SPEC: row-load provenance (batch_id + lineage + load_audit; no separate ETL load-run id)
+vs. resolution provenance (`claim_resolutions.run_id` → `outputs/<claim_id>/<run_id>/`). Kept auditability in the metadata layer (lineage /
+load_audit / batches.created_at / claim_resolutions.resolved_at+run_id) rather than adding inline
+`created_at`/`created_by` (duplicates `lineage.loaded_at`, breaks the 1:1 model mapping, and
+`created_by` has no signal in a single-user/no-auth system) or SCD Type-2 history (warehouse pattern;
+this is an operational reconciliation store with SCD Type-1 merge-upsert, source rows are immutable
+documents). Both decisions recorded in SPEC.
+
+**Verification**: new `tests/test_db.py` (offline, no LLM) — `init_db` into a `tmp_path` DB asserts
+all 11 tables + `v_batch_summary` + the 10 named indexes exist (against explicit expected sets), every
+table is empty (clean DB), `init_db` is idempotent (run twice → same schema, no error),
+`PRAGMA foreign_keys` is 1 on a `connect()`ed handle, and CHECK + FK enforcement reject a bad
+`claimed_reason` and an orphan child row. `pytest tests/` — **179 passed, 10 deselected** (173 prior
++ 6 new), integration still deselected. Run from a throwaway venv under the scratchpad (base env lacks pytest; an editable
+install there hit a Debian PyJWT RECORD conflict, so a clean venv was used). No live OpenRouter run —
+schema/DDL only, no prompt/agent/pipeline logic changed. `README.md` layer table extended with row 23.
+Schema approved by the user in the Layer 23 planning session — the explicit gate for Layer 24+.
+
+---
+
+## Previous layer
 **Layer 22 — Web UI: UI tests complete (Web-UI phase finished)**
 
 Closes the Web-UI phase (Layers 19–22). Extends `tests/test_ui_server.py` (7 → 10 tests, same

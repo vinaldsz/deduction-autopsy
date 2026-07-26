@@ -45,6 +45,7 @@ authoritative, up-to-date state). All layers are complete:
 | 20 | Web UI — SSE streaming endpoint | ✅ Done |
 | 21 | Web UI — static frontend (`ui/static/`) | ✅ Done |
 | 22 | Web UI — UI tests (`tests/test_ui_server.py`) | ✅ Done |
+| 23 | Data model & source-mapping design (schema + `mcp_server/db.py`) | ✅ Done |
 
 ## Setup
 
