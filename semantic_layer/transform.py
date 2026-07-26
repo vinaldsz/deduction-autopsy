@@ -13,6 +13,7 @@ the Layer-27 Load's job.
 """
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -71,7 +72,9 @@ def to_uom(value: str) -> str:
 
 # --- target metadata: source field + coercer per canonical column --------------------------------
 
-MAPPING: dict[str, dict[str, tuple[str, object]]] = {
+Coercer = Callable[[str], object]
+
+MAPPING: dict[str, dict[str, tuple[str, Coercer]]] = {
     "purchase_orders": {
         "po_id": ("PO_NUMBER", trim), "retailer": ("RETAILER", trim), "sku": ("ITEM", trim),
         "ordered_qty": ("QTY", to_int), "ordered_uom": ("UOM", to_uom),
@@ -207,11 +210,13 @@ def _check_referential_integrity(
     clean: list[CleanRecord] = []
     rejects: list[RejectRecord] = []
     for record in records:
-        if record.target in CHILD_TARGETS and record.model.po_id not in po_ids:
-            rejects.append(RejectRecord(record.target, record.source_file, record.source_row_ref,
-                                        record.raw, f"orphan: no PO {record.model.po_id}"))
-        else:
-            clean.append(record)
+        if record.target in CHILD_TARGETS:
+            po_id = getattr(record.model, "po_id")
+            if po_id not in po_ids:
+                rejects.append(RejectRecord(record.target, record.source_file, record.source_row_ref,
+                                            record.raw, f"orphan: no PO {po_id}"))
+                continue
+        clean.append(record)
     return clean, rejects
 
 
@@ -220,7 +225,10 @@ def transform(records: list[RawRecord]) -> TransformResult:
     rejects: list[RejectRecord] = []
     for rec in records:
         outcome = _transform_one(rec)
-        (candidates if isinstance(outcome, CleanRecord) else rejects).append(outcome)
+        if isinstance(outcome, CleanRecord):
+            candidates.append(outcome)
+        else:
+            rejects.append(outcome)
 
     deduped, conflict_rejects = _dedup(candidates)
     clean, orphan_rejects = _check_referential_integrity(deduped)
