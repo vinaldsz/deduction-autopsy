@@ -52,6 +52,7 @@ authoritative, up-to-date state). All layers are complete:
 | 27 | ETL Load — merge-upsert + lineage + batch gate; fidelity oracle (`semantic_layer/load.py`, `etl.py`) | ✅ Done |
 | 28 | DB-backed `FixtureLoader` + document tools (scenario-less) | ✅ Done |
 | 29 | Scenario-less pipeline + CLI + resolution persistence | ✅ Done |
+| 30a | Synthetic daily lot (~50 claims) — `CLM-SYN` volume for the worklist | ✅ Done |
 
 ## Setup
 

@@ -111,6 +111,52 @@ def pool_entities() -> Pool:
     return pool
 
 
+# ~42 synthetic clones give today's lot realistic volume (8 canonical + 42 = 50). Distinct
+# CLM-SYN/PO-SYN ids keep them out of the fidelity oracle (which scans scenarios/ only).
+SYNTHETIC_COUNT = 42
+
+
+def _canonical_archetypes(pool: Pool) -> list[tuple]:
+    archetypes = []
+    for po in sorted(pool.purchase_orders.values(), key=lambda p: p.po_id):
+        invoice = next(i for i in pool.invoices.values() if i.po_id == po.po_id)
+        receiving = next(r for r in pool.receiving.values() if r.po_id == po.po_id)
+        asn = sorted((a for a in pool.asns.values() if a.po_id == po.po_id), key=lambda a: a.asn_id)[0]
+        claim = next(c for c in pool.active_claims.values() if c.po_id == po.po_id)
+        archetypes.append((po, invoice, receiving, asn, claim))
+    return archetypes
+
+
+def add_synthetic_lot(pool: Pool, count: int = SYNTHETIC_COUNT) -> None:
+    """Clone canonical archetypes into `count` synthetic single-shipment PO-graphs joining today's
+    lot. Deterministic (drift guard holds); values come from valid archetypes so everything validates."""
+    archetypes = _canonical_archetypes(pool)
+    lot_date = max(c.claim_date for c in pool.active_claims.values())
+    for i in range(1, count + 1):
+        po, invoice, receiving, asn, claim = archetypes[(i - 1) % len(archetypes)]
+        sid = f"{i:04d}"
+        po_id = f"PO-SYN-{sid}"
+        _put(pool.purchase_orders, po_id, po.model_copy(update={"po_id": po_id}))
+        _put(pool.invoices, f"INV-SYN-{sid}",
+             invoice.model_copy(update={"invoice_id": f"INV-SYN-{sid}", "po_id": po_id}))
+        _put(pool.receiving, f"RCP-SYN-{sid}",
+             receiving.model_copy(update={"receipt_id": f"RCP-SYN-{sid}", "po_id": po_id,
+                                          "lot_id": f"LOT-SYN-{sid}"}))
+        _put(pool.asns, f"ASN-SYN-{sid}",
+             asn.model_copy(update={"asn_id": f"ASN-SYN-{sid}", "po_id": po_id,
+                                    "shipped_qty": po.ordered_qty, "shipped_uom": po.ordered_uom}))
+        _put(pool.active_claims, f"CLM-SYN-{sid}",
+             claim.model_copy(update={"claim_id": f"CLM-SYN-{sid}", "po_id": po_id,
+                                      "claim_date": lot_date}))
+
+
+def build_pool() -> Pool:
+    """The full pool the generator emits: canonical scenarios + the synthetic daily-lot volume."""
+    pool = pool_entities()
+    add_synthetic_lot(pool)
+    return pool
+
+
 # --- writers -------------------------------------------------------------------------------------
 
 def _write_text(path: Path, text: str) -> None:
@@ -253,7 +299,7 @@ def write_manifest(out: Path, portal_lot_dates: list[str]) -> None:
 
 
 def generate(out: Path) -> None:
-    pool = pool_entities()
+    pool = build_pool()
     write_erp_purchase_orders(out, pool)
     write_erp_invoices(out, pool)
     write_carrier_asns(out, pool)

@@ -56,12 +56,12 @@ def test_to_int_and_to_uom():
 def test_transform_all_sources_clean():
     result = transform(extract_all(SOURCE_ROOT))
     assert result.rejects == []
-    assert len(result.clean) == 44
+    assert len(result.clean) == 254
     counts: dict[str, int] = {}
     for rec in result.clean:
         counts[rec.target] = counts.get(rec.target, 0) + 1
-    assert counts == {"purchase_orders": 8, "invoices": 8, "asns": 9,
-                      "receiving_records": 8, "trade_agreements": 1, "deduction_claims": 10}
+    assert counts == {"purchase_orders": 50, "invoices": 50, "asns": 51,
+                      "receiving_records": 50, "trade_agreements": 1, "deduction_claims": 52}
 
 
 def test_values_are_coerced_to_canonical_types():
@@ -153,7 +153,7 @@ def test_dq_report_reconciles_and_renders():
     records = extract_all(SOURCE_ROOT)
     result = transform(records)
     report = build_dq_report(records, result)
-    assert report.total_read == 44 and report.total_loaded == 44 and report.total_rejected == 0
+    assert report.total_read == 254 and report.total_loaded == 254 and report.total_rejected == 0
     for stats in report.per_source.values():
         assert stats.rows_read == stats.rows_loaded + stats.rows_rejected
     assert "Data Quality Report" in render_dq_report(report)

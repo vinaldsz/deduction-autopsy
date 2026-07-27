@@ -124,7 +124,7 @@ def test_portal_missing_claims_array_is_flagged(tmp_path):
 
 def test_extract_all_tags_every_record_with_manifest_target_and_lineage():
     records = extract_all(SOURCE_ROOT)
-    assert len(records) == 44  # 8 PO + 8 inv + 9 ASN + 8 receiving + 1 TA + 10 claims
+    assert len(records) == 254  # 50 PO + 50 inv + 51 ASN + 50 receiving + 1 TA + 52 claims
 
     manifest = json.loads((SOURCE_ROOT / "manifest.json").read_text())
     file_to_target = {s["file"]: s["target"] for s in manifest["sources"]}
@@ -137,5 +137,5 @@ def test_extract_all_tags_every_record_with_manifest_target_and_lineage():
     counts: dict[str, int] = {}
     for rec in records:
         counts[rec.target] = counts.get(rec.target, 0) + 1
-    assert counts == {"purchase_orders": 8, "invoices": 8, "asns": 9,
-                      "receiving_records": 8, "trade_agreements": 1, "deduction_claims": 10}
+    assert counts == {"purchase_orders": 50, "invoices": 50, "asns": 51,
+                      "receiving_records": 50, "trade_agreements": 1, "deduction_claims": 52}

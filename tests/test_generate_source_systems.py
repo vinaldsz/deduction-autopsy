@@ -20,7 +20,7 @@ PRIOR_LOTS = {"2024-06-08": "CLM-007a", "2024-08-10": "CLM-008a"}
 
 @pytest.fixture(scope="module")
 def pool():
-    return gen.pool_entities()
+    return gen.build_pool()  # canonical scenarios + the synthetic daily-lot volume
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def test_each_entity_appears_exactly_once(fresh, pool):
     once(receipt_ids, pool.receiving)
     once(ta_ids, pool.agreements)
     once(claim_ids, {**pool.active_claims, **pool.prior_claims})
-    assert len(claim_ids) == 10
+    assert len(claim_ids) == 52  # 8 canonical + 42 synthetic active + 2 prior
 
 
 def test_split_shipment_emits_two_asn_loops_for_one_po(fresh):
@@ -110,7 +110,7 @@ def test_sources_parse(fresh):
         assert json.loads((fresh / json_rel).read_text())
     loops = [ln for ln in (fresh / "carrier" / "asn_856.txt").read_text().splitlines()
              if ln.startswith("ASN*")]
-    assert len(loops) == 9
+    assert len(loops) == 51  # 9 canonical (incl. split pair) + 42 synthetic
 
 
 # --- divergences are exactly reversible ----------------------------------------------------------

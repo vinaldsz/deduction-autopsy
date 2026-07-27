@@ -72,6 +72,384 @@
       "amount": "24.00",
       "claimDate": "2024-09-15",
       "notes": "Received 138 of 150 ordered EACH units on PO-008 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0001",
+      "po": "PO-SYN-0001",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "$30.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 108 of 120 ordered EACH units. Deducting for 12-unit shortage per carrier BOL exception noted at receipt."
+    },
+    {
+      "claimId": "CLM-SYN-0002",
+      "po": "PO-SYN-0002",
+      "retailer": "target",
+      "reason": "shortage",
+      "amount": "115.00",
+      "claimDate": "2024-09-15",
+      "notes": "PO ordered 5 CASE but ASN and receipt only show 120 EACH units - appears to be a 115-unit shortage against the ordered case quantity."
+    },
+    {
+      "claimId": "CLM-SYN-0003",
+      "po": "PO-SYN-0003",
+      "retailer": "kroger",
+      "reason": "shortage",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Only received first shipment of 360 EACH against a PO for 720 EACH - deducting for a 360-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0004",
+      "po": "PO-SYN-0004",
+      "retailer": "costco",
+      "reason": "shortage",
+      "amount": "9.00",
+      "claimDate": "2024-09-15",
+      "notes": "Invoice INV-004 dated 2024-04-08 covers 240 EACH, but only 228 EACH were received - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0005",
+      "po": "PO-SYN-0005",
+      "retailer": "publix",
+      "reason": "wrong_item",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received SKU-005-ALT instead of ordered SKU-005 - deducting full invoice amount for wrong item shipped."
+    },
+    {
+      "claimId": "CLM-SYN-0006",
+      "po": "PO-SYN-0006",
+      "retailer": "safeway",
+      "reason": "promo_billback",
+      "amount": "38.40",
+      "claimDate": "2024-09-15",
+      "notes": "Deducting 10% promo billback per agreement PROMO-SUMMER-2024 covering this SKU."
+    },
+    {
+      "claimId": "CLM-SYN-0007",
+      "po": "PO-SYN-0007",
+      "retailer": "albertsons",
+      "reason": "shortage",
+      "amount": "$18.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 132 of 144 ordered EACH units on PO-007 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0008",
+      "po": "PO-SYN-0008",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "24.00",
+      "claimDate": "2024-09-15",
+      "notes": "Received 138 of 150 ordered EACH units on PO-008 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0009",
+      "po": "PO-SYN-0009",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "$30.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 108 of 120 ordered EACH units. Deducting for 12-unit shortage per carrier BOL exception noted at receipt."
+    },
+    {
+      "claimId": "CLM-SYN-0010",
+      "po": "PO-SYN-0010",
+      "retailer": "target",
+      "reason": "shortage",
+      "amount": "115.00",
+      "claimDate": "2024-09-15",
+      "notes": "PO ordered 5 CASE but ASN and receipt only show 120 EACH units - appears to be a 115-unit shortage against the ordered case quantity."
+    },
+    {
+      "claimId": "CLM-SYN-0011",
+      "po": "PO-SYN-0011",
+      "retailer": "kroger",
+      "reason": "shortage",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Only received first shipment of 360 EACH against a PO for 720 EACH - deducting for a 360-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0012",
+      "po": "PO-SYN-0012",
+      "retailer": "costco",
+      "reason": "shortage",
+      "amount": "9.00",
+      "claimDate": "2024-09-15",
+      "notes": "Invoice INV-004 dated 2024-04-08 covers 240 EACH, but only 228 EACH were received - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0013",
+      "po": "PO-SYN-0013",
+      "retailer": "publix",
+      "reason": "wrong_item",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received SKU-005-ALT instead of ordered SKU-005 - deducting full invoice amount for wrong item shipped."
+    },
+    {
+      "claimId": "CLM-SYN-0014",
+      "po": "PO-SYN-0014",
+      "retailer": "safeway",
+      "reason": "promo_billback",
+      "amount": "38.40",
+      "claimDate": "2024-09-15",
+      "notes": "Deducting 10% promo billback per agreement PROMO-SUMMER-2024 covering this SKU."
+    },
+    {
+      "claimId": "CLM-SYN-0015",
+      "po": "PO-SYN-0015",
+      "retailer": "albertsons",
+      "reason": "shortage",
+      "amount": "$18.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 132 of 144 ordered EACH units on PO-007 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0016",
+      "po": "PO-SYN-0016",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "24.00",
+      "claimDate": "2024-09-15",
+      "notes": "Received 138 of 150 ordered EACH units on PO-008 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0017",
+      "po": "PO-SYN-0017",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "$30.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 108 of 120 ordered EACH units. Deducting for 12-unit shortage per carrier BOL exception noted at receipt."
+    },
+    {
+      "claimId": "CLM-SYN-0018",
+      "po": "PO-SYN-0018",
+      "retailer": "target",
+      "reason": "shortage",
+      "amount": "115.00",
+      "claimDate": "2024-09-15",
+      "notes": "PO ordered 5 CASE but ASN and receipt only show 120 EACH units - appears to be a 115-unit shortage against the ordered case quantity."
+    },
+    {
+      "claimId": "CLM-SYN-0019",
+      "po": "PO-SYN-0019",
+      "retailer": "kroger",
+      "reason": "shortage",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Only received first shipment of 360 EACH against a PO for 720 EACH - deducting for a 360-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0020",
+      "po": "PO-SYN-0020",
+      "retailer": "costco",
+      "reason": "shortage",
+      "amount": "9.00",
+      "claimDate": "2024-09-15",
+      "notes": "Invoice INV-004 dated 2024-04-08 covers 240 EACH, but only 228 EACH were received - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0021",
+      "po": "PO-SYN-0021",
+      "retailer": "publix",
+      "reason": "wrong_item",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received SKU-005-ALT instead of ordered SKU-005 - deducting full invoice amount for wrong item shipped."
+    },
+    {
+      "claimId": "CLM-SYN-0022",
+      "po": "PO-SYN-0022",
+      "retailer": "safeway",
+      "reason": "promo_billback",
+      "amount": "38.40",
+      "claimDate": "2024-09-15",
+      "notes": "Deducting 10% promo billback per agreement PROMO-SUMMER-2024 covering this SKU."
+    },
+    {
+      "claimId": "CLM-SYN-0023",
+      "po": "PO-SYN-0023",
+      "retailer": "albertsons",
+      "reason": "shortage",
+      "amount": "$18.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 132 of 144 ordered EACH units on PO-007 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0024",
+      "po": "PO-SYN-0024",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "24.00",
+      "claimDate": "2024-09-15",
+      "notes": "Received 138 of 150 ordered EACH units on PO-008 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0025",
+      "po": "PO-SYN-0025",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "$30.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 108 of 120 ordered EACH units. Deducting for 12-unit shortage per carrier BOL exception noted at receipt."
+    },
+    {
+      "claimId": "CLM-SYN-0026",
+      "po": "PO-SYN-0026",
+      "retailer": "target",
+      "reason": "shortage",
+      "amount": "115.00",
+      "claimDate": "2024-09-15",
+      "notes": "PO ordered 5 CASE but ASN and receipt only show 120 EACH units - appears to be a 115-unit shortage against the ordered case quantity."
+    },
+    {
+      "claimId": "CLM-SYN-0027",
+      "po": "PO-SYN-0027",
+      "retailer": "kroger",
+      "reason": "shortage",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Only received first shipment of 360 EACH against a PO for 720 EACH - deducting for a 360-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0028",
+      "po": "PO-SYN-0028",
+      "retailer": "costco",
+      "reason": "shortage",
+      "amount": "9.00",
+      "claimDate": "2024-09-15",
+      "notes": "Invoice INV-004 dated 2024-04-08 covers 240 EACH, but only 228 EACH were received - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0029",
+      "po": "PO-SYN-0029",
+      "retailer": "publix",
+      "reason": "wrong_item",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received SKU-005-ALT instead of ordered SKU-005 - deducting full invoice amount for wrong item shipped."
+    },
+    {
+      "claimId": "CLM-SYN-0030",
+      "po": "PO-SYN-0030",
+      "retailer": "safeway",
+      "reason": "promo_billback",
+      "amount": "38.40",
+      "claimDate": "2024-09-15",
+      "notes": "Deducting 10% promo billback per agreement PROMO-SUMMER-2024 covering this SKU."
+    },
+    {
+      "claimId": "CLM-SYN-0031",
+      "po": "PO-SYN-0031",
+      "retailer": "albertsons",
+      "reason": "shortage",
+      "amount": "$18.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 132 of 144 ordered EACH units on PO-007 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0032",
+      "po": "PO-SYN-0032",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "24.00",
+      "claimDate": "2024-09-15",
+      "notes": "Received 138 of 150 ordered EACH units on PO-008 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0033",
+      "po": "PO-SYN-0033",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "$30.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 108 of 120 ordered EACH units. Deducting for 12-unit shortage per carrier BOL exception noted at receipt."
+    },
+    {
+      "claimId": "CLM-SYN-0034",
+      "po": "PO-SYN-0034",
+      "retailer": "target",
+      "reason": "shortage",
+      "amount": "115.00",
+      "claimDate": "2024-09-15",
+      "notes": "PO ordered 5 CASE but ASN and receipt only show 120 EACH units - appears to be a 115-unit shortage against the ordered case quantity."
+    },
+    {
+      "claimId": "CLM-SYN-0035",
+      "po": "PO-SYN-0035",
+      "retailer": "kroger",
+      "reason": "shortage",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Only received first shipment of 360 EACH against a PO for 720 EACH - deducting for a 360-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0036",
+      "po": "PO-SYN-0036",
+      "retailer": "costco",
+      "reason": "shortage",
+      "amount": "9.00",
+      "claimDate": "2024-09-15",
+      "notes": "Invoice INV-004 dated 2024-04-08 covers 240 EACH, but only 228 EACH were received - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0037",
+      "po": "PO-SYN-0037",
+      "retailer": "publix",
+      "reason": "wrong_item",
+      "amount": "$180.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received SKU-005-ALT instead of ordered SKU-005 - deducting full invoice amount for wrong item shipped."
+    },
+    {
+      "claimId": "CLM-SYN-0038",
+      "po": "PO-SYN-0038",
+      "retailer": "safeway",
+      "reason": "promo_billback",
+      "amount": "38.40",
+      "claimDate": "2024-09-15",
+      "notes": "Deducting 10% promo billback per agreement PROMO-SUMMER-2024 covering this SKU."
+    },
+    {
+      "claimId": "CLM-SYN-0039",
+      "po": "PO-SYN-0039",
+      "retailer": "albertsons",
+      "reason": "shortage",
+      "amount": "$18.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 132 of 144 ordered EACH units on PO-007 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0040",
+      "po": "PO-SYN-0040",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "24.00",
+      "claimDate": "2024-09-15",
+      "notes": "Received 138 of 150 ordered EACH units on PO-008 - deducting for 12-unit shortage."
+    },
+    {
+      "claimId": "CLM-SYN-0041",
+      "po": "PO-SYN-0041",
+      "retailer": "walmart",
+      "reason": "shortage",
+      "amount": "$30.00",
+      "claimDate": "09/15/2024",
+      "notes": "Received 108 of 120 ordered EACH units. Deducting for 12-unit shortage per carrier BOL exception noted at receipt."
+    },
+    {
+      "claimId": "CLM-SYN-0042",
+      "po": "PO-SYN-0042",
+      "retailer": "target",
+      "reason": "shortage",
+      "amount": "115.00",
+      "claimDate": "2024-09-15",
+      "notes": "PO ordered 5 CASE but ASN and receipt only show 120 EACH units - appears to be a 115-unit shortage against the ordered case quantity."
     }
   ]
 }
