@@ -94,5 +94,509 @@
       "lot": "LOT-008",
       "notes": "  12 units short upon receipt, no visible damage.  "
     }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0001",
+      "po": "PO-SYN-0001",
+      "item": "SKU-001",
+      "qtyReceived": 108,
+      "uom": "EA",
+      "date": "01/14/2024",
+      "lot": "LOT-SYN-0001",
+      "notes": "  12 units refused at dock - damaged cartons found during unloading. Carrier signed BOL exception acknowledging the shortfall.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0002",
+      "po": "PO-SYN-0002",
+      "item": "SKU-002",
+      "qtyReceived": 120,
+      "uom": "EA",
+      "date": "2024-02-05",
+      "lot": "LOT-SYN-0002",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0003",
+      "po": "PO-SYN-0003",
+      "item": "SKU-003",
+      "qtyReceived": 720,
+      "uom": "EA",
+      "date": "03/07/2024",
+      "lot": "LOT-SYN-0003",
+      "notes": "  Received across two dock dates matching the two ASNs; aggregate quantity matches the full PO.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0004",
+      "po": "PO-SYN-0004",
+      "item": "SKU-004",
+      "qtyReceived": 228,
+      "uom": "EA",
+      "date": "2024-04-12",
+      "lot": "LOT-SYN-0004",
+      "notes": "  12 units short at receipt versus the ASN quantity.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0005",
+      "po": "PO-SYN-0005",
+      "item": "SKU-005-ALT",
+      "qtyReceived": 300,
+      "uom": "EA",
+      "date": "05/05/2024",
+      "lot": "LOT-SYN-0005",
+      "notes": "  Substitution of SKU-005-ALT for SKU-005 was pre-approved by buyer J. Ortiz via email on 2024-04-28; same case pack and unit price.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0006",
+      "po": "PO-SYN-0006",
+      "item": "SKU-006",
+      "qtyReceived": 480,
+      "uom": "EA",
+      "date": "2024-06-05",
+      "lot": "LOT-SYN-0006",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0007",
+      "po": "PO-SYN-0007",
+      "item": "SKU-001",
+      "qtyReceived": 132,
+      "uom": "EA",
+      "date": "06/05/2024",
+      "lot": "LOT-SYN-0007",
+      "notes": "  12 units damaged in transit, refused at dock.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0008",
+      "po": "PO-SYN-0008",
+      "item": "SKU-008",
+      "qtyReceived": 138,
+      "uom": "EA",
+      "date": "2024-08-04",
+      "lot": "LOT-SYN-0008",
+      "notes": "  12 units short upon receipt, no visible damage.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0009",
+      "po": "PO-SYN-0009",
+      "item": "SKU-001",
+      "qtyReceived": 108,
+      "uom": "EA",
+      "date": "01/14/2024",
+      "lot": "LOT-SYN-0009",
+      "notes": "  12 units refused at dock - damaged cartons found during unloading. Carrier signed BOL exception acknowledging the shortfall.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0010",
+      "po": "PO-SYN-0010",
+      "item": "SKU-002",
+      "qtyReceived": 120,
+      "uom": "EA",
+      "date": "2024-02-05",
+      "lot": "LOT-SYN-0010",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0011",
+      "po": "PO-SYN-0011",
+      "item": "SKU-003",
+      "qtyReceived": 720,
+      "uom": "EA",
+      "date": "03/07/2024",
+      "lot": "LOT-SYN-0011",
+      "notes": "  Received across two dock dates matching the two ASNs; aggregate quantity matches the full PO.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0012",
+      "po": "PO-SYN-0012",
+      "item": "SKU-004",
+      "qtyReceived": 228,
+      "uom": "EA",
+      "date": "2024-04-12",
+      "lot": "LOT-SYN-0012",
+      "notes": "  12 units short at receipt versus the ASN quantity.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0013",
+      "po": "PO-SYN-0013",
+      "item": "SKU-005-ALT",
+      "qtyReceived": 300,
+      "uom": "EA",
+      "date": "05/05/2024",
+      "lot": "LOT-SYN-0013",
+      "notes": "  Substitution of SKU-005-ALT for SKU-005 was pre-approved by buyer J. Ortiz via email on 2024-04-28; same case pack and unit price.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0014",
+      "po": "PO-SYN-0014",
+      "item": "SKU-006",
+      "qtyReceived": 480,
+      "uom": "EA",
+      "date": "2024-06-05",
+      "lot": "LOT-SYN-0014",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0015",
+      "po": "PO-SYN-0015",
+      "item": "SKU-001",
+      "qtyReceived": 132,
+      "uom": "EA",
+      "date": "06/05/2024",
+      "lot": "LOT-SYN-0015",
+      "notes": "  12 units damaged in transit, refused at dock.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0016",
+      "po": "PO-SYN-0016",
+      "item": "SKU-008",
+      "qtyReceived": 138,
+      "uom": "EA",
+      "date": "2024-08-04",
+      "lot": "LOT-SYN-0016",
+      "notes": "  12 units short upon receipt, no visible damage.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0017",
+      "po": "PO-SYN-0017",
+      "item": "SKU-001",
+      "qtyReceived": 108,
+      "uom": "EA",
+      "date": "01/14/2024",
+      "lot": "LOT-SYN-0017",
+      "notes": "  12 units refused at dock - damaged cartons found during unloading. Carrier signed BOL exception acknowledging the shortfall.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0018",
+      "po": "PO-SYN-0018",
+      "item": "SKU-002",
+      "qtyReceived": 120,
+      "uom": "EA",
+      "date": "2024-02-05",
+      "lot": "LOT-SYN-0018",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0019",
+      "po": "PO-SYN-0019",
+      "item": "SKU-003",
+      "qtyReceived": 720,
+      "uom": "EA",
+      "date": "03/07/2024",
+      "lot": "LOT-SYN-0019",
+      "notes": "  Received across two dock dates matching the two ASNs; aggregate quantity matches the full PO.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0020",
+      "po": "PO-SYN-0020",
+      "item": "SKU-004",
+      "qtyReceived": 228,
+      "uom": "EA",
+      "date": "2024-04-12",
+      "lot": "LOT-SYN-0020",
+      "notes": "  12 units short at receipt versus the ASN quantity.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0021",
+      "po": "PO-SYN-0021",
+      "item": "SKU-005-ALT",
+      "qtyReceived": 300,
+      "uom": "EA",
+      "date": "05/05/2024",
+      "lot": "LOT-SYN-0021",
+      "notes": "  Substitution of SKU-005-ALT for SKU-005 was pre-approved by buyer J. Ortiz via email on 2024-04-28; same case pack and unit price.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0022",
+      "po": "PO-SYN-0022",
+      "item": "SKU-006",
+      "qtyReceived": 480,
+      "uom": "EA",
+      "date": "2024-06-05",
+      "lot": "LOT-SYN-0022",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0023",
+      "po": "PO-SYN-0023",
+      "item": "SKU-001",
+      "qtyReceived": 132,
+      "uom": "EA",
+      "date": "06/05/2024",
+      "lot": "LOT-SYN-0023",
+      "notes": "  12 units damaged in transit, refused at dock.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0024",
+      "po": "PO-SYN-0024",
+      "item": "SKU-008",
+      "qtyReceived": 138,
+      "uom": "EA",
+      "date": "2024-08-04",
+      "lot": "LOT-SYN-0024",
+      "notes": "  12 units short upon receipt, no visible damage.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0025",
+      "po": "PO-SYN-0025",
+      "item": "SKU-001",
+      "qtyReceived": 108,
+      "uom": "EA",
+      "date": "01/14/2024",
+      "lot": "LOT-SYN-0025",
+      "notes": "  12 units refused at dock - damaged cartons found during unloading. Carrier signed BOL exception acknowledging the shortfall.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0026",
+      "po": "PO-SYN-0026",
+      "item": "SKU-002",
+      "qtyReceived": 120,
+      "uom": "EA",
+      "date": "2024-02-05",
+      "lot": "LOT-SYN-0026",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0027",
+      "po": "PO-SYN-0027",
+      "item": "SKU-003",
+      "qtyReceived": 720,
+      "uom": "EA",
+      "date": "03/07/2024",
+      "lot": "LOT-SYN-0027",
+      "notes": "  Received across two dock dates matching the two ASNs; aggregate quantity matches the full PO.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0028",
+      "po": "PO-SYN-0028",
+      "item": "SKU-004",
+      "qtyReceived": 228,
+      "uom": "EA",
+      "date": "2024-04-12",
+      "lot": "LOT-SYN-0028",
+      "notes": "  12 units short at receipt versus the ASN quantity.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0029",
+      "po": "PO-SYN-0029",
+      "item": "SKU-005-ALT",
+      "qtyReceived": 300,
+      "uom": "EA",
+      "date": "05/05/2024",
+      "lot": "LOT-SYN-0029",
+      "notes": "  Substitution of SKU-005-ALT for SKU-005 was pre-approved by buyer J. Ortiz via email on 2024-04-28; same case pack and unit price.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0030",
+      "po": "PO-SYN-0030",
+      "item": "SKU-006",
+      "qtyReceived": 480,
+      "uom": "EA",
+      "date": "2024-06-05",
+      "lot": "LOT-SYN-0030",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0031",
+      "po": "PO-SYN-0031",
+      "item": "SKU-001",
+      "qtyReceived": 132,
+      "uom": "EA",
+      "date": "06/05/2024",
+      "lot": "LOT-SYN-0031",
+      "notes": "  12 units damaged in transit, refused at dock.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0032",
+      "po": "PO-SYN-0032",
+      "item": "SKU-008",
+      "qtyReceived": 138,
+      "uom": "EA",
+      "date": "2024-08-04",
+      "lot": "LOT-SYN-0032",
+      "notes": "  12 units short upon receipt, no visible damage.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0033",
+      "po": "PO-SYN-0033",
+      "item": "SKU-001",
+      "qtyReceived": 108,
+      "uom": "EA",
+      "date": "01/14/2024",
+      "lot": "LOT-SYN-0033",
+      "notes": "  12 units refused at dock - damaged cartons found during unloading. Carrier signed BOL exception acknowledging the shortfall.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0034",
+      "po": "PO-SYN-0034",
+      "item": "SKU-002",
+      "qtyReceived": 120,
+      "uom": "EA",
+      "date": "2024-02-05",
+      "lot": "LOT-SYN-0034",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0035",
+      "po": "PO-SYN-0035",
+      "item": "SKU-003",
+      "qtyReceived": 720,
+      "uom": "EA",
+      "date": "03/07/2024",
+      "lot": "LOT-SYN-0035",
+      "notes": "  Received across two dock dates matching the two ASNs; aggregate quantity matches the full PO.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0036",
+      "po": "PO-SYN-0036",
+      "item": "SKU-004",
+      "qtyReceived": 228,
+      "uom": "EA",
+      "date": "2024-04-12",
+      "lot": "LOT-SYN-0036",
+      "notes": "  12 units short at receipt versus the ASN quantity.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0037",
+      "po": "PO-SYN-0037",
+      "item": "SKU-005-ALT",
+      "qtyReceived": 300,
+      "uom": "EA",
+      "date": "05/05/2024",
+      "lot": "LOT-SYN-0037",
+      "notes": "  Substitution of SKU-005-ALT for SKU-005 was pre-approved by buyer J. Ortiz via email on 2024-04-28; same case pack and unit price.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0038",
+      "po": "PO-SYN-0038",
+      "item": "SKU-006",
+      "qtyReceived": 480,
+      "uom": "EA",
+      "date": "2024-06-05",
+      "lot": "LOT-SYN-0038",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0039",
+      "po": "PO-SYN-0039",
+      "item": "SKU-001",
+      "qtyReceived": 132,
+      "uom": "EA",
+      "date": "06/05/2024",
+      "lot": "LOT-SYN-0039",
+      "notes": "  12 units damaged in transit, refused at dock.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0040",
+      "po": "PO-SYN-0040",
+      "item": "SKU-008",
+      "qtyReceived": 138,
+      "uom": "EA",
+      "date": "2024-08-04",
+      "lot": "LOT-SYN-0040",
+      "notes": "  12 units short upon receipt, no visible damage.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0041",
+      "po": "PO-SYN-0041",
+      "item": "SKU-001",
+      "qtyReceived": 108,
+      "uom": "EA",
+      "date": "01/14/2024",
+      "lot": "LOT-SYN-0041",
+      "notes": "  12 units refused at dock - damaged cartons found during unloading. Carrier signed BOL exception acknowledging the shortfall.  "
+    }
+  },
+  {
+    "receipt": {
+      "id": "RCP-SYN-0042",
+      "po": "PO-SYN-0042",
+      "item": "SKU-002",
+      "qtyReceived": 120,
+      "uom": "EA",
+      "date": "2024-02-05",
+      "lot": "LOT-SYN-0042",
+      "notes": "  Full quantity received, no exceptions noted.  "
+    }
   }
 ]

@@ -84,8 +84,8 @@ def test_db_row_equals_frozen_scenario(db, table, model_cls, pk_col, frozen):
 
 def test_business_row_counts(db):
     counts = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in BUSINESS_TABLES}
-    assert counts == {"purchase_orders": 8, "asns": 9, "invoices": 8,
-                      "receiving_records": 8, "trade_agreements": 1, "deduction_claims": 10}
+    assert counts == {"purchase_orders": 50, "asns": 51, "invoices": 50,
+                      "receiving_records": 50, "trade_agreements": 1, "deduction_claims": 52}
 
 
 # --- referential integrity, batch gate, resolutions, lineage -------------------------------------
@@ -100,7 +100,7 @@ def test_batch_gate(db):
                        ("LOT-2024-09-15", "complete")]
     by_batch = dict(db.execute(
         "SELECT batch_id, COUNT(*) FROM deduction_claims GROUP BY batch_id").fetchall())
-    assert by_batch == {"LOT-2024-06-08": 1, "LOT-2024-08-10": 1, "LOT-2024-09-15": 8}
+    assert by_batch == {"LOT-2024-06-08": 1, "LOT-2024-08-10": 1, "LOT-2024-09-15": 50}
     today = db.execute("SELECT batch_id FROM deduction_claims WHERE claim_id = ?", ("CLM-001",)).fetchone()
     assert today[0] == "LOT-2024-09-15"
 
@@ -111,14 +111,14 @@ def test_only_prior_claims_are_seeded_resolved(db):
 
 
 def test_lineage_and_load_audit(db):
-    assert db.execute("SELECT COUNT(*) FROM lineage").fetchone()[0] == 44
+    assert db.execute("SELECT COUNT(*) FROM lineage").fetchone()[0] == 254
     assert db.execute("SELECT COUNT(*) FROM reject_rows").fetchone()[0] == 0
     src = db.execute("SELECT source_file FROM lineage WHERE entity_table = ? AND entity_pk = ?",
                      ("purchase_orders", "PO-001")).fetchone()
     assert src[0] == "erp/purchase_orders.csv"
     audit = db.execute("SELECT source, rows_read, rows_loaded, rows_rejected FROM load_audit "
                        "WHERE source = ?", ("carrier/asn_856.txt",)).fetchone()
-    assert audit == ("carrier/asn_856.txt", 9, 9, 0)
+    assert audit == ("carrier/asn_856.txt", 51, 51, 0)
 
 
 # --- idempotency ---------------------------------------------------------------------------------

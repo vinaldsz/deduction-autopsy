@@ -1,6 +1,36 @@
 # Progress
 
 ## Current layer
+**Layer 30a — Synthetic daily lot (~50-claim worklist volume) complete**
+
+First of two PRs for Layer 30 (dashboard). Materializes the ~50-claim daily lot deferred from Layer
+24: today's lot is now the canonical 8 + **42 synthetic `CLM-SYN` claims**, so the Layer-30b worklist
+has realistic volume + pagination. Data/ETL only — no agent/prompt/pipeline changes; the fidelity
+oracle stays scoped to the canonical 8 (it scans `scenarios/`, which synthetics never touch).
+
+**`tools/generate_source_systems.py`:** `add_synthetic_lot(pool, count=42)` clones canonical
+archetypes (`canonical_POs[(i-1) % 8]`) into single-shipment PO-graphs under distinct
+`PO-SYN-%04d`/`ASN-SYN-%04d`/`INV-SYN-%04d`/`RCP-SYN-%04d`/`CLM-SYN-%04d` ids with `claim_date` =
+today's lot date (so they join today's lot); values come from valid archetypes (schema-valid), one
+ASN each (`shipped_qty = ordered_qty`). `build_pool()` = `pool_entities()` + `add_synthetic_lot()`;
+`generate()` now emits `build_pool()`. Deterministic → the drift guard still holds. They flow through
+the *same* divergent emitters, so Extract/Transform/Load are unchanged.
+
+**Resulting volume:** 50 POs, 51 ASNs, 50 invoices, 50 receiving, 1 TA, 52 claims (today's lot =
+8 + 42 = 50; priors 007a/008a unchanged); 254 source records. `v_batch_summary` today's lot:
+50 claims, $3,681.40 at risk.
+
+**Test updates (counts only):** `test_generate_source_systems.py` `pool` fixture → `build_pool()`
+(pool-derived assertions self-adjust) + loop/claim-count literals (51/52);
+`test_extract.py`/`test_transform.py` totals+per-target counts (254; 50/50/51/50/1/52);
+`test_etl.py` business-row counts, today's-lot batch count (50), lineage (254), carrier load_audit
+(51). **Fidelity oracle unchanged** (canonical-8 params from `scenarios/`); `reject_rows` still 0,
+`load_audit` still 8 sources. `pytest -q` — **277 passed, 10 deselected**; `pyright` — 0 errors.
+Regeneration reproduces the committed tree byte-for-byte (drift test green).
+
+---
+
+## Previous layer
 **Layer 29 — Scenario-less pipeline + CLI + resolution persistence complete**
 
 Retires "scenario" from the runtime path: the pipeline is keyed by `claim_id` alone (the agent
