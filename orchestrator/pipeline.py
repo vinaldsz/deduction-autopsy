@@ -19,6 +19,7 @@ from orchestrator.config import SETTINGS
 from orchestrator.output import (
     make_run_id,
     prepare_run_dir,
+    write_case_file_json,
     write_dispute_packet_md,
     write_reasoning_trace_json,
     write_verdict_json,
@@ -363,6 +364,12 @@ async def run_pipeline(
             claim_id=claim_id,
             investigator_messages=investigator_result.messages,
             reviewer_messages=reviewer_result.messages,
+        )
+        write_case_file_json(
+            run_dir,
+            claim_id=claim_id,
+            case_file=case_file,
+            reviewer_output=reviewer_output,
         )
         if final_verdict == "INVALID":
             write_dispute_packet_md(

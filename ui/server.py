@@ -11,14 +11,18 @@ Data comes from the relational store (ui/queries.py); "scenario" is retired (Lay
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from agents.base import AgentRunnerError, ToolCallRecord
+from orchestrator.dispositions import write_claim_disposition
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline
 from ui import queries
 
@@ -29,11 +33,34 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+# Where the pipeline archives per-run artifacts (matches run_pipeline's default output_dir).
+OUTPUT_DIR = Path("outputs")
+
 app = FastAPI(title="Deduction Autopsy")
 
 
+def _case_file_summary(result: PipelineResult) -> dict:
+    """The evidence bundle the review workspace renders: reconciliation, timeline, checklist."""
+    cf = result.case_file
+    ro = result.reviewer_output
+    return {
+        "po_summary": cf.po_summary.model_dump(),
+        "timeline": [event.model_dump() for event in cf.timeline],
+        "uom_conversions_applied": cf.uom_conversions_applied,
+        "prior_claims": cf.prior_claims,
+        "trade_agreement_found": cf.trade_agreement_found,
+        "discrepancy_qty": cf.discrepancy_qty,
+        "discrepancy_amount_cents": cf.discrepancy_amount_cents,
+        "review_findings": ro.review_findings.model_dump(),
+    }
+
+
 def _result_payload(result: PipelineResult) -> dict:
-    """Final result shape shared by the single-claim `done` and the batch `claim_done` events."""
+    """Final result shape shared by the single-claim `done` and the batch `claim_done` events.
+
+    Carries the case-file summary inline so the workspace fills immediately after a live run
+    without a follow-up round-trip to /casefile.
+    """
     return {
         "claim_id": result.claim_id,
         "investigator_verdict": result.investigator_verdict,
@@ -42,6 +69,7 @@ def _result_payload(result: PipelineResult) -> dict:
         "confidence": result.confidence,
         "dispute_grounds": result.reviewer_output.dispute_grounds,
         "usage": result.usage,
+        "case_file": _case_file_summary(result),
     }
 
 
@@ -55,17 +83,86 @@ async def dashboard():
     return queries.dashboard_metrics()
 
 
+@app.get("/api/claims/{claim_id}/documents")
+async def documents(claim_id: str):
+    """The claim's source-document set from the DB (PO, ASNs, invoice, receiving, trade agreement,
+    prior claims) — the analyst's primary evidence, always available regardless of agent runs."""
+    docs = queries.claim_documents(claim_id)
+    if docs is None:
+        return JSONResponse(status_code=404, content={"error": f"unknown claim: {claim_id!r}"})
+    return docs
+
+
+@app.get("/api/claims/{claim_id}/casefile")
+async def casefile(claim_id: str):
+    """Full CaseFile + ReviewerOutput from the latest run, so the workspace can rebuild the
+    evidence view for an already-investigated claim without re-running the agents."""
+    if not queries.claim_exists(claim_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown claim: {claim_id!r}"})
+    path = OUTPUT_DIR / claim_id / "latest" / "case_file.json"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": f"claim not yet investigated: {claim_id}"})
+    return JSONResponse(content=json.loads(path.read_text()))
+
+
+@app.get("/api/claims/{claim_id}/dispute-packet")
+async def dispute_packet(claim_id: str):
+    """The Markdown dispute packet for an INVALID claim's latest run (download)."""
+    if not queries.claim_exists(claim_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown claim: {claim_id!r}"})
+    path = OUTPUT_DIR / claim_id / "latest" / "dispute_packet.md"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": f"no dispute packet for {claim_id}"})
+    return PlainTextResponse(
+        path.read_text(),
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="dispute_packet_{claim_id}.md"'},
+    )
+
+
+class DispositionBody(BaseModel):
+    disposition: Literal["accept", "override", "escalate"]
+    override_verdict: Literal["VALID", "INVALID", "ESCALATE"] | None = None
+    note: str | None = None
+
+
+@app.post("/api/claims/{claim_id}/disposition")
+async def disposition(claim_id: str, body: DispositionBody):
+    """Record the analyst's decision on a claim (accept / override / send to human)."""
+    if not queries.claim_exists(claim_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown claim: {claim_id!r}"})
+    write_claim_disposition(
+        claim_id=claim_id,
+        disposition=body.disposition,
+        override_verdict=body.override_verdict,
+        note=body.note,
+        decided_at=datetime.now(UTC).isoformat(),
+    )
+    return {"claim_id": claim_id, "disposition": body.disposition,
+            "override_verdict": body.override_verdict}
+
+
 @app.get("/api/batches/{batch_id}")
-async def batch(batch_id: str, offset: int = 0, limit: int = 25):
-    """One page of the lot's claims, each with derived priority + resolution status."""
+async def batch(
+    batch_id: str,
+    offset: int = 0,
+    limit: int = 25,
+    status_filter: str = "all",
+    sort: str = "claim_id",
+    q: str | None = None,
+):
+    """One page of the lot's claims — filtered/sorted/searched for the triage queue."""
     if not queries.batch_exists(batch_id):
         return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
-    return queries.batch_claims(batch_id, offset=offset, limit=limit)
+    return queries.batch_claims(
+        batch_id, offset=offset, limit=limit, status_filter=status_filter, sort=sort, q=q
+    )
 
 
 @app.post("/api/batches/{batch_id}/investigate")
-async def investigate_batch(batch_id: str, cap: int = 10):
-    """Bulk-run the pipeline over the batch's unresolved claims (capped), streaming progress."""
+async def investigate_batch(batch_id: str, cap: int | None = None):
+    """Process the whole lot: run the pipeline over every unresolved claim, streaming progress.
+    `cap` optionally limits it (defaults to the entire lot — the ingestion "process lot" step)."""
     if not queries.batch_exists(batch_id):
         return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
 

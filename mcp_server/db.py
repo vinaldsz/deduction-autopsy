@@ -116,6 +116,18 @@ CREATE TABLE IF NOT EXISTS claim_resolutions (
     FOREIGN KEY (claim_id) REFERENCES deduction_claims (claim_id)
 );
 
+-- Operational: the human analyst's decision on a claim (Layer 32), kept separate from
+-- claim_resolutions (the agents' verdict) so re-investigating a claim never clobbers the human
+-- disposition. override_verdict is set only when disposition = 'override'.
+CREATE TABLE IF NOT EXISTS claim_dispositions (
+    claim_id        TEXT PRIMARY KEY,
+    disposition     TEXT CHECK (disposition IN ('accept', 'override', 'escalate')),
+    override_verdict TEXT,
+    note            TEXT,
+    decided_at      TEXT,
+    FOREIGN KEY (claim_id) REFERENCES deduction_claims (claim_id)
+);
+
 -- Metadata: quarantine / dead-letter for non-conforming source rows (ETL Transform, Layer 26).
 CREATE TABLE IF NOT EXISTS reject_rows (
     id          INTEGER PRIMARY KEY,

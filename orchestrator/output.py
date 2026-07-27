@@ -80,6 +80,30 @@ def write_reasoning_trace_json(
     return path
 
 
+def write_case_file_json(
+    run_dir: Path,
+    *,
+    claim_id: str,
+    case_file: Any,
+    reviewer_output: Any,
+) -> Path:
+    """Persist the full CaseFile + ReviewerOutput so the UI can rebuild the review workspace
+    (reconciliation table, timeline, 6-check panel, dispute grounds) for a past run without
+    re-invoking the agents. The thin verdict.json stays as-is; this is the evidence artifact."""
+    path = Path(run_dir) / "case_file.json"
+    path.write_text(
+        json.dumps(
+            {
+                "claim_id": claim_id,
+                "case_file": case_file.model_dump(),
+                "reviewer_output": reviewer_output.model_dump(),
+            },
+            indent=2,
+        )
+    )
+    return path
+
+
 def write_dispute_packet_md(
     run_dir: Path,
     *,

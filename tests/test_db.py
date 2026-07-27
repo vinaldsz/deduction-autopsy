@@ -19,6 +19,7 @@ EXPECTED_TABLES = {
     "deduction_claims",
     "batches",
     "claim_resolutions",
+    "claim_dispositions",
     "reject_rows",
     "load_audit",
     "lineage",
@@ -68,7 +69,7 @@ def test_init_db_creates_all_tables_and_view(tmp_path):
     conn = db.connect(db_path)
     try:
         assert _tables(conn) == EXPECTED_TABLES
-        assert len(EXPECTED_TABLES) == 11
+        assert len(EXPECTED_TABLES) == 12
         assert _views(conn) == {"v_batch_summary"}
         assert _named_indexes(conn) == EXPECTED_INDEXES
     finally:

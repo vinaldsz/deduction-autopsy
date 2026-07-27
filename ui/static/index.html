@@ -6,7 +6,7 @@
   <title>Deduction Autopsy</title>
   <style>
     :root {
-      --bg: #0f1115; --panel: #181b22; --border: #2a2f3a; --text: #e6e9ef;
+      --bg: #0f1115; --panel: #181b22; --panel2: #12151b; --border: #2a2f3a; --text: #e6e9ef;
       --muted: #8b93a3; --accent: #5b9bff; --ok: #3fb950; --bad: #f85149; --warn: #d29922;
     }
     * { box-sizing: border-box; }
@@ -14,108 +14,290 @@
       margin: 0; background: var(--bg); color: var(--text);
       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    main { max-width: 960px; margin: 0 auto; padding: 32px 20px 64px; }
-    h1 { font-size: 22px; margin: 0 0 4px; }
-    .sub { color: var(--muted); margin: 0 0 24px; }
-    section { margin-bottom: 24px; }
-    section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
-    .cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-    .card {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-      padding: 14px 16px; min-width: 140px; display: flex; flex-direction: column; gap: 4px;
-    }
-    .card .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-    .card .v { font-size: 20px; font-weight: 700; }
+    header.top { padding: 20px 24px 0; }
+    header.top h1 { font-size: 20px; margin: 0 0 2px; }
+    header.top .sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+    .run-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
     button {
       font: inherit; background: var(--accent); color: #06122b; border: none; border-radius: 8px;
-      font-weight: 600; cursor: pointer; padding: 9px 18px;
+      font-weight: 600; cursor: pointer; padding: 8px 16px;
     }
     button:disabled { opacity: .5; cursor: default; }
-    button.ghost { background: #0f1115; color: var(--text); border: 1px solid var(--border); }
+    button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    button.ghost:hover:not(:disabled) { border-color: var(--accent); }
+    button.sm { padding: 6px 12px; font-size: 13px; }
     .muted { color: var(--muted); font-size: 13px; }
-    table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-    th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
-    th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+
+    /* KPI strip — clickable filters */
+    .cards { display: flex; gap: 10px; flex-wrap: wrap; padding: 0 24px 16px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 14px; min-width: 130px; display: flex; flex-direction: column; gap: 3px;
+      cursor: pointer; text-align: left;
+    }
+    .card:hover { border-color: var(--accent); }
+    .card.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .card .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    .card .v { font-size: 20px; font-weight: 700; }
+    .card.attn .v { color: var(--warn); }
+
+    #banner { border: 1px solid var(--bad); color: var(--bad); border-radius: 8px; padding: 10px 14px; margin: 0 24px 12px; }
+
+    /* Two-pane layout */
+    .workspace { display: grid; grid-template-columns: 420px 1fr; gap: 16px; padding: 0 24px 48px; align-items: start; }
+    @media (max-width: 880px) { .workspace { grid-template-columns: 1fr; } }
+    .pane { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .pane > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+
+    /* Queue */
+    .queue-controls { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    #search { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; padding: 7px 10px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tab { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; background: transparent; }
+    .tab.active { color: var(--text); border-color: var(--accent); background: rgba(91,155,255,.12); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    th { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); cursor: pointer; user-select: none; }
+    th.sortable:hover { color: var(--text); }
     tbody tr { cursor: pointer; }
     tbody tr:hover { background: #1e222b; }
-    td.num { font-variant-numeric: tabular-nums; }
-    .pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+    tbody tr.selected { background: rgba(91,155,255,.14); }
+    tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    td.num { font-variant-numeric: tabular-nums; text-align: right; }
+    .pill { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
     .p-HIGH { color: var(--bad); border: 1px solid var(--bad); }
     .p-MEDIUM { color: var(--warn); border: 1px solid var(--warn); }
     .p-LOW { color: var(--muted); border: 1px solid var(--border); }
-    .st-VALID { color: var(--ok); }
-    .st-INVALID { color: var(--bad); }
-    .st-ESCALATE { color: var(--warn); font-weight: 700; }
-    .st-unresolved { color: var(--muted); }
-    .pager { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
-    #trace { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-    #trace li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    .d-VALID { background: var(--ok); } .d-INVALID { background: var(--bad); }
+    .d-ESCALATE { background: var(--warn); } .d-unresolved { background: var(--muted); }
+    .row-spin { color: var(--accent); }
+    .disp-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
+    .pager { display: flex; gap: 12px; align-items: center; padding: 10px 14px; }
+
+    /* Workspace */
+    #ws-empty { padding: 48px 24px; color: var(--muted); text-align: center; }
+    .ws-body { padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+    .ws-head { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start; }
+    .ws-head .id { font-size: 18px; font-weight: 700; }
+    .ws-head .meta { color: var(--muted); font-size: 13px; }
+    .verdict-chip { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+    .verdict-chip.VALID { color: var(--ok); border: 1px solid var(--ok); }
+    .verdict-chip.INVALID { color: var(--bad); border: 1px solid var(--bad); }
+    .verdict-chip.ESCALATE { color: var(--warn); border: 1px solid var(--warn); }
+    .verdict-chip.unresolved { color: var(--muted); border: 1px solid var(--border); }
+    .provenance { font-size: 12px; color: var(--muted); }
+    .provenance .v { font-weight: 700; }
+    .provenance .V-VALID { color: var(--ok); } .provenance .V-INVALID { color: var(--bad); } .provenance .V-ESCALATE { color: var(--warn); }
+    .provenance .r-CONFIRM { color: var(--ok); } .provenance .r-OVERTURN { color: var(--bad); } .provenance .r-ESCALATE { color: var(--warn); }
+    .conf { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+    .meter { width: 120px; height: 7px; background: var(--panel2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+    .meter > span { display: block; height: 100%; background: var(--accent); }
+
+    .block h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+
+    /* Retailer claim / reason */
+    .reason { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+    .reason .lead { margin-bottom: 6px; }
+    .reason .notes { color: var(--muted); font-style: italic; }
+
+    /* Source documents */
+    .doc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+    .doc > .doc-h { font-size: 12px; font-weight: 700; padding: 7px 10px; background: var(--panel2); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+    .doc > .doc-h .doc-id { color: var(--muted); font-weight: 400; font-family: ui-monospace, Menlo, monospace; }
+    table.doc-t { width: 100%; border-collapse: collapse; }
+    table.doc-t th, table.doc-t td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    table.doc-t tr:last-child td, table.doc-t tr:last-child th { border-bottom: none; }
+    table.doc-t th { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    table.doc-t td.num { font-variant-numeric: tabular-nums; }
+    table.doc-t .note-cell { color: var(--muted); font-style: italic; }
+    .doc-empty { color: var(--muted); font-size: 13px; }
+    table.recon { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    table.recon th, table.recon td { text-align: right; }
+    table.recon th:first-child, table.recon td:first-child { text-align: left; }
+    table.recon tr.disc td { font-weight: 700; }
+    table.recon tr.disc td.bad { color: var(--bad); }
+    .callout { background: rgba(210,153,34,.1); border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+    .callout .k { color: var(--warn); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+
+    .timeline { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tl-event { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-width: 92px; }
+    .tl-event .e { font-size: 11px; color: var(--muted); }
+    .tl-event .d { font-variant-numeric: tabular-nums; font-size: 13px; }
+    .tl-event.invalid { border-color: var(--bad); }
+    .tl-event.invalid .e { color: var(--bad); }
+
+    .checks { display: flex; flex-wrap: wrap; gap: 8px; }
+    .check { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
+    .check.PASS { color: var(--ok); border-color: var(--ok); }
+    .check.FAIL { color: var(--bad); border-color: var(--bad); }
+    .check.NA { color: var(--muted); opacity: .7; }
+
+    .grounds { margin: 0; padding-left: 18px; }
+    .grounds li { margin-bottom: 4px; font-size: 14px; }
+    .context-chips { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+    .context-chips .chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; color: var(--muted); }
+
+    details.audit { border: 1px solid var(--border); border-radius: 8px; }
+    details.audit > summary { cursor: pointer; padding: 8px 12px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    #trace { list-style: none; margin: 0; padding: 0 12px 8px; display: flex; flex-direction: column; gap: 5px; }
+    #trace li { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
     #trace li.error { border-color: var(--bad); }
-    .agent-tag { display: inline-block; min-width: 92px; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
+    .agent-tag { display: inline-block; min-width: 92px; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
     .agent-investigator { color: var(--accent); }
     .agent-reviewer { color: var(--warn); }
     .tool-args { color: var(--muted); }
-    #verdict-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
-    .verdict-row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
-    .verdict-row .cell { display: flex; flex-direction: column; }
-    .verdict-row .cell .k { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .04em; }
-    .verdict-row .cell .v { font-size: 18px; font-weight: 700; }
-    .v.VALID, .v.CONFIRM { color: var(--ok); }
-    .v.INVALID, .v.OVERTURN { color: var(--bad); }
-    .v.ESCALATE { color: var(--warn); }
-    #dispute ul { margin: 8px 0 0; padding-left: 20px; }
-    .usage { color: var(--muted); font-size: 13px; font-family: ui-monospace, Menlo, monospace; margin-top: 8px; }
+    .usage { color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, monospace; padding: 0 12px 10px; }
+
+    /* Decision bar */
+    .decision { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .decision .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .decision select, .decision input {
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; padding: 7px 10px;
+    }
+    .decision input.note { flex: 1; min-width: 160px; }
+    button.ok { background: var(--ok); color: #06210d; }
+    button.danger { background: var(--bad); color: #2b0606; }
+    .disp-current { font-size: 12px; color: var(--muted); }
     .hidden { display: none; }
-    #banner { border: 1px solid var(--bad); color: var(--bad); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
   </style>
 </head>
 <body>
-  <main>
+  <header class="top">
     <h1>Deduction Autopsy</h1>
-    <p class="sub">Daily-lot deduction worklist — Investigator proposes, Reviewer independently spot-checks.</p>
-
-    <section id="dashboard">
-      <div class="cards">
-        <div class="card"><span class="k">Unresolved</span><span class="v" id="m-unresolved">–</span></div>
-        <div class="card"><span class="k">Resolved this month</span><span class="v" id="m-resolved">–</span></div>
-        <div class="card"><span class="k">$ at risk</span><span class="v" id="m-risk">–</span></div>
-        <div class="card"><span class="k">Priority (H/M/L)</span><span class="v" id="m-priority">–</span></div>
-        <div class="card"><span class="k">Lot</span><span class="v" id="m-batch">–</span></div>
-      </div>
-      <button id="run">Run investigation</button>
+    <p class="sub">Analyst worklist — Investigator proposes a verdict, Reviewer independently spot-checks, you decide.</p>
+    <div class="run-row">
+      <button id="run">Process lot (investigate + review all)</button>
       <span id="run-status" class="muted"></span>
-    </section>
+    </div>
+  </header>
 
-    <div id="banner" class="hidden"></div>
+  <div class="cards" id="kpis">
+    <button class="card" data-filter="needs_me"><span class="k">Needs me</span><span class="v" id="m-needsme">–</span></button>
+    <button class="card attn" data-filter="escalated"><span class="k">Needs human review</span><span class="v" id="m-escalate">–</span></button>
+    <button class="card" data-filter="unresolved"><span class="k">Unresolved</span><span class="v" id="m-unresolved">–</span></button>
+    <button class="card" data-filter="resolved"><span class="k">Resolved this month</span><span class="v" id="m-resolved">–</span></button>
+    <button class="card" data-sort="amount"><span class="k">$ at risk</span><span class="v" id="m-risk">–</span></button>
+    <div class="card" style="cursor:default"><span class="k">Priority H/M/L</span><span class="v" id="m-priority">–</span></div>
+    <div class="card" style="cursor:default"><span class="k">Lot</span><span class="v" id="m-batch">–</span></div>
+  </div>
 
-    <section>
+  <div id="banner" class="hidden"></div>
+
+  <div class="workspace">
+    <!-- LEFT: triage queue -->
+    <section class="pane">
       <h2>Worklist</h2>
-      <table id="worklist">
-        <thead><tr><th>Claim</th><th>Retailer</th><th>Reason</th><th>Amount</th><th>Priority</th><th>Status</th></tr></thead>
+      <div class="queue-controls">
+        <input id="search" type="search" placeholder="Search claim / retailer / PO…" />
+        <div class="tabs" id="tabs">
+          <button class="tab" data-filter="needs_me">Needs me</button>
+          <button class="tab" data-filter="unresolved">Unresolved</button>
+          <button class="tab" data-filter="escalated">Escalated</button>
+          <button class="tab" data-filter="disputable">Disputable</button>
+          <button class="tab" data-filter="resolved">Resolved</button>
+          <button class="tab" data-filter="all">All</button>
+        </div>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Claim</th><th>Retailer</th><th>Reason</th>
+          <th class="sortable num" data-sort="amount">Amount</th>
+          <th class="sortable" data-sort="priority">Priority</th>
+          <th>Status</th>
+        </tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <div class="pager">
-        <button class="ghost" id="prev">Prev</button>
+        <button class="ghost sm" id="prev">Prev</button>
         <span id="page-info" class="muted"></span>
-        <button class="ghost" id="next">Next</button>
+        <button class="ghost sm" id="next">Next</button>
       </div>
     </section>
 
-    <section id="drill" class="hidden">
-      <h2>Claim <span id="drill-claim"></span> — live trace &amp; verdict</h2>
-      <ol id="trace"></ol>
-      <div id="verdict-card" class="hidden">
-        <div class="verdict-row">
-          <div class="cell"><span class="k">Investigator</span><span class="v" id="v-investigator"></span></div>
-          <div class="cell"><span class="k">Reviewer</span><span class="v" id="v-reviewer"></span></div>
-          <div class="cell"><span class="k">Final</span><span class="v" id="v-final"></span></div>
-          <div class="cell"><span class="k">Confidence</span><span class="v" id="v-confidence"></span></div>
+    <!-- RIGHT: claim review workspace -->
+    <section class="pane">
+      <h2>Claim review</h2>
+      <div id="ws-empty">Select a claim from the worklist to review the evidence.</div>
+      <div id="ws-body" class="ws-body hidden">
+        <div class="ws-head">
+          <div>
+            <div class="id" id="w-claim"></div>
+            <div class="meta" id="w-meta"></div>
+          </div>
+          <div>
+            <div><span class="verdict-chip" id="w-final"></span></div>
+            <div class="conf" id="w-conf-wrap"><span class="meter"><span id="w-conf-bar"></span></span><span id="w-conf-txt"></span></div>
+          </div>
+          <div class="provenance" id="w-provenance"></div>
+          <div style="margin-left:auto"><button class="sm" id="w-investigate">Investigate</button></div>
         </div>
-        <div id="dispute" class="hidden"><strong>Dispute grounds</strong><ul id="dispute-list"></ul></div>
-        <div class="usage" id="usage"></div>
+
+        <div class="block" id="w-reason-block">
+          <h3>Retailer's claim</h3>
+          <div class="reason" id="w-reason"></div>
+        </div>
+
+        <div class="block" id="w-docs-block">
+          <h3>Source documents</h3>
+          <div id="w-docs"></div>
+        </div>
+
+        <div class="block" id="w-recon-block">
+          <h3>Agent reconciliation — normalized to EACH</h3>
+          <table class="recon" id="w-recon"></table>
+        </div>
+
+        <div class="callout hidden" id="w-uom">
+          <div class="k">Unit-of-measure normalization</div>
+          <div id="w-uom-body"></div>
+        </div>
+
+        <div class="block" id="w-timeline-block">
+          <h3>Timeline</h3>
+          <div class="timeline" id="w-timeline"></div>
+        </div>
+
+        <div class="block" id="w-checks-block">
+          <h3>Reviewer checks</h3>
+          <div class="checks" id="w-checks"></div>
+        </div>
+
+        <div class="block hidden" id="w-context-block">
+          <h3>Context</h3>
+          <div class="context-chips" id="w-context"></div>
+        </div>
+
+        <div class="block hidden" id="w-dispute-block">
+          <h3>Dispute grounds</h3>
+          <ul class="grounds" id="w-grounds"></ul>
+          <button class="ghost sm" id="w-download">Download dispute packet</button>
+        </div>
+
+        <details class="audit">
+          <summary>Agent tool trace &amp; token usage (audit)</summary>
+          <ol id="trace"></ol>
+          <div class="usage" id="usage"></div>
+        </details>
+
+        <div class="decision">
+          <div class="disp-current" id="w-disp-current"></div>
+          <div class="actions">
+            <button class="ok sm" data-disp="accept">Accept verdict</button>
+            <button class="danger sm" data-disp="override">Override →</button>
+            <select id="w-override-verdict">
+              <option value="VALID">VALID</option>
+              <option value="INVALID">INVALID</option>
+              <option value="ESCALATE">ESCALATE</option>
+            </select>
+            <button class="ghost sm" data-disp="escalate">Send to human</button>
+            <input class="note" id="w-note" type="text" placeholder="Note (optional)" />
+          </div>
+          <span id="w-disp-status" class="muted"></span>
+        </div>
       </div>
     </section>
-  </main>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>

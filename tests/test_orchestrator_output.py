@@ -4,6 +4,7 @@ import re
 from orchestrator.output import (
     make_run_id,
     prepare_run_dir,
+    write_case_file_json,
     write_dispute_packet_md,
     write_reasoning_trace_json,
     write_verdict_json,
@@ -141,6 +142,24 @@ def test_write_dispute_packet_md_handles_no_dispute_grounds(tmp_path):
     )
 
     assert "(none provided)" in path.read_text()
+
+
+def test_write_case_file_json_round_trips_case_and_reviewer(tmp_path):
+    path = write_case_file_json(
+        tmp_path,
+        claim_id="CLM-002",
+        case_file=SAMPLE_CASE_FILE,
+        reviewer_output=SAMPLE_REVIEWER_OUTPUT,
+    )
+
+    assert path == tmp_path / "case_file.json"
+    written = json.loads(path.read_text())
+    assert written["claim_id"] == "CLM-002"
+    assert written["case_file"] == SAMPLE_CASE_FILE.model_dump()
+    assert written["reviewer_output"] == SAMPLE_REVIEWER_OUTPUT.model_dump()
+    # The workspace reads these nested fields directly.
+    assert written["case_file"]["po_summary"]["ordered_qty_each"] == 120
+    assert written["reviewer_output"]["review_findings"]["uom_check"] == "PASS"
 
 
 def test_writers_land_inside_the_prepared_run_dir(tmp_path):

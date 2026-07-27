@@ -1,6 +1,59 @@
 # Progress
 
 ## Current layer
+**Layer 32 — Analyst review workspace (evidence-first UI + human decisions) complete**
+
+Reworks the Layer-30b worklist into a two-pane **analyst workspace**. The prior UI surfaced only the
+raw tool-call trace + token counts (developer telemetry) and dead-ended at a read-only verdict; it
+also showed nothing for claims resolved in a past run. This layer makes the analyst's loop —
+**triage → read evidence → decide** — the shape of the UI, and makes the two agents process the whole
+lot up front so an analyst opens to fully-evidenced cases. No agent/prompt/verdict-logic changes; the
+8 ground-truth verdicts are untouched.
+
+**Backend — evidence surface + decisions:**
+- `orchestrator/output.py`: new `write_case_file_json` — persists the full `CaseFile` + `ReviewerOutput`
+  per run to `outputs/<claim_id>/<run_id>/case_file.json` (wired into `orchestrator/pipeline.py`), so a
+  past investigation's evidence rebuilds without re-running the agents.
+- `mcp_server/db.py`: new `claim_dispositions` table (accept/override/escalate + override_verdict +
+  note + decided_at), kept separate from `claim_resolutions` so re-investigating never clobbers the
+  human decision. `orchestrator/dispositions.py`: `write_claim_disposition` UPSERT.
+- `ui/queries.py`: `claim_documents(claim_id)` assembles the source-document graph from the DB
+  (claim + PO + ASN(s) + invoice(s) + receiving + trade agreement(s) + prior claims) — always
+  available, independent of agent runs; `batch_claims` gains `status_filter`
+  (needs_me/unresolved/escalated/disputable/resolved) + `sort` (priority/amount/claim_id) + `q`
+  search, and LEFT JOINs the disposition; `unresolved_claim_ids` cap now optional (None = whole lot);
+  `dashboard_metrics` exposes `needs_human_review`.
+- `ui/server.py`: new `GET /api/claims/{id}/documents`, `GET /api/claims/{id}/casefile`,
+  `GET /api/claims/{id}/dispute-packet` (markdown download), `POST /api/claims/{id}/disposition`;
+  the SSE `done`/`claim_done` payload now carries the case-file summary inline; batch investigate
+  processes the whole lot by default (cap optional).
+
+**Batch/ingestion:** `cli/process_lot.py` — post-ingestion step that runs the pipeline over every
+unresolved claim in the active lot (intended to run right after the ETL loads a lot; kept out of the
+ETL module so the ETL stays pure/testable). The UI button is now "Process lot (investigate + review
+all)". True auto-at-ingestion = have the ingestion job call `process_lot`.
+
+**Frontend (`ui/static/`, still no framework/build):** two-pane grid — clickable KPI strip (adds
+Needs-human-review), left triage queue (search + filter tabs + sortable priority/amount, keyboard-
+navigable rows, disposition badges), right review pane: verdict header with the Investigator→Reviewer
+provenance chain + confidence meter; **Retailer's claim** (reason + notes); **Source documents** panel
+(real PO/ASN/invoice/receiving/trade-agreement/prior-claim fields, built with `textContent` — safe
+against the retailer-notes injection surface); agent reconciliation + 6-check chips + dispute grounds
++ packet download layered on when investigated; raw tool trace + token usage demoted to a collapsed
+audit drawer; decision bar (accept/override/send-to-human).
+
+**Verification:** `pytest -q` — **306 passed, 10 deselected**. New/updated tests: `case_file.json`
+writer; `claim_dispositions` writer (+ survives resolution UPSERT); documents/casefile/dispute-packet/
+disposition endpoints (200s + 404s + 422); queue filter/sort/search/needs_me; `claim_documents` graph;
+uncapped lot processing; `cli/process_lot.py`. `node --check` on app.js clean. Real `uvicorn` boot:
+`/api/claims/CLM-003/documents` returns the split-shipment graph (PO 720 EACH, two ASNs of 360,
+720 received) vs. a "shortage" claim; disposition round-trip persists to the row; casefile/packet 200
+against a real artifact. Live investigate/`process_lot` **not** run (costs OpenRouter; SSE plumbing +
+pipeline covered by stubbed tests, unchanged + live-verified earlier).
+
+---
+
+## Previous layer
 **Layer 30b — Dashboard + daily-lot worklist UI complete**
 
 Second of the two Layer-30 PRs: replaces the scenario-dropdown demo UI with the real product
@@ -42,7 +95,7 @@ covered by the stubbed test and `run_pipeline` is unchanged + live-verified in e
 
 ---
 
-## Previous layer
+## Earlier layers
 **Layer 30a — Synthetic daily lot (~50-claim worklist volume) complete**
 
 First of two PRs for Layer 30 (dashboard). Materializes the ~50-claim daily lot deferred from Layer

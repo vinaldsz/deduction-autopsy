@@ -59,9 +59,70 @@ def test_batch_claims_paginates_with_priority_and_status(db):
     assert resolved[0]["claim_id"] == "CLM-E" and resolved[0]["status"] == "INVALID"
 
 
+def test_batch_claims_filters_by_status(db):
+    # CLM-E is the only resolved claim (INVALID) in the fixture.
+    resolved = queries.batch_claims("LOT-2024-09-15", status_filter="resolved")
+    assert [c["claim_id"] for c in resolved["claims"]] == ["CLM-E"]
+    assert resolved["total"] == 1
+
+    disputable = queries.batch_claims("LOT-2024-09-15", status_filter="disputable")
+    assert [c["claim_id"] for c in disputable["claims"]] == ["CLM-E"]
+
+    unresolved = queries.batch_claims("LOT-2024-09-15", status_filter="unresolved")
+    assert "CLM-E" not in [c["claim_id"] for c in unresolved["claims"]]
+    assert unresolved["total"] == 4
+
+    # "needs_me" = unresolved OR escalated. CLM-E is resolved INVALID (not escalated) -> excluded.
+    needs_me = queries.batch_claims("LOT-2024-09-15", status_filter="needs_me")
+    assert "CLM-E" not in [c["claim_id"] for c in needs_me["claims"]]
+    assert needs_me["total"] == 4
+
+
+def test_batch_claims_sorts_by_amount(db):
+    page = queries.batch_claims("LOT-2024-09-15", sort="amount")
+    amounts = [c["claimed_amount"] for c in page["claims"]]
+    assert amounts == sorted(amounts, reverse=True)
+
+
+def test_batch_claims_search_matches_claim_id(db):
+    page = queries.batch_claims("LOT-2024-09-15", q="CLM-A")
+    assert [c["claim_id"] for c in page["claims"]] == ["CLM-A"]
+    assert page["total"] == 1
+
+
+def test_batch_claims_includes_human_disposition(db):
+    from orchestrator.dispositions import write_claim_disposition
+
+    write_claim_disposition(claim_id="CLM-A", disposition="override",
+                            override_verdict="VALID", decided_at="t", db_path=db)
+    rows = {c["claim_id"]: c["disposition"] for c in queries.batch_claims("LOT-2024-09-15")["claims"]}
+    assert rows["CLM-A"] == "override"
+    assert rows["CLM-B"] is None
+
+
 def test_unresolved_claim_ids_caps_and_excludes_resolved(db):
     assert queries.unresolved_claim_ids("LOT-2024-09-15", cap=3) == ["CLM-A", "CLM-B", "CLM-C"]
     assert "CLM-E" not in queries.unresolved_claim_ids("LOT-2024-09-15", cap=99)
+
+
+def test_unresolved_claim_ids_no_cap_returns_whole_lot(db):
+    # cap=None (the "process lot" path) returns every unresolved claim, CLM-E excluded (resolved).
+    assert queries.unresolved_claim_ids("LOT-2024-09-15") == ["CLM-A", "CLM-B", "CLM-C", "CLM-D"]
+
+
+def test_claim_documents_assembles_entity_graph(db):
+    docs = queries.claim_documents("CLM-A")
+    assert docs is not None
+    assert docs["claim"]["claim_id"] == "CLM-A"
+    assert docs["purchase_order"]["po_id"] == "PO-T"
+    assert docs["asns"] == [] and docs["invoices"] == [] and docs["receiving_records"] == []
+    # All CLM-* share PO-T, so prior_claims = the other four, with CLM-E carrying its INVALID verdict.
+    prior = {p["claim_id"]: p["final_verdict"] for p in docs["prior_claims"]}
+    assert "CLM-A" not in prior and prior["CLM-E"] == "INVALID"
+
+
+def test_claim_documents_unknown_claim_is_none(db):
+    assert queries.claim_documents("CLM-404") is None
 
 
 def test_dashboard_metrics(db):
@@ -71,3 +132,4 @@ def test_dashboard_metrics(db):
     assert m["dollars_at_risk_cents"] == 30000  # A+B+C+D, E resolved
     assert m["priority_breakdown"] == {"HIGH": 2, "MEDIUM": 1, "LOW": 1}
     assert m["resolved_this_month"] == 1
+    assert m["needs_human_review"] == 0  # CLM-E resolved INVALID, not ESCALATE

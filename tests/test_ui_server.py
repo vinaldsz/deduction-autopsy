@@ -12,17 +12,32 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agents.base import ToolCallRecord
-from orchestrator.pipeline import PipelineError
+from orchestrator.pipeline import CaseFile, PipelineError, ReviewerOutput
 from ui import queries, server
 
 client = TestClient(server.app)
+
+_CASE_FILE = CaseFile.model_validate({
+    "claim_id": "CLM-002",
+    "po_summary": {"ordered_qty_each": 120, "shipped_qty_each": 120,
+                   "received_qty_each": 120, "invoiced_qty_each": 96},
+    "timeline": [{"event": "order_date", "date": "2024-02-01", "valid": True}],
+    "proposed_verdict": "INVALID", "confidence": 0.97,
+    "uom_conversions_applied": ["5 CASE -> 120 EACH for SKU-002 (factor 24)"],
+    "discrepancy_qty": 24, "discrepancy_amount_cents": 12000,
+})
+_REVIEWER_OUTPUT = ReviewerOutput.model_validate({
+    "claim_id": "CLM-002", "investigator_verdict": "INVALID",
+    "review_findings": {"uom_check": "PASS"}, "final_verdict": "CONFIRM",
+    "confidence": 0.97, "dispute_grounds": ["g"],
+})
 
 
 def _fake_result(claim_id="CLM-002", final="INVALID"):
     return SimpleNamespace(
         claim_id=claim_id, investigator_verdict="INVALID", reviewer_verdict="CONFIRM",
         final_verdict=final, confidence=0.97,
-        reviewer_output=SimpleNamespace(dispute_grounds=["g"]),
+        case_file=_CASE_FILE, reviewer_output=_REVIEWER_OUTPUT,
         usage={"investigator": {"prompt_tokens": 1, "completion_tokens": 2},
                "reviewer": {"prompt_tokens": 3, "completion_tokens": 4}},
     )
@@ -56,15 +71,17 @@ def test_dashboard_returns_metrics(monkeypatch):
 def test_batch_returns_claims_and_forwards_pagination(monkeypatch):
     seen = {}
 
-    def fake_batch_claims(batch_id, offset=0, limit=25):
-        seen.update(batch_id=batch_id, offset=offset, limit=limit)
+    def fake_batch_claims(batch_id, offset=0, limit=25, status_filter="all", sort="claim_id", q=None):
+        seen.update(batch_id=batch_id, offset=offset, limit=limit,
+                    status_filter=status_filter, sort=sort, q=q)
         return {"batch_id": batch_id, "total": 50, "offset": offset, "limit": limit, "claims": []}
 
     monkeypatch.setattr(queries, "batch_exists", lambda b: True)
     monkeypatch.setattr(queries, "batch_claims", fake_batch_claims)
-    resp = client.get("/api/batches/LOT-2024-09-15?offset=25&limit=10")
+    resp = client.get("/api/batches/LOT-2024-09-15?offset=25&limit=10&status_filter=escalated&sort=amount&q=walmart")
     assert resp.status_code == 200 and resp.json()["total"] == 50
-    assert seen == {"batch_id": "LOT-2024-09-15", "offset": 25, "limit": 10}
+    assert seen == {"batch_id": "LOT-2024-09-15", "offset": 25, "limit": 10,
+                    "status_filter": "escalated", "sort": "amount", "q": "walmart"}
 
 
 def test_unknown_batch_is_404(monkeypatch):
@@ -117,6 +134,81 @@ def test_stream_unknown_claim_is_404(monkeypatch):
     assert client.get("/api/claims/CLM-999/stream").status_code == 404
 
 
+def test_done_payload_carries_case_file_evidence(monkeypatch):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+
+    async def fake_pipeline(*, claim_id, **kw):
+        return _fake_result(claim_id)
+
+    monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
+    done = _sse_events(client.get("/api/claims/CLM-002/stream").text)[-1][1]
+    cf = done["case_file"]
+    assert cf["po_summary"]["invoiced_qty_each"] == 96
+    assert cf["discrepancy_amount_cents"] == 12000
+    assert cf["uom_conversions_applied"] == ["5 CASE -> 120 EACH for SKU-002 (factor 24)"]
+    assert cf["review_findings"]["uom_check"] == "PASS"
+
+
+# --- source documents endpoint -------------------------------------------------------------------
+
+def test_documents_returns_entity_graph(monkeypatch):
+    fake = {"claim": {"claim_id": "CLM-002", "retailer_notes": "note"},
+            "purchase_order": {"po_id": "PO-002"}, "asns": [], "invoices": [],
+            "receiving_records": [], "trade_agreements": [], "prior_claims": []}
+    monkeypatch.setattr(queries, "claim_documents", lambda c: fake)
+    resp = client.get("/api/claims/CLM-002/documents")
+    assert resp.status_code == 200 and resp.json()["purchase_order"]["po_id"] == "PO-002"
+
+
+def test_documents_unknown_claim_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "claim_documents", lambda c: None)
+    assert client.get("/api/claims/CLM-999/documents").status_code == 404
+
+
+# --- casefile + dispute-packet read endpoints ----------------------------------------------------
+
+def test_casefile_reads_latest_artifact(monkeypatch, tmp_path):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    latest = tmp_path / "CLM-002" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "case_file.json").write_text(json.dumps({"claim_id": "CLM-002", "case_file": {"x": 1}}))
+
+    resp = client.get("/api/claims/CLM-002/casefile")
+    assert resp.status_code == 200 and resp.json()["case_file"] == {"x": 1}
+
+
+def test_casefile_404_when_not_investigated(monkeypatch, tmp_path):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    assert client.get("/api/claims/CLM-002/casefile").status_code == 404
+
+
+def test_casefile_unknown_claim_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: False)
+    assert client.get("/api/claims/CLM-999/casefile").status_code == 404
+
+
+def test_dispute_packet_served_as_markdown_attachment(monkeypatch, tmp_path):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    latest = tmp_path / "CLM-002" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "dispute_packet.md").write_text("# Dispute Packet — CLM-002\n")
+
+    resp = client.get("/api/claims/CLM-002/dispute-packet")
+    assert resp.status_code == 200
+    assert "Dispute Packet" in resp.text
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in resp.headers["content-disposition"]
+
+
+def test_dispute_packet_404_when_absent(monkeypatch, tmp_path):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    assert client.get("/api/claims/CLM-002/dispute-packet").status_code == 404
+
+
 def test_investigate_post_happy_and_errors(monkeypatch):
     monkeypatch.setattr(queries, "claim_exists", lambda c: True)
 
@@ -134,6 +226,34 @@ def test_investigate_post_happy_and_errors(monkeypatch):
 
     monkeypatch.setattr(queries, "claim_exists", lambda c: False)
     assert client.post("/api/claims/CLM-999/investigate").status_code == 404
+
+
+# --- disposition (human decision) ----------------------------------------------------------------
+
+def test_disposition_writes_and_returns(monkeypatch):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    seen = {}
+    monkeypatch.setattr(server, "write_claim_disposition",
+                        lambda **kw: seen.update(kw) or True)
+
+    resp = client.post("/api/claims/CLM-002/disposition",
+                       json={"disposition": "override", "override_verdict": "VALID", "note": "x"})
+    assert resp.status_code == 200
+    assert resp.json()["disposition"] == "override"
+    assert seen["claim_id"] == "CLM-002" and seen["override_verdict"] == "VALID"
+    assert seen["note"] == "x" and "decided_at" in seen
+
+
+def test_disposition_rejects_bad_value(monkeypatch):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    resp = client.post("/api/claims/CLM-002/disposition", json={"disposition": "maybe"})
+    assert resp.status_code == 422  # pydantic Literal validation
+
+
+def test_disposition_unknown_claim_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: False)
+    resp = client.post("/api/claims/CLM-999/disposition", json={"disposition": "accept"})
+    assert resp.status_code == 404
 
 
 # --- static mount ---------------------------------------------------------------------------------
