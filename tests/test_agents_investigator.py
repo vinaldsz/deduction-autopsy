@@ -12,7 +12,6 @@ async def test_default_model_is_confirmed_openrouter_slug():
 
 
 async def test_user_message_references_claim_id(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI([make_completion(content="{}")])
 
     async with Client(mcp) as mcp_client:
@@ -25,7 +24,6 @@ async def test_user_message_references_claim_id(monkeypatch):
 
 
 async def test_uses_default_model_unless_overridden(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI([make_completion(content="{}")])
 
     async with Client(mcp) as mcp_client:
@@ -35,7 +33,6 @@ async def test_uses_default_model_unless_overridden(monkeypatch):
 
 
 async def test_model_override_is_respected(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI([make_completion(content="{}")])
 
     async with Client(mcp) as mcp_client:
@@ -47,7 +44,6 @@ async def test_model_override_is_respected(monkeypatch):
 
 
 async def test_tool_call_round_trip_against_real_fixtures(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s02_casepack_mismatch")
     stub = StubAsyncOpenAI(
         [
             make_completion(
@@ -79,7 +75,6 @@ async def test_tool_call_round_trip_against_real_fixtures(monkeypatch):
 
 
 async def test_on_tool_call_is_forwarded_to_the_runner(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s02_casepack_mismatch")
     stub = StubAsyncOpenAI(
         [
             make_completion(

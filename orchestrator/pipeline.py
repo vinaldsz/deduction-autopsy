@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from agents.base import AgentResult, TokenUsage, ToolCallRecord
 from agents.investigator import run_investigator
 from agents.reviewer import run_reviewer
+from mcp_server.db import DEFAULT_DB_PATH
 from orchestrator.config import SETTINGS
 from orchestrator.output import (
     make_run_id,
@@ -22,6 +23,7 @@ from orchestrator.output import (
     write_reasoning_trace_json,
     write_verdict_json,
 )
+from orchestrator.resolutions import write_claim_resolution
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +111,18 @@ class PipelineResult:
     usage: dict
 
 
+# Keyed by claim_id: which tool call must appear in the Investigator's trace for claims whose
+# discrepancy is only detectable through a specific tool (UOM normalization, split-shipment
+# aggregation, trade-agreement lookup, duplicate detection). Enforced as a Layer-safeguard.
 REQUIRED_TOOL_CALLS: dict[str, Callable[[list[ToolCallRecord]], bool]] = {
-    "s02": lambda trace: any(r.name == "normalize_uom" and not r.is_error for r in trace),
-    "s03": lambda trace: any(
+    "CLM-002": lambda trace: any(r.name == "normalize_uom" and not r.is_error for r in trace),
+    "CLM-003": lambda trace: any(
         r.name == "get_asns_for_po" and not r.is_error and len(json.loads(r.result)) >= 2
         for r in trace
     ),
-    "s06": lambda trace: any(r.name == "get_trade_agreement" and not r.is_error for r in trace),
-    "s07": lambda trace: any(r.name == "list_claims_for_po" and not r.is_error for r in trace),
-    "s08": lambda trace: any(r.name == "list_claims_for_po" and not r.is_error for r in trace),
+    "CLM-006": lambda trace: any(r.name == "get_trade_agreement" and not r.is_error for r in trace),
+    "CLM-007b": lambda trace: any(r.name == "list_claims_for_po" and not r.is_error for r in trace),
+    "CLM-008": lambda trace: any(r.name == "list_claims_for_po" and not r.is_error for r in trace),
 }
 
 
@@ -160,8 +165,8 @@ def _extract_json(text: str) -> str:
     return stripped
 
 
-def _required_tool_call_check(scenario: str) -> Callable[[list[ToolCallRecord]], bool] | None:
-    return REQUIRED_TOOL_CALLS.get(scenario[:3])
+def _required_tool_call_check(claim_id: str) -> Callable[[list[ToolCallRecord]], bool] | None:
+    return REQUIRED_TOOL_CALLS.get(claim_id)
 
 
 def strip_reasoning(case_file: CaseFile) -> dict[str, Any]:
@@ -174,13 +179,12 @@ async def _run_investigator_until_valid(
     openai_client: Any,
     mcp_client: Any,
     claim_id: str,
-    scenario: str,
     max_attempts: int,
     on_tool_call: Callable[[ToolCallRecord], None] | None = None,
 ) -> tuple[AgentResult, CaseFile, TokenUsage]:
     correction: str | None = None
     last_error = ""
-    check = _required_tool_call_check(scenario)
+    check = _required_tool_call_check(claim_id)
     total_usage = TokenUsage()
 
     for attempt in range(1, max_attempts + 1):
@@ -213,11 +217,10 @@ async def _run_investigator_until_valid(
             continue
 
         if check is not None and not check(result.trace):
-            last_error = f"required tool call for scenario {scenario!r} is missing from the trace"
+            last_error = f"required tool call for claim {claim_id!r} is missing from the trace"
             logger.warning(
-                "required_tool_call_missing claim_id=%s scenario=%s attempt=%d/%d",
+                "required_tool_call_missing claim_id=%s attempt=%d/%d",
                 claim_id,
-                scenario,
                 attempt,
                 max_attempts,
             )
@@ -260,7 +263,6 @@ def _resolve_final_verdict(investigator_verdict: str, reviewer_verdict: str) -> 
 async def run_pipeline(
     *,
     claim_id: str,
-    scenario: str,
     openai_client: Any | None = None,
     mcp_client: Any | None = None,
     output_dir: str | Path = "outputs",
@@ -271,7 +273,7 @@ async def run_pipeline(
 ) -> PipelineResult:
     output_dir = Path(output_dir)
     run_id = run_id or make_run_id()
-    logger.info("pipeline_start claim_id=%s scenario=%s run_id=%s", claim_id, scenario, run_id)
+    logger.info("pipeline_start claim_id=%s run_id=%s", claim_id, run_id)
 
     async with AsyncExitStack() as stack:
         if openai_client is None:
@@ -287,9 +289,10 @@ async def run_pipeline(
             from fastmcp import Client
             from fastmcp.client.transports import PythonStdioTransport
 
+            resolved_db = os.environ.get("DEDUCTIONS_DB", str(DEFAULT_DB_PATH))
             transport = PythonStdioTransport(
                 script_path=MCP_SERVER_SCRIPT,
-                env={**os.environ, "SCENARIO_ID": scenario},
+                env={**os.environ, "DEDUCTIONS_DB": resolved_db},
             )
             mcp_client = await stack.enter_async_context(Client(transport))
 
@@ -297,7 +300,6 @@ async def run_pipeline(
             openai_client=openai_client,
             mcp_client=mcp_client,
             claim_id=claim_id,
-            scenario=scenario,
             max_attempts=max_investigator_attempts,
             on_tool_call=on_investigator_tool_call,
         )
@@ -369,6 +371,15 @@ async def run_pipeline(
                 case_file=case_file,
                 reviewer_output=reviewer_output,
             )
+
+        write_claim_resolution(
+            claim_id=claim_id,
+            investigator_verdict=case_file.proposed_verdict,
+            final_verdict=final_verdict,
+            confidence=reviewer_output.confidence,
+            resolved_at=timestamp,
+            run_id=run_id,
+        )
 
         return PipelineResult(
             claim_id=claim_id,

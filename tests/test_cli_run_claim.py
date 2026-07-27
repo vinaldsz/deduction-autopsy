@@ -14,17 +14,15 @@ from tests.test_orchestrator_pipeline import (
 )
 
 
-def test_parse_args_requires_claim_id_and_scenario():
+def test_parse_args_requires_claim_id():
     with pytest.raises(SystemExit):
         parse_args([])
-    with pytest.raises(SystemExit):
-        parse_args(["--claim-id", "CLM-001"])
-    with pytest.raises(SystemExit):
-        parse_args(["--scenario", "s01_clean_shortage"])
+    args = parse_args(["--claim-id", "CLM-001"])
+    assert args.claim_id == "CLM-001"
 
 
 def test_parse_args_defaults():
-    args = parse_args(["--claim-id", "CLM-001", "--scenario", "s01_clean_shortage"])
+    args = parse_args(["--claim-id", "CLM-001"])
     assert args.output_dir == "outputs"
     assert args.run_id is None
     assert args.max_attempts == 3
@@ -36,8 +34,6 @@ def test_parse_args_overrides():
         [
             "--claim-id",
             "CLM-001",
-            "--scenario",
-            "s01_clean_shortage",
             "--output-dir",
             "custom_outputs",
             "--run-id",
@@ -54,7 +50,6 @@ def test_parse_args_overrides():
 
 
 async def test_happy_path_prints_verdict_and_returns_zero(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(content=VALID_CASE_FILE_JSON),
@@ -67,7 +62,6 @@ async def test_happy_path_prints_verdict_and_returns_zero(monkeypatch, tmp_path)
         exit_code = await main(
             [
                 "--claim-id", "CLM-001",
-                "--scenario", "s01_clean_shortage",
                 "--output-dir", str(tmp_path),
                 "--run-id", "demo-run",
             ],
@@ -89,7 +83,6 @@ async def test_happy_path_prints_verdict_and_returns_zero(monkeypatch, tmp_path)
 
 
 async def test_pipeline_error_prints_message_and_returns_one(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(content="not json"),
@@ -103,8 +96,6 @@ async def test_pipeline_error_prints_message_and_returns_one(monkeypatch, tmp_pa
             [
                 "--claim-id",
                 "CLM-001",
-                "--scenario",
-                "s01_clean_shortage",
                 "--output-dir",
                 str(tmp_path),
                 "--max-attempts",
@@ -124,7 +115,7 @@ async def test_missing_api_key_returns_one_without_network(monkeypatch):
     console = Console(record=True, no_color=True, width=120)
 
     exit_code = await main(
-        ["--claim-id", "CLM-001", "--scenario", "s01_clean_shortage"],
+        ["--claim-id", "CLM-001"],
         console=console,
     )
 
@@ -133,7 +124,6 @@ async def test_missing_api_key_returns_one_without_network(monkeypatch):
 
 
 async def test_explain_prints_tool_calls_case_file_and_review_findings(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s02_casepack_mismatch")
     stub = StubAsyncOpenAI(
         [
             make_completion(
@@ -168,8 +158,6 @@ async def test_explain_prints_tool_calls_case_file_and_review_findings(monkeypat
             [
                 "--claim-id",
                 "CLM-002",
-                "--scenario",
-                "s02_casepack_mismatch",
                 "--output-dir",
                 str(tmp_path),
                 "--explain",
@@ -201,7 +189,6 @@ async def test_explain_prints_tool_calls_case_file_and_review_findings(monkeypat
 
 
 async def test_explain_prints_overturn_callout_pointing_to_dispute_grounds(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     overturn_json = json.dumps(
         {
             "claim_id": "CLM-001",
@@ -233,8 +220,6 @@ async def test_explain_prints_overturn_callout_pointing_to_dispute_grounds(monke
             [
                 "--claim-id",
                 "CLM-001",
-                "--scenario",
-                "s01_clean_shortage",
                 "--output-dir",
                 str(tmp_path),
                 "--explain",
@@ -254,7 +239,6 @@ async def test_explain_prints_overturn_callout_pointing_to_dispute_grounds(monke
 
 
 async def test_without_explain_output_is_unchanged(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(content=VALID_CASE_FILE_JSON),
@@ -265,7 +249,7 @@ async def test_without_explain_output_is_unchanged(monkeypatch, tmp_path):
 
     async with Client(mcp) as mcp_client:
         exit_code = await main(
-            ["--claim-id", "CLM-001", "--scenario", "s01_clean_shortage", "--output-dir", str(tmp_path)],
+            ["--claim-id", "CLM-001", "--output-dir", str(tmp_path)],
             openai_client=stub,
             mcp_client=mcp_client,
             console=console,

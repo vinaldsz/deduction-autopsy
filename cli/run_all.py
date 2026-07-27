@@ -74,11 +74,10 @@ async def main(
     passed = 0
     for case in GROUND_TRUTH:
         try:
-            # mcp_client is intentionally left unset: each scenario needs its own subprocess
-            # with a different SCENARIO_ID env var. Only openai_client is shared/reused.
+            # mcp_client is intentionally left unset: each claim gets its own MCP subprocess
+            # (reading the shared DEDUCTIONS_DB). Only openai_client is shared/reused.
             result = await run_pipeline_fn(
                 claim_id=case["claim_id"],
-                scenario=case["scenario"],
                 openai_client=openai_client,
                 run_id=run_id,
             )

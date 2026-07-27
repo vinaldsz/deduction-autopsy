@@ -48,7 +48,6 @@ def _investigator_tool_names(run_dir: Path) -> set[str]:
 async def test_scenario_matches_ground_truth(case, tmp_path):
     result = await run_pipeline(
         claim_id=case["claim_id"],
-        scenario=case["scenario"],
         output_dir=tmp_path,
     )
 
@@ -83,8 +82,6 @@ async def test_reviewer_overturns_a_missed_duplicate(monkeypatch):
     CLM-008a — against s08's real fixtures, and confirms the live Reviewer's mandatory
     list_claims_for_po re-check surfaces the prior claim regardless of what the case file says.
     """
-    monkeypatch.setenv("SCENARIO_ID", "s08_reviewer_overturn")
-
     from openai import AsyncOpenAI
 
     openai_client = AsyncOpenAI(

@@ -68,7 +68,6 @@ def test_consumer_modules_reexport_the_singleton_not_a_hardcoded_copy():
 
 
 async def test_agent_runner_defaults_come_from_settings(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI([make_completion(content="Done.")])
 
     async with Client(mcp) as mcp_client:
