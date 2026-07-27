@@ -1,6 +1,48 @@
 # Progress
 
 ## Current layer
+**Layer 30b — Dashboard + daily-lot worklist UI complete**
+
+Second of the two Layer-30 PRs: replaces the scenario-dropdown demo UI with the real product
+surface — a daily-lot **worklist** backed by dashboard metrics and a bulk "Run investigation"
+action, over the ~50-claim lot from 30a. Finishes the scenario retirement in the UI. No
+agent/prompt/verdict-logic changes.
+
+**`ui/queries.py`** (new; read-side DB, via `mcp_server.db.connect` + call-time `DEDUCTIONS_DB`):
+`active_batch()` (latest `load_date`), `batch_exists`/`claim_exists`, `batch_claims(batch_id, offset,
+limit)` (paginated; each claim + derived `priority` + `status`), `unresolved_claim_ids(batch_id,
+cap)`, `dashboard_metrics()` (reuses `v_batch_summary`; adds `unresolved_count`,
+`resolved_this_month`, `priority_breakdown`), and a pure `priority(amount_cents, claim_date,
+ref_date)` → HIGH (≥ $150 or aged > 45d) / MEDIUM (≥ $50) / LOW.
+
+**`ui/server.py`** (rewritten to SPEC "UI API Contract v2"): `GET /api/dashboard`;
+`GET /api/batches/{id}?offset=&limit=` (404 unknown batch); `POST /api/batches/{id}/investigate?cap=`
+(SSE bulk-run over unresolved claims — per-claim `tool_call`+`claim_done`, then `batch_done` tally,
+reusing the Layer-11 hooks + Layer-20 queue/`_sse` bridge per claim); `GET
+/api/claims/{id}/stream` + `POST /api/claims/{id}/investigate` kept for drill-in (no `scenario`; 404 =
+unknown claim via `claim_exists`). **Removed** `/api/scenarios`, `_scenario_exists`, `SCENARIOS_DIR`,
+the `GROUND_TRUTH` import.
+
+**`ui/static/`** (rewritten, still no framework/build): dashboard metric cards + a paginated worklist
+`<table>` (claim/retailer/reason/amount/priority/status) + a "Run investigation" button that consumes
+the POST bulk SSE via a `fetch`+`ReadableStream` parser (EventSource is GET-only) and fills rows live;
+row-click drill-in reuses an `EventSource` single-claim stream + the trace/verdict-card rendering.
+
+**Verification:** new `tests/test_ui_queries.py` (real SQL over a controlled temp DB — priority
+thresholds, active batch, pagination+status, unresolved cap, dashboard metrics incl.
+`resolved_this_month`/`priority_breakdown`); rewritten `tests/test_ui_server.py` (stubs `ui.queries`
++ `run_pipeline` — dashboard/batch shapes, pagination forwarding, batch-SSE event order
+`tool_call*`/`claim_done`/`batch_done`, 404s, static mount not shadowing `/api/*`). `pytest -q` —
+**281 passed, 10 deselected**; `pyright` — 0 errors. Real `uvicorn` boot: `/api/dashboard`
+(49 unresolved, HIGH/MED/LOW 16/6/27, $3,681.40 at risk), `/api/batches/LOT-2024-09-15?limit=3`
+(50 total, priority+status derived), unknown batch/claim → 404, `/` serves the worklist,
+`/api/scenarios` → 404. Live capped bulk-run **not** run (costs OpenRouter; the SSE plumbing is
+covered by the stubbed test and `run_pipeline` is unchanged + live-verified in earlier layers).
+`docs/SPEC.md` UI contract marked implemented; `README.md` UI section + layer table (row 30b) updated.
+
+---
+
+## Previous layer
 **Layer 30a — Synthetic daily lot (~50-claim worklist volume) complete**
 
 First of two PRs for Layer 30 (dashboard). Materializes the ~50-claim daily lot deferred from Layer

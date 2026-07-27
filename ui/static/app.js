@@ -1,139 +1,172 @@
-// Thin client over the Layer 19/20 API. No framework, no build step.
-// Uses the SSE /stream endpoint so tool calls render live as each agent makes them.
+// Dashboard + daily-lot worklist over the Layer-30 API. No framework, no build step.
 
-const scenarioSelect = document.getElementById("scenario");
-const claimInput = document.getElementById("claim-id");
-const runButton = document.getElementById("run");
-const trace = document.getElementById("trace");
-const traceEmpty = document.getElementById("trace-empty");
-const verdictSection = document.getElementById("verdict");
-const disputeBlock = document.getElementById("dispute");
-const disputeList = document.getElementById("dispute-list");
-const usageEl = document.getElementById("usage");
-const banner = document.getElementById("banner");
+const LIMIT = 25;
+const state = { batchId: null, offset: 0, total: 0 };
+
+const $ = (id) => document.getElementById(id);
+const banner = $("banner");
+const dollars = (cents) => "$" + (cents / 100).toFixed(2);
+
+function showBanner(msg) { banner.textContent = msg; banner.classList.remove("hidden"); }
+
+async function loadDashboard() {
+  const d = await (await fetch("/api/dashboard")).json();
+  $("m-unresolved").textContent = d.unresolved_count;
+  $("m-resolved").textContent = d.resolved_this_month;
+  $("m-risk").textContent = dollars(d.dollars_at_risk_cents);
+  const p = d.priority_breakdown;
+  $("m-priority").textContent = `${p.HIGH}/${p.MEDIUM}/${p.LOW}`;
+  $("m-batch").textContent = d.batch ? `${d.batch.batch_id} (${d.batch.status})` : "—";
+  state.batchId = d.batch ? d.batch.batch_id : null;
+}
+
+function renderRow(claim) {
+  const tr = document.createElement("tr");
+  tr.dataset.claimId = claim.claim_id;
+  tr.innerHTML =
+    `<td>${claim.claim_id}</td><td>${claim.retailer}</td><td>${claim.claimed_reason}</td>` +
+    `<td class="num">${dollars(claim.claimed_amount)}</td>` +
+    `<td><span class="pill p-${claim.priority}">${claim.priority}</span></td>` +
+    `<td class="status st-${claim.status}">${claim.status}</td>`;
+  tr.addEventListener("click", () => drillIn(claim.claim_id));
+  return tr;
+}
+
+async function loadBatch() {
+  if (!state.batchId) return;
+  const url = `/api/batches/${encodeURIComponent(state.batchId)}?offset=${state.offset}&limit=${LIMIT}`;
+  const data = await (await fetch(url)).json();
+  state.total = data.total;
+  const rows = $("rows");
+  rows.innerHTML = "";
+  for (const claim of data.claims) rows.appendChild(renderRow(claim));
+  const shown = data.claims.length ? `${state.offset + 1}–${state.offset + data.claims.length}` : "0";
+  $("page-info").textContent = `${shown} of ${data.total}`;
+  $("prev").disabled = state.offset === 0;
+  $("next").disabled = state.offset + LIMIT >= data.total;
+}
+
+function setRowStatus(claimId, verdict) {
+  const tr = document.querySelector(`tr[data-claim-id="${claimId}"]`);
+  if (!tr) return;
+  const cell = tr.querySelector(".status");
+  cell.textContent = verdict;
+  cell.className = "status st-" + verdict;
+}
+
+// Consume an SSE stream delivered over fetch (used for the POST bulk-run).
+async function streamSSE(url, opts, onEvent) {
+  const resp = await fetch(url, opts);
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, i); buf = buf.slice(i + 2);
+      let event = null, data = null;
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data = line.slice(5).trim();
+      }
+      if (event) onEvent(event, data ? JSON.parse(data) : null);
+    }
+  }
+}
+
+async function runBatch() {
+  if (!state.batchId) return;
+  banner.classList.add("hidden");
+  $("run").disabled = true;
+  $("run-status").textContent = "Running…";
+  try {
+    await streamSSE(`/api/batches/${encodeURIComponent(state.batchId)}/investigate`,
+      { method: "POST" },
+      (event, data) => {
+        if (event === "tool_call") $("run-status").textContent = `Investigating ${data.claim_id}…`;
+        else if (event === "claim_done") setRowStatus(data.claim_id, data.final_verdict);
+        else if (event === "batch_done") $("run-status").textContent =
+          `Done: ${data.investigated} investigated · ${data.ESCALATE} escalated`;
+        else if (event === "error") showBanner(data.error);
+      });
+  } catch (e) {
+    showBanner("Bulk investigation stream failed.");
+  } finally {
+    $("run").disabled = false;
+    await loadDashboard();
+  }
+}
+
+// --- single-claim drill-in (GET SSE via EventSource) ---------------------------------------------
 
 let source = null;
 
-// Populate the scenario dropdown from /api/scenarios; each option carries its fixed claim id.
-async function loadScenarios() {
-  const resp = await fetch("/api/scenarios");
-  const { scenarios } = await resp.json();
-  for (const s of scenarios) {
-    const opt = document.createElement("option");
-    opt.value = s.scenario;
-    opt.textContent = s.scenario;
-    opt.dataset.claimId = s.claim_id;
-    scenarioSelect.appendChild(opt);
-  }
-  syncClaimId();
-}
-
-function syncClaimId() {
-  const opt = scenarioSelect.selectedOptions[0];
-  claimInput.value = opt ? opt.dataset.claimId : "";
-}
-
-function showBanner(message) {
-  banner.textContent = message;
-  banner.classList.remove("hidden");
-}
-
-function appendToolCall(data) {
-  traceEmpty.classList.add("hidden");
-  const li = document.createElement("li");
-  if (data.is_error) li.classList.add("error");
-  const agent = document.createElement("span");
-  agent.className = "agent-tag agent-" + data.agent;
-  agent.textContent = data.agent;
-  const name = document.createElement("span");
-  name.className = "tool-name";
-  name.textContent = data.name;
-  const args = document.createElement("span");
-  args.className = "tool-args";
-  args.textContent = " " + JSON.stringify(data.args);
-  li.append(agent, name, args);
-  trace.appendChild(li);
-}
-
 function setVerdict(id, value) {
-  const el = document.getElementById(id);
+  const el = $(id);
   el.textContent = value;
-  el.className = "v " + value; // color via .v.VALID / .v.INVALID / ...
+  el.className = "v " + value;
 }
 
-function renderDone(data) {
+function renderVerdict(data) {
   setVerdict("v-investigator", data.investigator_verdict);
   setVerdict("v-reviewer", data.reviewer_verdict);
   setVerdict("v-final", data.final_verdict);
-  document.getElementById("v-confidence").textContent = data.confidence;
-
-  disputeList.innerHTML = "";
+  $("v-confidence").textContent = data.confidence;
+  const list = $("dispute-list");
+  list.innerHTML = "";
   if (data.final_verdict === "INVALID" && data.dispute_grounds && data.dispute_grounds.length) {
-    for (const ground of data.dispute_grounds) {
-      const li = document.createElement("li");
-      li.textContent = ground;
-      disputeList.appendChild(li);
+    for (const g of data.dispute_grounds) {
+      const li = document.createElement("li"); li.textContent = g; list.appendChild(li);
     }
-    disputeBlock.classList.remove("hidden");
+    $("dispute").classList.remove("hidden");
   } else {
-    disputeBlock.classList.add("hidden");
+    $("dispute").classList.add("hidden");
   }
-
   const u = data.usage;
-  usageEl.textContent =
+  $("usage").textContent =
     `tokens — investigator: ${u.investigator.prompt_tokens} in / ${u.investigator.completion_tokens} out · ` +
     `reviewer: ${u.reviewer.prompt_tokens} in / ${u.reviewer.completion_tokens} out`;
-
-  verdictSection.classList.remove("hidden");
+  $("verdict-card").classList.remove("hidden");
 }
 
-function finish() {
-  if (source) {
-    source.close();
-    source = null;
-  }
-  runButton.disabled = false;
-  runButton.textContent = "Run investigation";
-}
+function drillIn(claimId) {
+  if (source) source.close();
+  $("drill").classList.remove("hidden");
+  $("drill-claim").textContent = claimId;
+  $("trace").innerHTML = "";
+  $("verdict-card").classList.add("hidden");
+  $("drill").scrollIntoView({ behavior: "smooth" });
 
-function run() {
-  const scenario = scenarioSelect.value;
-  const claimId = claimInput.value;
-  if (!scenario || !claimId) return;
-
-  // Reset previous run.
-  trace.innerHTML = "";
-  traceEmpty.classList.remove("hidden");
-  verdictSection.classList.add("hidden");
-  banner.classList.add("hidden");
-  runButton.disabled = true;
-  runButton.textContent = "Running…";
-
-  const url = `/api/claims/${encodeURIComponent(claimId)}/stream?scenario=${encodeURIComponent(scenario)}`;
-  source = new EventSource(url);
-
-  source.addEventListener("tool_call", (e) => appendToolCall(JSON.parse(e.data)));
+  source = new EventSource(`/api/claims/${encodeURIComponent(claimId)}/stream`);
+  source.addEventListener("tool_call", (e) => {
+    const d = JSON.parse(e.data);
+    const li = document.createElement("li");
+    if (d.is_error) li.classList.add("error");
+    li.innerHTML = `<span class="agent-tag agent-${d.agent}">${d.agent}</span>` +
+      `<span>${d.name}</span><span class="tool-args"> ${JSON.stringify(d.args)}</span>`;
+    $("trace").appendChild(li);
+  });
   source.addEventListener("done", (e) => {
-    renderDone(JSON.parse(e.data));
-    finish();
+    renderVerdict(JSON.parse(e.data));
+    setRowStatus(claimId, JSON.parse(e.data).final_verdict);
+    source.close(); source = null;
+    loadDashboard();
   });
-  // In-band SSE error event (pipeline failure after the stream opened).
   source.addEventListener("error", (e) => {
-    if (e.data) {
-      showBanner(JSON.parse(e.data).error);
-      finish();
-    }
-    // No e.data => native EventSource connection error; onerror handles it.
+    if (e.data) { showBanner(JSON.parse(e.data).error); source.close(); source = null; }
   });
-  // Connection-level failure (e.g. 404 before the stream opened, dropped connection).
   source.onerror = () => {
     if (source && source.readyState === EventSource.CLOSED) {
       showBanner("Connection to the investigation stream failed.");
-      finish();
     }
   };
 }
 
-scenarioSelect.addEventListener("change", syncClaimId);
-runButton.addEventListener("click", run);
-loadScenarios();
+$("run").addEventListener("click", runBatch);
+$("prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - LIMIT); loadBatch(); });
+$("next").addEventListener("click", () => { state.offset += LIMIT; loadBatch(); });
+
+(async () => { await loadDashboard(); await loadBatch(); })();
