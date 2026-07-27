@@ -13,6 +13,7 @@ import json
 import logging
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +21,9 @@ from fastapi.staticfiles import StaticFiles
 from agents.base import AgentRunnerError, ToolCallRecord
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline
 from ui import queries
+
+# Load .env so a locally-run `uvicorn ui.server:app` picks up OPENROUTER_API_KEY, matching the CLI.
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +95,8 @@ async def investigate_batch(batch_id: str, cap: int = 10):
                     tally[result.final_verdict] = tally.get(result.final_verdict, 0) + 1
                     queue.put_nowait(_sse("claim_done", _result_payload(result)))
                 queue.put_nowait(_sse("batch_done", tally))
-            except (PipelineError, AgentRunnerError) as exc:
-                logger.warning("ui_batch_failed batch_id=%s", batch_id)
+            except Exception as exc:  # surface any failure in-band instead of crashing the stream
+                logger.warning("ui_batch_failed batch_id=%s error=%s", batch_id, exc)
                 queue.put_nowait(_sse("error", {"error": str(exc)}))
             finally:
                 queue.put_nowait(None)
@@ -147,8 +151,8 @@ async def stream(claim_id: str):
                     on_reviewer_tool_call=make_hook("reviewer"),
                 )
                 queue.put_nowait(_sse("done", _result_payload(result)))
-            except (PipelineError, AgentRunnerError) as exc:
-                logger.warning("ui_stream_failed claim_id=%s", claim_id)
+            except Exception as exc:  # surface any failure in-band instead of crashing the stream
+                logger.warning("ui_stream_failed claim_id=%s error=%s", claim_id, exc)
                 queue.put_nowait(_sse("error", {"error": str(exc)}))
             finally:
                 queue.put_nowait(None)
