@@ -41,8 +41,8 @@ def _inject_receiving_note(monkeypatch):
     """Override the active scenario's receiving_record.notes with INJECTION, in memory only."""
     original = FixtureLoader.get_receiving_record
 
-    def _injected(self):
-        return original(self).model_copy(update={"notes": INJECTION})
+    def _injected(self, po_id):
+        return original(self, po_id).model_copy(update={"notes": INJECTION})
 
     monkeypatch.setattr(FixtureLoader, "get_receiving_record", _injected)
 

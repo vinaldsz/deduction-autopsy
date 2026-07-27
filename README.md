@@ -50,6 +50,7 @@ authoritative, up-to-date state). All layers are complete:
 | 25 | ETL Extract — per-source parsers (`semantic_layer/extract/`) | ✅ Done |
 | 26 | ETL Transform + Data Quality (`semantic_layer/transform.py`, `dq_report.py`) | ✅ Done |
 | 27 | ETL Load — merge-upsert + lineage + batch gate; fidelity oracle (`semantic_layer/load.py`, `etl.py`) | ✅ Done |
+| 28 | DB-backed `FixtureLoader` + document tools (scenario-less) | ✅ Done |
 
 ## Setup
 

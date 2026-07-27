@@ -9,7 +9,8 @@ from orchestrator.pipeline import OPENROUTER_BASE_URL
 from tests.agent_stubs import StubAsyncOpenAI, make_completion
 
 
-def test_defaults_match_confirmed_values():
+def test_defaults_match_confirmed_values(monkeypatch):
+    monkeypatch.delenv("DEDUCTIONS_DB", raising=False)  # conftest sets it session-wide; test the default
     settings = load_settings()
     assert settings == Settings(
         investigator_model="anthropic/claude-haiku-4.5",
