@@ -1,6 +1,55 @@
 # Progress
 
 ## Current layer
+**Layer 28 — DB-backed `FixtureLoader` + document tools (scenario-less) complete**
+
+Swaps the backing store **behind the MCP abstraction**: the tools now read the relational store
+(`data/deductions.db`) built by the ETL instead of per-scenario JSON. Agents see the exact same tool
+signatures/docstrings — only what's behind them changed. This is the payoff of "MCP is the only data
+path." **Key enabler:** the DB holds all 8 scenarios' rows under unique keys, and the tools already
+take those keys, so a by-key lookup returns byte-identical data to the old scenario-scoped lookup
+(the Layer-27 fidelity oracle guarantees DB == frozen JSON). `list_claims_for_po` even improves —
+007a/008a are sibling rows, so duplicate detection is now global. **Scope:** data-access layer + its
+tests only; no pipeline/CLI/agent/prompt changes (Layer 29). `SCENARIO_ID` is now **vestigial** (set
+by many tests as a harmless no-op; the scenario-removal sweep is Layer 29).
+
+**`mcp_server/fixtures.py`** (rewritten internals; class name `FixtureLoader` kept — the
+prompt-injection monkeypatch seam): DB-backed, global, keyed. `__init__(db_path=None)` resolves
+`DEDUCTIONS_DB` **at call time** (not the frozen `SETTINGS` singleton) so tests can redirect it; uses
+`mcp_server.db.connect` (FK-on) per call via `contextlib.closing`. Keyed methods return validated
+`mcp_server.models` instances (single → model or `None`; list → possibly empty) via `_one`/`_many`
+helpers that `SELECT` the model's `model_fields` (so `deduction_claims.batch_id` is naturally
+excluded): `get_po`, `get_invoice`, `get_receiving_record`, `get_claim`, `get_asns` (ordered by
+`asn_id`), `get_claims_for_po` (ordered by `claim_id`), `get_trade_agreement(retailer, sku,
+promo_code)` (composite WHERE). Dropped the scenario glob / `SCENARIOS_ROOT` / `SCENARIO_ID` read.
+
+**`mcp_server/tools/document_tools.py`** (rewritten; signatures/docstrings unchanged): dropped
+`_validated_loader`; each tool calls the keyed method and raises `ValueError(… not found)` on `None`
+(get_po/get_invoice/get_receiving_record/get_deduction_claim), returns the list (get_asns_for_po,
+list_claims_for_po), or returns `None` on no match (get_trade_agreement — unchanged contract).
+`mcp_server/server.py` unchanged (the `SCENARIO_ID` dependency lived only in fixtures);
+`uom_tools.py` unchanged (reads the JSON conversion table).
+
+**Tests:** `tests/conftest.py` gains a session-scoped autouse fixture that `build_db()`s once into a
+temp path and points `DEDUCTIONS_DB` at it, so every in-process tool/agent/pipeline test finds data.
+New `tests/test_fixtures_db.py` gives the DB-backed loader direct coverage (previously untested).
+`tests/test_prompt_injection.py` monkeypatch seam updated to the keyed signature
+(`_injected(self, po_id)`). `tests/test_orchestrator_config.py` defaults test now clears
+`DEDUCTIONS_DB` (conftest sets it session-wide) to assert the true default. Everything else
+(`test_document_tools`, `test_server`, `test_agents_*`, `test_orchestrator_pipeline`,
+`test_cli_run_claim`, `test_logging`) passed **unchanged** — they call tools by key and get identical
+data; the `SCENARIO_ID` setenv lines are now dead no-ops (swept in Layer 29). `test_fixtures.py`
+untouched (reads the frozen JSON directly).
+
+**Verification:** `pytest -q` — **274 passed, 10 deselected** (269 prior + 5 new); `pyright` — 0
+errors. Manual: `get_po('PO-002')` → target/SKU-002, `list_claims_for_po('PO-007')` →
+`['CLM-007a','CLM-007b']`, `get_trade_agreement` matches only on the full key — all resolved from the
+DB with no scenario. No live OpenRouter run — data-access + offline tests only. `README.md` layer
+table extended with row 28.
+
+---
+
+## Previous layer
 **Layer 27 — ETL Load (merge-upsert + lineage + batch gate; fidelity oracle) complete**
 
 The **L** of the ETL: the pipeline finally writes to SQLite. `semantic_layer/load.py` persists a
