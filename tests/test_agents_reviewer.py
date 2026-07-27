@@ -43,7 +43,6 @@ def test_prompt_treats_timeline_violation_as_independent_of_liability_scoping():
 
 
 async def test_reasoning_field_is_stripped_from_reviewer_prompt(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s07_duplicate_claim")
     stub = StubAsyncOpenAI([make_completion(content="{}")])
 
     async with Client(mcp) as mcp_client:
@@ -55,7 +54,6 @@ async def test_reasoning_field_is_stripped_from_reviewer_prompt(monkeypatch):
 
 
 async def test_case_file_is_xml_delimited(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s07_duplicate_claim")
     stub = StubAsyncOpenAI([make_completion(content="{}")])
 
     async with Client(mcp) as mcp_client:
@@ -73,7 +71,6 @@ async def test_case_file_is_xml_delimited(monkeypatch):
 
 
 async def test_model_override_is_respected(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s07_duplicate_claim")
     stub = StubAsyncOpenAI([make_completion(content="{}")])
 
     async with Client(mcp) as mcp_client:
@@ -88,7 +85,6 @@ async def test_model_override_is_respected(monkeypatch):
 
 
 async def test_spot_check_tool_call_round_trip_against_real_fixtures(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s07_duplicate_claim")
     stub = StubAsyncOpenAI(
         [
             make_completion(
@@ -113,7 +109,6 @@ async def test_spot_check_tool_call_round_trip_against_real_fixtures(monkeypatch
 
 
 async def test_on_tool_call_is_forwarded_to_the_runner(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s07_duplicate_claim")
     stub = StubAsyncOpenAI(
         [
             make_completion(

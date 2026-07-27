@@ -27,7 +27,7 @@ def _fake_result(claim_id, investigator_verdict, reviewer_verdict, final_verdict
     )
 
 
-def _all_pass_fn(*, claim_id, scenario, openai_client=None, run_id=None):
+def _all_pass_fn(*, claim_id, openai_client=None, run_id=None):
     case = next(c for c in GROUND_TRUTH if c["claim_id"] == claim_id)
     return _fake_result(claim_id, case["expected_investigator"], case["expected_reviewer"])
 
@@ -36,8 +36,8 @@ async def test_all_scenarios_pass_returns_zero_and_full_summary(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     console = Console(record=True, no_color=True, width=160)
 
-    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None, run_id=None):
-        return _all_pass_fn(claim_id=claim_id, scenario=scenario, openai_client=openai_client)
+    async def run_pipeline_fn(*, claim_id, openai_client=None, run_id=None):
+        return _all_pass_fn(claim_id=claim_id, openai_client=openai_client)
 
     exit_code = await main(openai_client=object(), console=console, run_pipeline_fn=run_pipeline_fn)
 
@@ -52,7 +52,7 @@ async def test_batch_shares_one_run_id_across_all_claims(monkeypatch):
     console = Console(record=True, no_color=True, width=160)
     seen_run_ids = []
 
-    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None, run_id=None):
+    async def run_pipeline_fn(*, claim_id, openai_client=None, run_id=None):
         seen_run_ids.append(run_id)
         case = next(c for c in GROUND_TRUTH if c["claim_id"] == claim_id)
         return _fake_result(claim_id, case["expected_investigator"], case["expected_reviewer"])
@@ -72,7 +72,7 @@ async def test_batch_run_id_defaults_to_one_shared_generated_id(monkeypatch):
     console = Console(record=True, no_color=True, width=160)
     seen_run_ids = []
 
-    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None, run_id=None):
+    async def run_pipeline_fn(*, claim_id, openai_client=None, run_id=None):
         seen_run_ids.append(run_id)
         case = next(c for c in GROUND_TRUTH if c["claim_id"] == claim_id)
         return _fake_result(claim_id, case["expected_investigator"], case["expected_reviewer"])
@@ -87,7 +87,7 @@ async def test_investigator_mismatch_fails_that_row_only(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     console = Console(record=True, no_color=True, width=160)
 
-    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None, run_id=None):
+    async def run_pipeline_fn(*, claim_id, openai_client=None, run_id=None):
         case = next(c for c in GROUND_TRUTH if c["claim_id"] == claim_id)
         if claim_id == "CLM-002":
             return _fake_result(claim_id, "VALID", case["expected_reviewer"])
@@ -104,7 +104,7 @@ async def test_pipeline_error_recorded_and_loop_continues(monkeypatch):
     console = Console(record=True, no_color=True, width=160)
     seen_claim_ids = []
 
-    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None, run_id=None):
+    async def run_pipeline_fn(*, claim_id, openai_client=None, run_id=None):
         seen_claim_ids.append(claim_id)
         if claim_id == "CLM-003":
             raise PipelineError("boom")
@@ -135,7 +135,7 @@ async def test_constructs_openai_client_with_configured_timeout(monkeypatch):
 
     monkeypatch.setattr(openai, "AsyncOpenAI", _CapturingAsyncOpenAI)
 
-    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None, run_id=None):
+    async def run_pipeline_fn(*, claim_id, openai_client=None, run_id=None):
         case = next(c for c in GROUND_TRUTH if c["claim_id"] == claim_id)
         return _fake_result(claim_id, case["expected_investigator"], case["expected_reviewer"])
 
@@ -149,7 +149,7 @@ async def test_missing_api_key_returns_one_without_calling_run_pipeline(monkeypa
     console = Console(record=True, no_color=True, width=160)
     called = False
 
-    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None, run_id=None):
+    async def run_pipeline_fn(*, claim_id, openai_client=None, run_id=None):
         nonlocal called
         called = True
 
@@ -166,7 +166,7 @@ async def test_ground_truth_check_uses_reviewer_verdict_not_final_verdict(monkey
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     console = Console(record=True, no_color=True, width=160)
 
-    async def run_pipeline_fn(*, claim_id, scenario, openai_client=None, run_id=None):
+    async def run_pipeline_fn(*, claim_id, openai_client=None, run_id=None):
         case = next(c for c in GROUND_TRUTH if c["claim_id"] == claim_id)
         # final_verdict deliberately set to something that would NOT match "CONFIRM" if the
         # comparison were (incorrectly) made against it instead of reviewer_verdict.

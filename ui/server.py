@@ -63,7 +63,7 @@ async def investigate(claim_id: str, scenario: str):
     if not _scenario_exists(scenario):
         return JSONResponse(status_code=404, content={"error": f"unknown scenario: {scenario!r}"})
     try:
-        result = await run_pipeline(claim_id=claim_id, scenario=scenario)
+        result = await run_pipeline(claim_id=claim_id)
     except (PipelineError, AgentRunnerError) as exc:
         logger.warning("ui_investigate_failed claim_id=%s scenario=%s", claim_id, scenario)
         return JSONResponse(status_code=502, content={"error": str(exc)})
@@ -104,7 +104,6 @@ async def stream(claim_id: str, scenario: str):
             try:
                 result = await run_pipeline(
                     claim_id=claim_id,
-                    scenario=scenario,
                     on_investigator_tool_call=make_hook("investigator"),
                     on_reviewer_tool_call=make_hook("reviewer"),
                 )

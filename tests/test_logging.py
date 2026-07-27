@@ -61,7 +61,6 @@ class _FakeSleep:
 
 
 async def test_pipeline_start_and_final_verdict_are_logged(monkeypatch, tmp_path, caplog):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [make_completion(content=VALID_CASE_FILE_JSON), make_completion(content=CONFIRM_JSON)]
     )
@@ -70,7 +69,6 @@ async def test_pipeline_start_and_final_verdict_are_logged(monkeypatch, tmp_path
         async with Client(mcp) as mcp_client:
             await run_pipeline(
                 claim_id="CLM-001",
-                scenario="s01_clean_shortage",
                 openai_client=stub,
                 mcp_client=mcp_client,
                 output_dir=tmp_path,
@@ -85,7 +83,6 @@ async def test_pipeline_start_and_final_verdict_are_logged(monkeypatch, tmp_path
 
 
 async def test_case_file_validation_failure_logs_warning(monkeypatch, tmp_path, caplog):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     # First investigator turn returns unparseable prose; it should recover on the retry.
     stub = StubAsyncOpenAI(
         [
@@ -99,7 +96,6 @@ async def test_case_file_validation_failure_logs_warning(monkeypatch, tmp_path, 
         async with Client(mcp) as mcp_client:
             await run_pipeline(
                 claim_id="CLM-001",
-                scenario="s01_clean_shortage",
                 openai_client=stub,
                 mcp_client=mcp_client,
                 output_dir=tmp_path,
@@ -124,7 +120,6 @@ async def test_validation_failure_log_cannot_forge_a_second_line(monkeypatch, tm
     which collapses newlines. Assert no logged record ends up spanning more than one physical
     line, so an injected newline can never forge a fake `final_verdict ...` entry.
     """
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     # Valid JSON, but missing required fields -> a multi-line pydantic ValidationError whose
     # text would splice into the log line if it were not sanitized.
     incomplete = json.dumps(
@@ -146,7 +141,6 @@ async def test_validation_failure_log_cannot_forge_a_second_line(monkeypatch, tm
         async with Client(mcp) as mcp_client:
             await run_pipeline(
                 claim_id="CLM-001",
-                scenario="s01_clean_shortage",
                 openai_client=stub,
                 mcp_client=mcp_client,
                 output_dir=tmp_path,
@@ -185,7 +179,6 @@ async def test_transport_retry_logs_warning(caplog):
 
 
 async def test_pipeline_error_logs_warning_before_raising(monkeypatch, tmp_path, caplog):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     # Every investigator turn is unparseable -> attempts exhausted -> PipelineError.
     stub = StubAsyncOpenAI([make_completion(content="nope") for _ in range(5)])
 
@@ -194,7 +187,6 @@ async def test_pipeline_error_logs_warning_before_raising(monkeypatch, tmp_path,
             with pytest.raises(PipelineError):
                 await run_pipeline(
                     claim_id="CLM-001",
-                    scenario="s01_clean_shortage",
                     openai_client=stub,
                     mcp_client=mcp_client,
                     output_dir=tmp_path,

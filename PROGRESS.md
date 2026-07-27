@@ -1,6 +1,52 @@
 # Progress
 
 ## Current layer
+**Layer 29 — Scenario-less pipeline + CLI + resolution persistence complete**
+
+Retires "scenario" from the runtime path: the pipeline is keyed by `claim_id` alone (the agent
+navigates the DB graph), and — the functional payoff — **each run writes a `claim_resolutions`
+row**, so investigated claims stop showing as unresolved in `v_batch_summary`. Last ETL/runtime
+integration layer before the Layer-30 dashboard.
+
+**`orchestrator/pipeline.py`:** `run_pipeline`/`_run_investigator_until_valid` drop `scenario`;
+`pipeline_start`/`required_tool_call_missing` logs lose the scenario field. `REQUIRED_TOOL_CALLS`
+re-keyed by `claim_id` (`CLM-002`→normalize_uom, `CLM-003`→get_asns_for_po≥2, `CLM-006`→
+get_trade_agreement, `CLM-007b`/`CLM-008`→list_claims_for_po). The MCP subprocess env now carries
+`DEDUCTIONS_DB` (resolved from env at call time, default `DEFAULT_DB_PATH`) instead of `SCENARIO_ID`
+— finishing the live-subprocess DB wiring deferred from L28. After computing the verdict it calls
+`write_claim_resolution(...)` alongside the `outputs/` artifacts.
+
+**`orchestrator/resolutions.py`** (new): `write_claim_resolution(...) -> bool` — resolves
+`DEDUCTIONS_DB` at call time, opens `mcp_server.db.connect` via `contextlib.closing` in a
+transaction, **existence-guards** (returns `False`, writes nothing, if the claim isn't in the store —
+FK defense), else `INSERT … ON CONFLICT(claim_id) DO UPDATE` (re-investigating refreshes the row,
+unlike the ETL seed's non-clobbering insert). Kept separate from `semantic_layer/load.py` (ETL
+batch-load) — this is pipeline-time persistence.
+
+**CLIs/UI:** `cli/run_claim.py` drops `--scenario`; `cli/run_all.py` drops `scenario=` from the
+`run_pipeline` call (keeps `case["scenario"]` as a display label). `ui/server.py` stops passing
+`scenario` into `run_pipeline` — the query param / `_scenario_exists` / `/api/scenarios` stay for the
+Layer-30 dashboard rewrite. `ground_truth.py` unchanged (its `scenario` field is a display label,
+still consumed by `run_all` + `test_fixtures` + `/api/scenarios`).
+
+**Test sweep:** removed the now-dead `SCENARIO_ID` setenv (~13 files) and the `scenario=` kwarg from
+every `run_pipeline` call; dropped `--scenario` from `run_claim` argv + reworked its parse-args test;
+updated the `run_all`/`ui_server` fakes to drop the `scenario` param (UI URLs keep `?scenario=` — the
+endpoint still accepts it). New coverage: `test_orchestrator_pipeline` asserts a stubbed run writes a
+`claim_resolutions` row (verdicts/run_id) and a re-run **upserts** (no duplicate); new
+`tests/test_resolutions.py` covers the upsert-refresh + the unknown-claim existence guard.
+`test_fixtures.py` untouched (reads frozen JSON directly).
+
+**Verification:** `pytest -q` — **277 passed, 10 deselected** (274 prior + 3 new); `pyright` — 0
+errors. Manual (no LLM): resolving CLM-001 via `write_claim_resolution` moved today's lot
+`claims_resolved` 0→1 and `dollars_at_risk_cents` 59440→56440 (−$30.00) in `v_batch_summary`;
+`run_claim` parses with `--claim-id` only. `README.md` updated (row 29; run_claim examples drop
+`--scenario`; DB-build prerequisite noted). No live OpenRouter run — no prompt/verdict logic changed,
+only the scenario plumbing + resolution write.
+
+---
+
+## Previous layer
 **Layer 28 — DB-backed `FixtureLoader` + document tools (scenario-less) complete**
 
 Swaps the backing store **behind the MCP abstraction**: the tools now read the relational store

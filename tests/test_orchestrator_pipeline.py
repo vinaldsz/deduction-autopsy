@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 from fastmcp import Client
@@ -81,7 +82,6 @@ def confirm_json(claim_id: str) -> str:
 
 
 async def test_happy_path_valid_confirmed_no_dispute_packet(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(content=VALID_CASE_FILE_JSON),
@@ -92,7 +92,6 @@ async def test_happy_path_valid_confirmed_no_dispute_packet(monkeypatch, tmp_pat
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -128,8 +127,6 @@ async def test_happy_path_valid_confirmed_no_dispute_packet(monkeypatch, tmp_pat
 async def test_reruns_are_archived_side_by_side_and_latest_repoints(monkeypatch, tmp_path):
     """Layer 17: two runs with distinct run_ids both persist (no clobber) and `latest` follows
     the newest run."""
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
-
     async def _run(run_id: str):
         stub = StubAsyncOpenAI(
             [
@@ -140,7 +137,6 @@ async def test_reruns_are_archived_side_by_side_and_latest_repoints(monkeypatch,
         async with Client(mcp) as mcp_client:
             return await run_pipeline(
                 claim_id="CLM-001",
-                scenario="s01_clean_shortage",
                 openai_client=stub,
                 mcp_client=mcp_client,
                 output_dir=tmp_path,
@@ -160,7 +156,6 @@ async def test_reruns_are_archived_side_by_side_and_latest_repoints(monkeypatch,
 
 async def test_run_id_defaults_to_a_generated_timestamp(monkeypatch, tmp_path):
     """Omitting run_id auto-generates one so the default path is non-overwriting too."""
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(content=VALID_CASE_FILE_JSON),
@@ -171,7 +166,6 @@ async def test_run_id_defaults_to_a_generated_timestamp(monkeypatch, tmp_path):
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -186,7 +180,6 @@ async def test_constructs_openai_client_with_configured_timeout(monkeypatch, tmp
     """Regression guard for Layer 13: when no openai_client is injected, run_pipeline must
     construct AsyncOpenAI with the SETTINGS-derived timeout, not the client library's
     unbounded default."""
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     stub = StubAsyncOpenAI(
         [
@@ -208,7 +201,6 @@ async def test_constructs_openai_client_with_configured_timeout(monkeypatch, tmp
     async with Client(mcp) as mcp_client:
         await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             mcp_client=mcp_client,
             output_dir=tmp_path,
         )
@@ -217,7 +209,6 @@ async def test_constructs_openai_client_with_configured_timeout(monkeypatch, tmp
 
 
 async def test_happy_path_invalid_confirmed_writes_dispute_packet(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s02_casepack_mismatch")
     stub = StubAsyncOpenAI(
         [
             make_completion(
@@ -237,7 +228,6 @@ async def test_happy_path_invalid_confirmed_writes_dispute_packet(monkeypatch, t
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-002",
-            scenario="s02_casepack_mismatch",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -251,7 +241,6 @@ async def test_happy_path_invalid_confirmed_writes_dispute_packet(monkeypatch, t
 
 
 async def test_missing_required_field_triggers_correction_retry(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     incomplete = json.dumps({"claim_id": "CLM-001"})  # missing po_summary/timeline/etc.
     stub = StubAsyncOpenAI(
         [
@@ -264,7 +253,6 @@ async def test_missing_required_field_triggers_correction_retry(monkeypatch, tmp
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -278,7 +266,6 @@ async def test_missing_required_field_triggers_correction_retry(monkeypatch, tmp
 
 
 async def test_verdict_json_sums_usage_across_investigator_retries(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     incomplete = json.dumps({"claim_id": "CLM-001"})  # missing po_summary/timeline/etc.
     stub = StubAsyncOpenAI(
         [
@@ -291,7 +278,6 @@ async def test_verdict_json_sums_usage_across_investigator_retries(monkeypatch, 
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -308,7 +294,6 @@ async def test_verdict_json_sums_usage_across_investigator_retries(monkeypatch, 
 
 
 async def test_missing_required_tool_call_triggers_correction_retry(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s02_casepack_mismatch")
     stub = StubAsyncOpenAI(
         [
             make_completion(content=INVALID_CASE_FILE_JSON),  # valid JSON, but no normalize_uom call
@@ -329,7 +314,6 @@ async def test_missing_required_tool_call_triggers_correction_retry(monkeypatch,
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-002",
-            scenario="s02_casepack_mismatch",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -343,7 +327,6 @@ async def test_missing_required_tool_call_triggers_correction_retry(monkeypatch,
 
 
 async def test_exceeding_max_attempts_raises_pipeline_error(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(content="not json"),
@@ -355,7 +338,6 @@ async def test_exceeding_max_attempts_raises_pipeline_error(monkeypatch, tmp_pat
         with pytest.raises(PipelineError):
             await run_pipeline(
                 claim_id="CLM-001",
-                scenario="s01_clean_shortage",
                 openai_client=stub,
                 mcp_client=mcp_client,
                 output_dir=tmp_path,
@@ -364,7 +346,6 @@ async def test_exceeding_max_attempts_raises_pipeline_error(monkeypatch, tmp_pat
 
 
 async def test_reviewer_receives_case_file_without_reasoning(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(content=VALID_CASE_FILE_JSON),
@@ -386,7 +367,6 @@ async def test_reviewer_receives_case_file_without_reasoning(monkeypatch, tmp_pa
     async with Client(mcp) as mcp_client:
         await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -406,7 +386,6 @@ def test_strip_reasoning_drops_only_the_reasoning_field():
 
 
 async def test_tool_call_hooks_fire_only_for_their_own_agent(monkeypatch, tmp_path):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(
@@ -426,7 +405,6 @@ async def test_tool_call_hooks_fire_only_for_their_own_agent(monkeypatch, tmp_pa
     async with Client(mcp) as mcp_client:
         await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -479,7 +457,6 @@ async def test_happy_path_survives_prose_before_fenced_json(monkeypatch, tmp_pat
     """Regression test: a live OpenRouter run against s02 showed the Investigator reasoning in
     prose before emitting the CaseFile inside a ```json fence — _extract_json must not require
     the fence to be the very first characters of the response."""
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     prose_wrapped_case_file = (
         "Let me walk through the five-step protocol.\n\n"
         "Step 1: documents collected. Step 5: no prior claims.\n\n"
@@ -495,7 +472,6 @@ async def test_happy_path_survives_prose_before_fenced_json(monkeypatch, tmp_pat
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -503,3 +479,39 @@ async def test_happy_path_survives_prose_before_fenced_json(monkeypatch, tmp_pat
 
     assert result.investigator_verdict == "VALID"
     assert result.final_verdict == "VALID"
+
+
+async def test_run_writes_claim_resolution_and_reruns_upsert(monkeypatch, tmp_path):
+    """Layer 29: the pipeline persists its verdict to claim_resolutions, and a re-run upserts
+    (updates the same row) rather than duplicating."""
+    from mcp_server.db import connect
+
+    def _run_once():
+        stub = StubAsyncOpenAI(
+            [make_completion(content=VALID_CASE_FILE_JSON), make_completion(content=confirm_json("CLM-001"))]
+        )
+
+        async def _go():
+            async with Client(mcp) as mcp_client:
+                return await run_pipeline(
+                    claim_id="CLM-001", openai_client=stub, mcp_client=mcp_client, output_dir=tmp_path
+                )
+
+        return _go()
+
+    result = await _run_once()
+
+    db_path = os.environ["DEDUCTIONS_DB"]  # conftest points this at the session DB
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT investigator_verdict, final_verdict, confidence, run_id FROM claim_resolutions "
+            "WHERE claim_id = ?", ("CLM-001",)
+        ).fetchone()
+    assert row == ("VALID", "VALID", result.confidence, result.run_id)
+
+    await _run_once()  # re-run
+    with connect(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM claim_resolutions WHERE claim_id = ?", ("CLM-001",)
+        ).fetchone()[0]
+    assert count == 1  # upsert, not a duplicate

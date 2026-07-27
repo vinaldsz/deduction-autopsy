@@ -41,7 +41,6 @@ async def test_text_only_response_no_tools():
 
 
 async def test_single_tool_call_round_trip(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(tool_calls=[{"id": "call_1", "name": "get_po", "args": {"po_id": "PO-001"}}]),
@@ -77,7 +76,6 @@ async def test_single_tool_call_round_trip(monkeypatch):
 
 
 async def test_parallel_tool_calls_in_one_turn(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(
@@ -105,7 +103,6 @@ async def test_parallel_tool_calls_in_one_turn(monkeypatch):
 
 
 async def test_tool_error_surfaces_without_crashing(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s02_casepack_mismatch")
     stub = StubAsyncOpenAI(
         [
             make_completion(
@@ -161,7 +158,6 @@ async def test_malformed_tool_call_json_handled():
 
 
 async def test_max_iterations_raises(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     always_calls_tool = [
         make_completion(tool_calls=[{"id": f"call_{i}", "name": "get_po", "args": {"po_id": "PO-001"}}])
         for i in range(20)
@@ -183,7 +179,6 @@ async def test_max_iterations_raises(monkeypatch):
 
 
 async def test_on_tool_call_hook_invoked_once_per_call_in_order(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(
@@ -342,7 +337,6 @@ async def test_usage_accumulated_from_single_completion():
 
 
 async def test_usage_summed_across_tool_call_turns(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     stub = StubAsyncOpenAI(
         [
             make_completion(

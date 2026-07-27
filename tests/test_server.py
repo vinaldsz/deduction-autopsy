@@ -23,8 +23,6 @@ async def test_lists_all_eight_tools():
 
 
 async def test_get_po_via_mcp(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
-
     async with Client(mcp) as client:
         result = await client.call_tool("get_po", {"po_id": "PO-001"})
 
@@ -33,8 +31,6 @@ async def test_get_po_via_mcp(monkeypatch):
 
 
 async def test_normalize_uom_via_mcp(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s02_casepack_mismatch")
-
     async with Client(mcp) as client:
         result = await client.call_tool(
             "normalize_uom",
@@ -45,8 +41,6 @@ async def test_normalize_uom_via_mcp(monkeypatch):
 
 
 async def test_get_trade_agreement_returns_none_via_mcp(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s06_promo_billback")
-
     async with Client(mcp) as client:
         result = await client.call_tool(
             "get_trade_agreement",
@@ -57,8 +51,6 @@ async def test_get_trade_agreement_returns_none_via_mcp(monkeypatch):
 
 
 async def test_unknown_po_id_raises_via_mcp(monkeypatch):
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
-
     async with Client(mcp) as client:
         with pytest.raises(ToolError):
             await client.call_tool("get_po", {"po_id": "PO-999"})

@@ -51,6 +51,7 @@ authoritative, up-to-date state). All layers are complete:
 | 26 | ETL Transform + Data Quality (`semantic_layer/transform.py`, `dq_report.py`) | ✅ Done |
 | 27 | ETL Load — merge-upsert + lineage + batch gate; fidelity oracle (`semantic_layer/load.py`, `etl.py`) | ✅ Done |
 | 28 | DB-backed `FixtureLoader` + document tools (scenario-less) | ✅ Done |
+| 29 | Scenario-less pipeline + CLI + resolution persistence | ✅ Done |
 
 ## Setup
 
@@ -65,10 +66,17 @@ unit tests don't need it.
 
 ## Running the CLI
 
-Investigate a single claim end-to-end:
+First build the relational store the tools read (idempotent; writes `data/deductions.db`):
 
 ```bash
-python -m cli.run_claim --claim-id CLM-002 --scenario s02_casepack_mismatch
+python -m semantic_layer.etl
+```
+
+Investigate a single claim end-to-end (the agent navigates the entity graph from the claim id —
+no scenario):
+
+```bash
+python -m cli.run_claim --claim-id CLM-002
 ```
 
 Add `--explain` to watch the two-agent split live — each agent's tool calls as they happen,
@@ -76,7 +84,7 @@ the stripped CaseFile handed from the Investigator to the Reviewer, and the Revi
 per-check findings (with which ones triggered a re-fetch):
 
 ```bash
-python -m cli.run_claim --claim-id CLM-002 --scenario s02_casepack_mismatch --explain
+python -m cli.run_claim --claim-id CLM-002 --explain
 ```
 
 Run all 8 scenarios and print a pass/fail table against ground truth:

@@ -30,7 +30,6 @@ _FINDING_STYLE = {"PASS": "green", "FAIL": "red", "N/A": "dim"}
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run one deduction claim end-to-end.")
     parser.add_argument("--claim-id", required=True)
-    parser.add_argument("--scenario", required=True)
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument(
         "--run-id",
@@ -91,7 +90,6 @@ async def main(
     try:
         result = await run_pipeline(
             claim_id=args.claim_id,
-            scenario=args.scenario,
             openai_client=openai_client,
             mcp_client=mcp_client,
             output_dir=args.output_dir,

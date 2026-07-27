@@ -40,7 +40,7 @@ def _fake_result(claim_id="CLM-002"):
 
 
 def test_investigate_returns_result_shape(monkeypatch):
-    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+    async def fake_pipeline(*, claim_id, **kwargs):
         return _fake_result(claim_id)
 
     monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
@@ -66,7 +66,7 @@ def test_investigate_returns_result_shape(monkeypatch):
 def test_investigate_unknown_scenario_is_404(monkeypatch):
     called = False
 
-    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+    async def fake_pipeline(*, claim_id, **kwargs):
         nonlocal called
         called = True
         return _fake_result(claim_id)
@@ -82,7 +82,7 @@ def test_investigate_unknown_scenario_is_404(monkeypatch):
 
 @pytest.mark.parametrize("exc", [PipelineError("boom"), AgentRunnerError("upstream 500")])
 def test_investigate_pipeline_failure_is_502(monkeypatch, exc):
-    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+    async def fake_pipeline(*, claim_id, **kwargs):
         raise exc
 
     monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
@@ -109,7 +109,7 @@ def _sse_events(text):
 
 def test_stream_emits_tool_calls_then_done(monkeypatch):
     async def fake_pipeline(
-        *, claim_id, scenario, on_investigator_tool_call=None, on_reviewer_tool_call=None, **kwargs
+        *, claim_id, on_investigator_tool_call=None, on_reviewer_tool_call=None, **kwargs
     ):
         on_investigator_tool_call(ToolCallRecord(name="get_po", args={"po_id": "PO-002"}, result="{}"))
         on_reviewer_tool_call(ToolCallRecord(name="normalize_uom", args={}, result="{}"))
@@ -138,7 +138,7 @@ def test_stream_emits_tool_calls_then_done(monkeypatch):
 
 
 def test_stream_unknown_scenario_is_404(monkeypatch):
-    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+    async def fake_pipeline(*, claim_id, **kwargs):
         return _fake_result(claim_id)
 
     monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
@@ -150,7 +150,7 @@ def test_stream_unknown_scenario_is_404(monkeypatch):
 
 
 def test_stream_pipeline_failure_emits_error_event(monkeypatch):
-    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+    async def fake_pipeline(*, claim_id, **kwargs):
         raise PipelineError("boom")
 
     monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
@@ -195,7 +195,7 @@ def test_static_mount_does_not_shadow_api_routes(monkeypatch):
     assert scenarios_resp.headers["content-type"].startswith("application/json")
     assert "scenarios" in scenarios_resp.json()
 
-    async def fake_pipeline(*, claim_id, scenario, **kwargs):
+    async def fake_pipeline(*, claim_id, **kwargs):
         return _fake_result(claim_id)
 
     monkeypatch.setattr(server, "run_pipeline", fake_pipeline)

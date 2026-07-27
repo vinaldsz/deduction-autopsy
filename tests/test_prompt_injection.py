@@ -57,7 +57,6 @@ async def test_offline_injected_note_is_carried_as_data_and_pipeline_stays_valid
     Honest limit: the model responses are scripted, so this proves the framing/plumbing, not
     that a real model resists the injection. That is the live test's job.
     """
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     _inject_receiving_note(monkeypatch)
 
     stub = StubAsyncOpenAI(
@@ -77,7 +76,6 @@ async def test_offline_injected_note_is_carried_as_data_and_pipeline_stays_valid
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             openai_client=stub,
             mcp_client=mcp_client,
             output_dir=tmp_path,
@@ -101,14 +99,12 @@ async def test_live_injection_in_notes_does_not_flip_verdict(monkeypatch, tmp_pa
     injected note and assert the verdict is unaffected. Requires OPENROUTER_API_KEY (loaded by
     conftest); excluded from the default suite by the `integration` marker.
     """
-    monkeypatch.setenv("SCENARIO_ID", "s01_clean_shortage")
     _inject_receiving_note(monkeypatch)
 
     # Real OpenAI (openai_client=None) + in-process MCP so the monkeypatched note is used.
     async with Client(mcp) as mcp_client:
         result = await run_pipeline(
             claim_id="CLM-001",
-            scenario="s01_clean_shortage",
             mcp_client=mcp_client,
             output_dir=tmp_path,
         )
