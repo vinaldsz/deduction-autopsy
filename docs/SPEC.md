@@ -600,14 +600,18 @@ claims (CLM-007a, CLM-008a) are pre-seeded into `claim_resolutions` as resolved 
 complete, one **"Run investigation"** action bulk-runs the pipeline over its unresolved claims into a
 worklist the analyst eyeballs (ESCALATE = human attention).
 
-### UI API Contract v2 (planned, Layer 30)
+### UI API Contract v2 (implemented, Layer 30b)
 
-- `GET /api/dashboard` → `{unresolved_count, resolved_this_month, dollars_at_risk,
-  priority_breakdown, batch: {batch_id, status}}`.
-- `GET /api/batches/{batch_id}` → the lot's claims, each with the `DeductionClaim` fields + derived
-  `priority` (from amount + aging) + `status`/verdict if resolved.
-- `POST /api/batches/{batch_id}/investigate` (SSE) → bulk-run over unresolved claims: per-claim
-  `tool_call` and `claim_done` events, ending with a `batch_done` summary.
-- `GET /api/claims/{claim_id}/stream` (SSE) kept for single-claim drill-in/re-run — **`scenario`
-  query param removed.** `POST /api/claims/{claim_id}/investigate` likewise loses `scenario`.
-- `GET /api/scenarios` is **removed**. 404 now means unknown claim/batch (checked against the DB).
+- `GET /api/dashboard` → `{unresolved_count, resolved_this_month, dollars_at_risk_cents,
+  priority_breakdown, batch: {batch_id, status}}` (money as INTEGER cents, per the store's convention).
+- `GET /api/batches/{batch_id}?offset=&limit=` (default limit 25) → a paginated page of the lot's
+  claims (`{batch_id, total, offset, limit, claims}`), each with the `DeductionClaim` fields + derived
+  `priority` (HIGH ≥ $150 or aged > 45d / MEDIUM ≥ $50 / LOW) + `status` (`final_verdict` if resolved,
+  else `unresolved`).
+- `POST /api/batches/{batch_id}/investigate?cap=10` (SSE) → bulk-run over the batch's unresolved
+  claims, capped: per-claim `tool_call` (tagged `claim_id`+`agent`) and `claim_done` events, ending
+  with a `batch_done` summary tally.
+- `GET /api/claims/{claim_id}/stream` (SSE) + `POST /api/claims/{claim_id}/investigate` kept for
+  single-claim drill-in/re-run — no `scenario` param.
+- `GET /api/scenarios` **removed**. 404 now means an unknown claim/batch (checked against the DB).
+- Reads are served by `ui/queries.py` (over `v_batch_summary` + `deduction_claims`/`claim_resolutions`).

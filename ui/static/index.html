@@ -14,46 +14,48 @@
       margin: 0; background: var(--bg); color: var(--text);
       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    main { max-width: 820px; margin: 0 auto; padding: 32px 20px 64px; }
+    main { max-width: 960px; margin: 0 auto; padding: 32px 20px 64px; }
     h1 { font-size: 22px; margin: 0 0 4px; }
     .sub { color: var(--muted); margin: 0 0 24px; }
-    .controls {
-      display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
-      background: var(--panel); border: 1px solid var(--border);
-      border-radius: 10px; padding: 16px; margin-bottom: 24px;
-    }
-    .field { display: flex; flex-direction: column; gap: 4px; }
-    .field label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-    select, input, button {
-      font: inherit; background: #0f1115; color: var(--text);
-      border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
-    }
-    input[readonly] { color: var(--muted); }
-    button {
-      background: var(--accent); color: #06122b; border: none; font-weight: 600;
-      cursor: pointer; padding: 9px 18px;
-    }
-    button:disabled { opacity: .5; cursor: default; }
     section { margin-bottom: 24px; }
     section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
-    #trace { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-    #trace li {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-      padding: 8px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    .cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px; min-width: 140px; display: flex; flex-direction: column; gap: 4px;
     }
+    .card .k { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    .card .v { font-size: 20px; font-weight: 700; }
+    button {
+      font: inherit; background: var(--accent); color: #06122b; border: none; border-radius: 8px;
+      font-weight: 600; cursor: pointer; padding: 9px 18px;
+    }
+    button:disabled { opacity: .5; cursor: default; }
+    button.ghost { background: #0f1115; color: var(--text); border: 1px solid var(--border); }
+    .muted { color: var(--muted); font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+    th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #1e222b; }
+    td.num { font-variant-numeric: tabular-nums; }
+    .pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+    .p-HIGH { color: var(--bad); border: 1px solid var(--bad); }
+    .p-MEDIUM { color: var(--warn); border: 1px solid var(--warn); }
+    .p-LOW { color: var(--muted); border: 1px solid var(--border); }
+    .st-VALID { color: var(--ok); }
+    .st-INVALID { color: var(--bad); }
+    .st-ESCALATE { color: var(--warn); font-weight: 700; }
+    .st-unresolved { color: var(--muted); }
+    .pager { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+    #trace { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    #trace li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
     #trace li.error { border-color: var(--bad); }
-    .agent-tag {
-      display: inline-block; min-width: 92px; font-weight: 600; text-transform: uppercase;
-      font-size: 11px; letter-spacing: .04em;
-    }
+    .agent-tag { display: inline-block; min-width: 92px; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
     .agent-investigator { color: var(--accent); }
     .agent-reviewer { color: var(--warn); }
-    .tool-name { color: var(--text); }
     .tool-args { color: var(--muted); }
-    .empty { color: var(--muted); font-style: italic; }
-    #verdict-card {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px;
-    }
+    #verdict-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
     .verdict-row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
     .verdict-row .cell { display: flex; flex-direction: column; }
     .verdict-row .cell .k { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .04em; }
@@ -61,52 +63,55 @@
     .v.VALID, .v.CONFIRM { color: var(--ok); }
     .v.INVALID, .v.OVERTURN { color: var(--bad); }
     .v.ESCALATE { color: var(--warn); }
-    #dispute h3 { font-size: 13px; margin: 16px 0 8px; }
-    #dispute ul { margin: 0; padding-left: 20px; }
-    #dispute li { margin-bottom: 4px; }
-    .usage { color: var(--muted); font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
+    #dispute ul { margin: 8px 0 0; padding-left: 20px; }
+    .usage { color: var(--muted); font-size: 13px; font-family: ui-monospace, Menlo, monospace; margin-top: 8px; }
     .hidden { display: none; }
-    #banner { border: 1px solid var(--bad); color: var(--bad); border-radius: 8px; padding: 12px 16px; }
+    #banner { border: 1px solid var(--bad); color: var(--bad); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
   </style>
 </head>
 <body>
   <main>
     <h1>Deduction Autopsy</h1>
-    <p class="sub">Two-agent CPG deduction reconciliation — Investigator proposes, Reviewer independently spot-checks.</p>
+    <p class="sub">Daily-lot deduction worklist — Investigator proposes, Reviewer independently spot-checks.</p>
 
-    <div class="controls">
-      <div class="field">
-        <label for="scenario">Scenario</label>
-        <select id="scenario"></select>
-      </div>
-      <div class="field">
-        <label for="claim-id">Claim ID</label>
-        <input id="claim-id" readonly />
+    <section id="dashboard">
+      <div class="cards">
+        <div class="card"><span class="k">Unresolved</span><span class="v" id="m-unresolved">–</span></div>
+        <div class="card"><span class="k">Resolved this month</span><span class="v" id="m-resolved">–</span></div>
+        <div class="card"><span class="k">$ at risk</span><span class="v" id="m-risk">–</span></div>
+        <div class="card"><span class="k">Priority (H/M/L)</span><span class="v" id="m-priority">–</span></div>
+        <div class="card"><span class="k">Lot</span><span class="v" id="m-batch">–</span></div>
       </div>
       <button id="run">Run investigation</button>
-    </div>
+      <span id="run-status" class="muted"></span>
+    </section>
 
     <div id="banner" class="hidden"></div>
 
     <section>
-      <h2>Live tool-call trace</h2>
-      <ol id="trace"></ol>
-      <p id="trace-empty" class="empty">Pick a scenario and run an investigation to see the agents' tool calls stream in.</p>
+      <h2>Worklist</h2>
+      <table id="worklist">
+        <thead><tr><th>Claim</th><th>Retailer</th><th>Reason</th><th>Amount</th><th>Priority</th><th>Status</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="pager">
+        <button class="ghost" id="prev">Prev</button>
+        <span id="page-info" class="muted"></span>
+        <button class="ghost" id="next">Next</button>
+      </div>
     </section>
 
-    <section id="verdict" class="hidden">
-      <h2>Verdict</h2>
-      <div id="verdict-card">
+    <section id="drill" class="hidden">
+      <h2>Claim <span id="drill-claim"></span> — live trace &amp; verdict</h2>
+      <ol id="trace"></ol>
+      <div id="verdict-card" class="hidden">
         <div class="verdict-row">
           <div class="cell"><span class="k">Investigator</span><span class="v" id="v-investigator"></span></div>
           <div class="cell"><span class="k">Reviewer</span><span class="v" id="v-reviewer"></span></div>
           <div class="cell"><span class="k">Final</span><span class="v" id="v-final"></span></div>
           <div class="cell"><span class="k">Confidence</span><span class="v" id="v-confidence"></span></div>
         </div>
-        <div id="dispute" class="hidden">
-          <h3>Dispute grounds</h3>
-          <ul id="dispute-list"></ul>
-        </div>
+        <div id="dispute" class="hidden"><strong>Dispute grounds</strong><ul id="dispute-list"></ul></div>
         <div class="usage" id="usage"></div>
       </div>
     </section>

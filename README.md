@@ -53,6 +53,7 @@ authoritative, up-to-date state). All layers are complete:
 | 28 | DB-backed `FixtureLoader` + document tools (scenario-less) | ✅ Done |
 | 29 | Scenario-less pipeline + CLI + resolution persistence | ✅ Done |
 | 30a | Synthetic daily lot (~50 claims) — `CLM-SYN` volume for the worklist | ✅ Done |
+| 30b | Dashboard + daily-lot worklist UI (`ui/queries.py`, removes `/api/scenarios`) | ✅ Done |
 
 ## Setup
 
@@ -112,31 +113,27 @@ The UI is an additive second entry point onto the same pipeline (the CLI is kept
 uvicorn ui.server:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000/ for the minimal browser UI: pick a scenario from the dropdown
-(the claim ID auto-fills), hit **Run investigation**, and watch each agent's tool calls stream
-in live, followed by a verdict card (and, on an `INVALID` final verdict, the Reviewer's dispute
-grounds). It's a dependency-free static client (`ui/static/`, no build step) over the same SSE
-endpoint below.
+Build the DB first (`python -m semantic_layer.etl`), then open http://127.0.0.1:8000/ for the
+**daily-lot dashboard + worklist**: headline metrics (unresolved, resolved-this-month, $ at risk,
+priority breakdown, active lot), a paginated worklist of the lot's claims (with derived priority and
+resolution status), one **Run investigation** button that bulk-runs the pipeline over the unresolved
+claims (filling rows live, ESCALATE flagged), and click any row to drill into that claim's live
+tool-call trace + verdict card. Dependency-free static client (`ui/static/`, no build step).
 
-`GET /api/scenarios` lists the eight scenarios and their claim IDs (the dropdown's data source).
+API (data comes from the relational store — there is no "scenario"):
 
-`POST /api/claims/{claim_id}/investigate?scenario=<id>` runs the pipeline and returns the
-verdict JSON (same fields as `verdict.json`, plus `dispute_grounds`):
-
-```bash
-curl -X POST "http://127.0.0.1:8000/api/claims/CLM-002/investigate?scenario=s02_casepack_mismatch"
-```
-
-An unknown `scenario` returns 404; an upstream (OpenRouter/agent) failure returns 502
-`{"error": ...}`.
-
-`GET /api/claims/{claim_id}/stream?scenario=<id>` runs the same pipeline as a Server-Sent
-Events stream — one `tool_call` event per tool call (tagged with the `agent` that made it) in
-call order, then a final `done` event carrying the same body as `/investigate` (or a single
-`error` event if the pipeline fails):
+- `GET /api/dashboard` → `{unresolved_count, resolved_this_month, dollars_at_risk_cents,
+  priority_breakdown, batch}`.
+- `GET /api/batches/{batch_id}?offset=&limit=` → a page of the lot's claims (each with `priority` +
+  `status`); 404 for an unknown batch.
+- `POST /api/batches/{batch_id}/investigate?cap=10` (SSE) → bulk-run over unresolved claims:
+  per-claim `tool_call` + `claim_done`, then a `batch_done` summary.
+- `GET /api/claims/{claim_id}/stream` (SSE) / `POST /api/claims/{claim_id}/investigate` → single-claim
+  drill-in / run; 404 for an unknown claim, 502 on an upstream agent failure.
 
 ```bash
-curl -N "http://127.0.0.1:8000/api/claims/CLM-002/stream?scenario=s02_casepack_mismatch"
+curl -s http://127.0.0.1:8000/api/dashboard
+curl -sN -X POST "http://127.0.0.1:8000/api/batches/LOT-2024-09-15/investigate?cap=2"
 ```
 
 ## Running tests
