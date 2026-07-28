@@ -22,21 +22,41 @@ def write_claim_disposition(
     note: str | None = None,
     db_path: str | Path | None = None,
 ) -> bool:
-    """Upsert the analyst's disposition for `claim_id`. Returns False (writing nothing) if the
-    claim isn't in the store — defense-in-depth against a FK violation."""
+    """Upsert the analyst's disposition for `claim_id`, snapshotting the verdict they signed off on.
+
+    Returns False (writing nothing) if the claim isn't in the store — defense-in-depth against a FK
+    violation — or if this is an `accept` with no agent verdict to accept.
+    """
     path = str(db_path or os.environ.get("DEDUCTIONS_DB", str(DEFAULT_DB_PATH)))
     with closing(connect(path)) as conn, conn:
         if conn.execute(
             "SELECT 1 FROM deduction_claims WHERE claim_id = ?", (claim_id,)
         ).fetchone() is None:
             return False
+        resolution = conn.execute(
+            "SELECT final_verdict, run_id FROM claim_resolutions WHERE claim_id = ?", (claim_id,)
+        ).fetchone()
+        # Asymmetric on purpose: accepting a verdict that doesn't exist is meaningless, but
+        # *overriding* without one is legitimate — claim_documents() serves the source documents
+        # regardless of any agent run, so an analyst can rule on evidence the agents never saw.
+        if disposition == "accept" and resolution is None:
+            return False
+        agent_verdict, run_id = resolution if resolution else (None, None)
+        # The snapshot. Storing the agent's verdict rather than pointing at it is the whole change:
+        # a later re-investigation must not retroactively rewrite what the human approved.
+        decided_verdict = (
+            override_verdict if disposition == "override"
+            else "ESCALATE" if disposition == "escalate"
+            else agent_verdict
+        )
         conn.execute(
             "INSERT INTO claim_dispositions "
-            "(claim_id, disposition, override_verdict, note, decided_at) "
-            "VALUES (?, ?, ?, ?, ?) "
+            "(claim_id, disposition, override_verdict, note, decided_at, decided_verdict, "
+            "decided_run_id) VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(claim_id) DO UPDATE SET "
             "disposition = excluded.disposition, override_verdict = excluded.override_verdict, "
-            "note = excluded.note, decided_at = excluded.decided_at",
-            (claim_id, disposition, override_verdict, note, decided_at),
+            "note = excluded.note, decided_at = excluded.decided_at, "
+            "decided_verdict = excluded.decided_verdict, decided_run_id = excluded.decided_run_id",
+            (claim_id, disposition, override_verdict, note, decided_at, decided_verdict, run_id),
         )
     return True

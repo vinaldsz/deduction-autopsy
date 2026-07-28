@@ -573,8 +573,14 @@ Layer 34 is the only schema gate.
   VALID; note becomes required for override; a stale-decision badge; a confirm before re-investigating
   a decided claim.
 - **Verify:** `pytest -q` plus an explicit `pytest tests/test_etl.py -v` (the fidelity oracle covers
-  only the six business tables, so it should be untouched — confirm, don't assume) and a uvicorn run
-  against the **existing** `data/deductions.db` to prove the shim self-heals.
+  only the six business tables, so it should be untouched — confirm, don't assume), then the upgrade
+  path against the **existing** `data/deductions.db`.
+- **Upgrade path, corrected during the build:** the UI does *not* self-heal on boot — `ui/server.py`
+  never calls `init_db`, so an un-upgraded DB fails every worklist query with
+  `no such column: d.decided_verdict` (confirmed). The migration entry point is
+  `python -m semantic_layer.etl`, which calls `init_db` → the shim and **upserts** rather than
+  recreating, so all `claim_resolutions` and `claim_dispositions` rows survive. Still far better than
+  `rm data/deductions.db`, which would discard real decisions and LLM spend.
 
 ### 35. KPIs that add up
 

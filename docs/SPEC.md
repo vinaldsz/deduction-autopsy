@@ -472,12 +472,13 @@ navigation, not analytics). 11 tables + 1 view. DB = union of all entities dedup
 | `trade_agreements` | `agreement_id` | — | retailer, sku, promo_code, discount_terms, valid_from, valid_to, signed_by — standalone; queried by (retailer, sku, promo_code) |
 | `deduction_claims` | `claim_id` | `po_id`→purchase_orders, `batch_id`→batches | retailer, claimed_reason, claimed_amount INT, claim_date, retailer_notes |
 
-**Operational / metadata tables (5):**
+**Operational / metadata tables (6):**
 
 | Table | PK | FKs | Columns |
 |---|---|---|---|
 | `batches` | `batch_id` (TEXT) | — | load_date, status, created_at |
 | `claim_resolutions` | `claim_id` | `claim_id`→deduction_claims | investigator_verdict, final_verdict, confidence, resolved_at, run_id — seeded for 007a/008a, else written by the pipeline (Layer 29) |
+| `claim_dispositions` | `claim_id` | `claim_id`→deduction_claims | disposition (`accept`/`override`/`escalate`), override_verdict, note, decided_at, **decided_verdict**, **decided_run_id** — the *human's* call, deliberately separate from `claim_resolutions` so re-investigating never clobbers it (Layer 32; last two columns added Layer 34) |
 | `reject_rows` | `id` (INTEGER) | `batch_id`→batches | source, raw_row, reason, rejected_at — quarantine/dead-letter |
 | `load_audit` | `id` (INTEGER) | `batch_id`→batches | source, rows_read INT, rows_loaded INT, rows_rejected INT, loaded_at |
 | `lineage` | `id` (INTEGER) | `batch_id`→batches | entity_table, entity_pk, source_file, source_row_ref, loaded_at |
@@ -489,6 +490,28 @@ navigation, not analytics). 11 tables + 1 view. DB = union of all entities dedup
   `deduction_claims` LEFT JOIN `claim_resolutions`, `GROUP BY batch_id`. Feeds the Layer 30
   `/api/dashboard` and the `run_all` CLI summary — dashboard/CLI read aggregates from it rather than
   re-deriving in Python.
+  > **Amended Layer 34 / scheduled for removal in Layer 35.** The claim above is no longer true:
+  > `ui/queries.py` derives every KPI itself and does not read this view. Because the view joins only
+  > `claim_resolutions`, its `needs_human_review` cannot respond to an analyst's decision — it is
+  > wrong by construction, and unread. Layer 35 drops it.
+
+**Amendment — Layer 34 (2026-07-28), to the "FINAL (Layer 23)" schema above.** `claim_dispositions`
+gains `decided_verdict` and `decided_run_id`. `decided_verdict` is the verdict the analyst actually
+signed off on, captured at decision time — for `accept` it is a **snapshot** of the agents' verdict,
+not a pointer to it. Before this, the effective verdict resolved `accept` by falling through to
+`claim_resolutions.final_verdict`, so re-investigating a decided claim silently changed what a human
+was recorded as having approved. `decided_run_id` binds the decision to the run it approved, which is
+what makes a later divergence detectable (surfaced as a stale-decision badge; it never changes the
+effective verdict).
+
+Because the DDL is all `CREATE ... IF NOT EXISTS` and there is no migration framework,
+`mcp_server/db.py::_add_snapshot_columns` (called from `init_db`) `ALTER`s an existing DB and
+backfills `decided_verdict` from `override_verdict` for existing overrides. Pre-existing `accept`
+rows were never a snapshot and are deliberately left NULL, degrading to the old behaviour rather
+than asserting a sign-off that didn't happen. **Upgrade an existing `data/deductions.db` by running
+`python -m semantic_layer.etl`** — it calls `init_db` and upserts, so all resolutions and
+dispositions survive. The UI does *not* self-heal on boot; an un-upgraded DB fails every worklist
+query with `no such column: d.decided_verdict`.
 
 **CHECK constraints** (mirror the `models.py` `UOM` / `ClaimReason` Literals): all `*_uom` columns
 IN `('EACH','CASE','PALLET')`; `claimed_reason` IN `('shortage','promo_billback','compliance',
@@ -614,4 +637,31 @@ worklist the analyst eyeballs (ESCALATE = human attention).
 - `GET /api/claims/{claim_id}/stream` (SSE) + `POST /api/claims/{claim_id}/investigate` kept for
   single-claim drill-in/re-run — no `scenario` param.
 - `GET /api/scenarios` **removed**. 404 now means an unknown claim/batch (checked against the DB).
-- Reads are served by `ui/queries.py` (over `v_batch_summary` + `deduction_claims`/`claim_resolutions`).
+- Reads are served by `ui/queries.py` (over `deduction_claims`/`claim_resolutions`/`claim_dispositions`
+  — **not** `v_batch_summary`; see the amendment on that view above).
+
+### UI API Contract — Layer 32 additions
+
+- `GET /api/claims/{claim_id}/documents` → the source-document graph straight from the DB (claim, PO,
+  ASNs, invoices, receiving records, matching trade agreements, prior claims on the same PO).
+  Available regardless of any agent run. `retailer_notes` and receiving `notes` are free text and
+  **must** be rendered as data, not HTML.
+- `GET /api/claims/{claim_id}/casefile` → the full `CaseFile` + `ReviewerOutput` of the latest run,
+  from `outputs/<claim_id>/latest/case_file.json`. 404 = not yet investigated.
+- `GET /api/claims/{claim_id}/dispute-packet` → the Markdown packet (attachment download). Written
+  only for `INVALID`, so 404 is ambiguous between "not investigated" and "verdict wasn't INVALID".
+- `POST /api/claims/{claim_id}/disposition` → body `{disposition, override_verdict?, note?}`.
+- `GET /api/batches/{batch_id}` additionally accepts `status_filter`, `sort` and `q`.
+- `POST /api/batches/{batch_id}/investigate` processes the whole lot by default (`cap` optional).
+
+### UI API Contract — Layer 34 amendments (decision integrity)
+
+- `POST /api/claims/{claim_id}/disposition`: the request body still carries `override_verdict` (the
+  client's *intent*); the response now reports `decided_verdict`, the verdict actually stored.
+  New rejections — **409** for `accept` when the claim has no agent verdict to accept (distinct from
+  404 = unknown claim), **422** for an `override` with no explicit verdict, with a blank/absent note,
+  or with a verdict equal to the agents' current one (accept it instead).
+- `GET /api/batches/{batch_id}` claims additionally carry `decided_verdict`, `note`, `decided_at`
+  (all three were already stored and never returned) and `decision_stale` — true when the agents have
+  re-run since the decision was recorded. Staleness is reported, never applied: the human's recorded
+  call remains the claim's effective verdict until they revisit it.

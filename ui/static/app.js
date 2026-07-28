@@ -4,7 +4,10 @@
 import { dollars, dollarsCompact } from "./lib.js";
 
 const LIMIT = 25;
-const state = { batchId: null, offset: 0, total: 0, filter: "needs_me", sort: "priority", q: "", selected: null };
+const state = {
+  batchId: null, offset: 0, total: 0, filter: "needs_me", sort: "priority", q: "",
+  selected: null, selectedClaim: null,
+};
 
 const $ = (id) => document.getElementById(id);
 const banner = $("banner");
@@ -279,7 +282,9 @@ async function selectClaim(claim) {
   $("usage").textContent = "";
   $("w-disp-status").textContent = "";
   $("w-disp-status").classList.remove("err");
-  $("w-disp-current").textContent = describeDecision(claim);
+  state.selectedClaim = claim;
+  renderDecision(claim);
+  syncOverrideButton();
   const investigated = claim.status !== "unresolved";
   $("w-investigate").textContent = investigated ? "Re-investigate" : "Investigate";
   $("w-investigate").disabled = false;
@@ -514,12 +519,25 @@ async function runBatch() {
 
 // --- disposition (human decision) ----------------------------------------------------------------
 
-function describeDecision(claim) {
-  if (!claim.disposition) return "No analyst decision recorded yet.";
-  if (claim.disposition === "override") {
-    return `Your decision: override → ${claim.override_verdict} (agents said ${claim.agent_status})`;
+/** The recorded decision, with the two things the schema always stored but the UI never showed:
+    when it was made, and what the analyst wrote. */
+function renderDecision(claim) {
+  const box = $("w-disp-current");
+  box.replaceChildren();
+  if (!claim.disposition) {
+    box.textContent = "No analyst decision recorded yet.";
+    return;
   }
-  return `Your decision: ${claim.disposition}`;
+  const verdict = claim.decided_verdict || claim.override_verdict || claim.agent_status;
+  const when = claim.decided_at ? ` on ${claim.decided_at.slice(0, 16).replace("T", " ")}` : "";
+  const what = claim.disposition === "override"
+    ? `override → ${verdict} (agents said ${claim.agent_status})`
+    : `${claim.disposition} → ${verdict}`;
+  box.appendChild(document.createTextNode(`Your decision: ${what}${when}`));
+  if (claim.decision_stale) {
+    box.appendChild(el("span", "stale-badge", "re-investigated since you decided"));
+  }
+  if (claim.note) box.appendChild(el("div", "disp-note", `“${claim.note}”`));
 }
 
 // A verdict can only be accepted or overridden once one exists. Leaving these live on an
@@ -529,24 +547,44 @@ function setDecisionEnabled(enabled) {
   $("w-decision-blocked").classList.toggle("hidden", enabled);
 }
 
+/** Override stays disabled until there is both a verdict and a reason. The server enforces this too
+    (422) — this is so the analyst sees why the button won't fire, not the only line of defense. */
+function syncOverrideButton() {
+  const btn = document.querySelector('.decision [data-disp="override"]');
+  const chosen = $("w-override-verdict").value;
+  const reason = $("w-note").value.trim();
+  const agentVerdict = state.selectedClaim ? state.selectedClaim.agent_status : null;
+  btn.disabled = !chosen || !reason || chosen === agentVerdict;
+  btn.title = !chosen ? "Choose the verdict you're overriding to"
+    : chosen === agentVerdict ? `The agents already said ${chosen} — accept it instead`
+    : !reason ? "An override needs a stated reason"
+    : "";
+}
+
 async function postDisposition(disposition) {
   if (!state.selected) return;
-  const body = { disposition, note: $("w-note").value || null };
+  const body = { disposition, note: $("w-note").value.trim() || null };
   if (disposition === "override") body.override_verdict = $("w-override-verdict").value;
   const resp = await fetch(`/api/claims/${encodeURIComponent(state.selected)}/disposition`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   const status = $("w-disp-status");
   if (!resp.ok) {
-    status.textContent = "Failed to save decision.";
+    const detail = await resp.json().catch(() => null);
+    status.textContent = detail?.error
+      ? `Couldn't save: ${detail.error}`
+      : "Couldn't save the decision. Try again.";
     status.classList.add("err");
     return;
   }
-  const label = disposition === "override" ? `override → ${body.override_verdict}` : disposition;
+  const saved = await resp.json();
+  const label = disposition === "override"
+    ? `override → ${saved.decided_verdict}` : `${disposition} → ${saved.decided_verdict}`;
   status.classList.remove("err");
   status.textContent = `Saved — decision recorded: ${label}.`;
-  $("w-disp-current").textContent = `Your decision: ${label}`;
   $("w-note").value = "";
+  $("w-override-verdict").value = "";
+  syncOverrideButton();
   // Re-fetch both, in this order: a decision changes the claim's effective verdict, so the KPIs and
   // the row's status/filter membership are now stale. Previously only the dashboard was reloaded
   // (and no KPI read dispositions anyway), so a saved decision left the screen looking unchanged.
@@ -559,7 +597,25 @@ $("run").addEventListener("click", runBatch);
 $("banner-dismiss").addEventListener("click", hideBanner);
 $("prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - LIMIT); loadQueue(); });
 $("next").addEventListener("click", () => { state.offset += LIMIT; loadQueue(); });
-$("w-investigate").addEventListener("click", () => { if (state.selected) investigateClaim(state.selected); });
+$("w-investigate").addEventListener("click", () => {
+  if (!state.selected) return;
+  // Re-running the agents on a claim that already carries a human decision is legitimate (a second
+  // opinion after a prompt change), but it must not be a silent one-click action: the analyst needs
+  // to know a recorded sign-off is about to be contradicted.
+  const decided = state.selectedClaim && state.selectedClaim.disposition;
+  if (decided) {
+    const verdict = state.selectedClaim.decided_verdict || state.selectedClaim.status;
+    const ok = window.confirm(
+      `You already recorded "${state.selectedClaim.disposition} → ${verdict}" on this claim.\n\n` +
+      "Re-investigating will not change that decision, but if the agents reach a different " +
+      "verdict the decision will be flagged as stale.\n\nRun the agents again?");
+    if (!ok) return;
+  }
+  investigateClaim(state.selected);
+});
+
+$("w-override-verdict").addEventListener("change", syncOverrideButton);
+$("w-note").addEventListener("input", syncOverrideButton);
 
 document.querySelectorAll("#tabs .tab").forEach((t) =>
   t.addEventListener("click", () => setFilter(t.dataset.filter)));

@@ -176,10 +176,91 @@ def test_kpis_equal_the_row_counts_of_the_tabs_they_link_to(db):
 def test_resolved_this_month_counts_human_decisions_too(db):
     from orchestrator.dispositions import write_claim_disposition
 
+    # CLM-D, not CLM-A: as of Layer 34 you cannot accept a claim with no agent verdict to accept,
+    # and CLM-A has never been investigated. Its resolution is dated to a past month on purpose, so
+    # that only the *human* decision falls inside the window — `_escalate` stamps resolved_at with
+    # now, which would already put the claim in the count and make this assertion prove nothing.
+    with connect(db) as conn:
+        conn.execute("INSERT INTO claim_resolutions (claim_id, final_verdict, resolved_at) "
+                     "VALUES ('CLM-D', 'ESCALATE', '2023-01-05T00:00:00+00:00')")
     before = queries.dashboard_metrics()["resolved_this_month"]
-    write_claim_disposition(claim_id="CLM-A", disposition="accept",
+    write_claim_disposition(claim_id="CLM-D", disposition="accept",
                             decided_at=datetime.now(UTC).isoformat(), db_path=db)
     assert queries.dashboard_metrics()["resolved_this_month"] == before + 1
+
+
+# --- Layer 34: the effective verdict reads the analyst's snapshot -----------------------------------
+
+def test_effective_verdict_uses_the_accepted_snapshot_not_the_latest_agent_verdict(db):
+    """Read-side half of the Layer 34 regression: what the analyst accepted is what the worklist
+    shows, even after the agents change their mind."""
+    from orchestrator.dispositions import write_claim_disposition
+    from orchestrator.resolutions import write_claim_resolution
+
+    write_claim_disposition(claim_id="CLM-E", disposition="accept", decided_at="t1", db_path=db)
+    write_claim_resolution(claim_id="CLM-E", investigator_verdict="VALID", final_verdict="VALID",
+                           confidence=0.9, resolved_at="t2", run_id="run-2", db_path=db)
+
+    row = next(c for c in queries.batch_claims("LOT-2024-09-15", status_filter="all")["claims"]
+               if c["claim_id"] == "CLM-E")
+    assert row["status"] == "INVALID"        # what the analyst signed off on
+    assert row["agent_status"] == "VALID"    # where the agents have since moved
+
+
+def test_reinvestigation_after_a_decision_marks_it_stale(db):
+    from orchestrator.dispositions import write_claim_disposition
+    from orchestrator.resolutions import write_claim_resolution
+
+    def stale_flag():
+        return next(c for c in queries.batch_claims("LOT-2024-09-15", status_filter="all")["claims"]
+                    if c["claim_id"] == "CLM-E")["decision_stale"]
+
+    # The fixture seeds CLM-E's resolution with no run_id; give it one first, since a decision can
+    # only be detected as stale if it recorded which run it approved.
+    write_claim_resolution(claim_id="CLM-E", investigator_verdict="INVALID", final_verdict="INVALID",
+                           confidence=0.9, resolved_at="t0", run_id="run-1", db_path=db)
+    write_claim_disposition(claim_id="CLM-E", disposition="accept", decided_at="t1", db_path=db)
+    assert stale_flag() is False
+    write_claim_resolution(claim_id="CLM-E", investigator_verdict="VALID", final_verdict="VALID",
+                           confidence=0.9, resolved_at="t2", run_id="run-2", db_path=db)
+    assert stale_flag() is True
+
+
+def test_legacy_override_row_without_a_snapshot_still_wins(db):
+    """The only test pinning _add_snapshot_columns' backfill: a pre-Layer-34 override row (written
+    with override_verdict and no decided_verdict) must keep overriding, not silently fall through."""
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO claim_dispositions (claim_id, disposition, override_verdict, decided_at) "
+            "VALUES ('CLM-E', 'override', 'VALID', 't1')")
+        conn.execute(
+            "UPDATE claim_dispositions SET decided_verdict = override_verdict "
+            "WHERE disposition = 'override'")
+
+    row = next(c for c in queries.batch_claims("LOT-2024-09-15", status_filter="all")["claims"]
+               if c["claim_id"] == "CLM-E")
+    assert row["status"] == "VALID"
+
+
+def test_batch_claims_returns_the_decision_note_and_timestamp(db):
+    """Both columns were always stored and never returned, so the UI could only ever say
+    "Your decision: accept" with no timestamp and no sight of what the analyst wrote."""
+    from orchestrator.dispositions import write_claim_disposition
+
+    write_claim_disposition(claim_id="CLM-E", disposition="override", override_verdict="VALID",
+                            note="ASN supports the retailer", decided_at="2026-07-28T10:00:00+00:00",
+                            db_path=db)
+    row = next(c for c in queries.batch_claims("LOT-2024-09-15", status_filter="all")["claims"]
+               if c["claim_id"] == "CLM-E")
+    assert row["note"] == "ASN supports the retailer"
+    assert row["decided_at"] == "2026-07-28T10:00:00+00:00"
+    assert row["decided_verdict"] == "VALID"
+
+
+def test_agent_verdict_separates_unknown_from_uninvestigated(db):
+    assert queries.agent_verdict("CLM-E") == "INVALID"
+    assert queries.agent_verdict("CLM-A") is None   # exists, never investigated
+    assert queries.agent_verdict("CLM-404") is None
 
 
 def test_unresolved_claim_ids_caps_and_excludes_resolved(db):

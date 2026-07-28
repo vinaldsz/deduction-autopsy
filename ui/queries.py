@@ -52,6 +52,19 @@ def claim_exists(claim_id: str) -> bool:
         ).fetchone() is not None
 
 
+def agent_verdict(claim_id: str) -> str | None:
+    """The agents' current verdict, or None if the claim hasn't been investigated.
+
+    None is what lets the API separate 404 (unknown claim) from 409 (nothing to accept yet); the
+    verdict itself is what lets it reject an "override" to the verdict the agents already gave.
+    """
+    with closing(connect(_db_path())) as conn:
+        row = conn.execute(
+            "SELECT final_verdict FROM claim_resolutions WHERE claim_id = ?", (claim_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
 def _batch_load_date(conn, batch_id: str) -> str:
     return conn.execute("SELECT load_date FROM batches WHERE batch_id = ?", (batch_id,)).fetchone()[0]
 
@@ -65,14 +78,20 @@ def _batch_load_date(conn, batch_id: str) -> str:
 # is invisible to every view (which is exactly the bug this replaced: accepting a verdict changed
 # nothing on screen because every KPI and filter read only the agent's row).
 #
-# accept -> falls through to the agent's verdict (that is what accepting means). override -> the
-# analyst's verdict wins. escalate -> ESCALATE; its button is gone from the UI (the analyst *is* the
-# human, so it had no recipient), but the schema still accepts it and older rows still exist.
-_EFFECTIVE_VERDICT = """CASE
-        WHEN d.disposition = 'override' THEN d.override_verdict
-        WHEN d.disposition = 'escalate' THEN 'ESCALATE'
-        ELSE r.final_verdict
-    END"""
+# Layer 34 replaced a three-arm CASE with this COALESCE. The old version resolved `accept` by falling
+# through to `r.final_verdict` — a *pointer*, so re-investigating a decided claim silently changed
+# what the analyst was recorded as having approved. `claim_dispositions.decided_verdict` now holds a
+# snapshot for every disposition (see orchestrator/dispositions.py), which makes this expression both
+# correct and NULL-total: a legacy row with no snapshot degrades to the old behaviour instead of
+# erroring.
+_EFFECTIVE_VERDICT = "COALESCE(d.decided_verdict, r.final_verdict)"
+
+# A decision the agents have since moved past. Deliberately does NOT feed _EFFECTIVE_VERDICT: the
+# human's recorded call stands until they revisit it, and the badge tells them the machine changed its
+# mind. Silently adopting the new agent verdict is the bug above wearing a different hat.
+_DECISION_STALE = (
+    "(d.decided_run_id IS NOT NULL AND r.run_id IS NOT NULL AND d.decided_run_id <> r.run_id)"
+)
 
 # A human has settled the claim. 'escalate' is deliberately excluded: parking a claim for someone
 # else is not deciding it. COALESCE is load-bearing — for a claim with no disposition row
@@ -144,7 +163,8 @@ def batch_claims(
         ).fetchone()[0]
         rows = conn.execute(
             "SELECT c.claim_id, c.po_id, c.retailer, c.claimed_reason, c.claimed_amount, "
-            f"c.claim_date, {_EFFECTIVE_VERDICT}, r.final_verdict, d.disposition, d.override_verdict "
+            f"c.claim_date, {_EFFECTIVE_VERDICT}, r.final_verdict, d.disposition, d.override_verdict, "
+            f"d.decided_verdict, d.note, d.decided_at, {_DECISION_STALE} "
             f"FROM deduction_claims c {_JOINS} "
             f"WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
             [*params, limit, offset],
@@ -160,9 +180,15 @@ def batch_claims(
             "agent_status": agent_verdict or "unresolved",
             "disposition": disp,
             "override_verdict": override_verdict,
+            "decided_verdict": decided_verdict,
+            # note/decided_at were already stored and never returned, so the UI could show only
+            # "Your decision: accept" with no timestamp and no sight of what the analyst wrote.
+            "note": note,
+            "decided_at": decided_at,
+            "decision_stale": bool(stale),
         }
-        for cid, po, retailer, reason, amount, cdate, effective, agent_verdict, disp, override_verdict
-        in rows
+        for cid, po, retailer, reason, amount, cdate, effective, agent_verdict, disp,
+        override_verdict, decided_verdict, note, decided_at, stale in rows
     ]
     return {"batch_id": batch_id, "total": total, "offset": offset, "limit": limit, "claims": claims}
 

@@ -119,12 +119,22 @@ CREATE TABLE IF NOT EXISTS claim_resolutions (
 -- Operational: the human analyst's decision on a claim (Layer 32), kept separate from
 -- claim_resolutions (the agents' verdict) so re-investigating a claim never clobbers the human
 -- disposition. override_verdict is set only when disposition = 'override'.
+--
+-- Amended Layer 34: decided_verdict / decided_run_id added, declared LAST so a freshly-created DB
+-- and one upgraded by _add_snapshot_columns() agree on PRAGMA table_info ordinals.
 CREATE TABLE IF NOT EXISTS claim_dispositions (
     claim_id        TEXT PRIMARY KEY,
     disposition     TEXT CHECK (disposition IN ('accept', 'override', 'escalate')),
     override_verdict TEXT,
     note            TEXT,
     decided_at      TEXT,
+    -- The verdict the analyst actually signed off on, captured at decision time. For 'accept' this
+    -- is a *snapshot* of the agents' verdict, not a pointer to it: re-investigating must never
+    -- retroactively change what a human is recorded as having approved.
+    decided_verdict TEXT,
+    -- claim_resolutions.run_id as of the decision. A later run with a different run_id makes the
+    -- decision stale — surfaced to the analyst, never silently applied.
+    decided_run_id  TEXT,
     FOREIGN KEY (claim_id) REFERENCES deduction_claims (claim_id)
 );
 
@@ -202,11 +212,39 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _add_snapshot_columns(conn: sqlite3.Connection) -> None:
+    """Add Layer 34's claim_dispositions columns to an already-existing DB.
+
+    SQLite has no `ADD COLUMN IF NOT EXISTS`, so the idempotent CREATE TABLE above cannot reach a DB
+    that already has the Layer 32 shape — and `build_db` upserts onto the existing file rather than
+    recreating it, so re-running the ETL would not help either. Without this, an existing
+    data/deductions.db fails every worklist query with `no such column: decided_verdict` while the
+    whole test suite stays green (conftest builds a fresh DB in a tmp dir).
+
+    This is the entire migration mechanism: forward-only, one gate, no version table. Deleting and
+    rebuilding the DB was the alternative and was rejected — it would discard the analyst's recorded
+    decisions and the pipeline resolutions behind them, i.e. real LLM spend.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(claim_dispositions)")}
+    if "decided_verdict" in columns:
+        return
+    conn.execute("ALTER TABLE claim_dispositions ADD COLUMN decided_verdict TEXT")
+    conn.execute("ALTER TABLE claim_dispositions ADD COLUMN decided_run_id TEXT")
+    # Existing 'override' rows already carry the analyst's verdict, so carry it forward. Existing
+    # 'accept' rows were never a snapshot and cannot be truthfully backfilled — they stay NULL and
+    # fall through to the agents' verdict, exactly as they behave today.
+    conn.execute(
+        "UPDATE claim_dispositions SET decided_verdict = override_verdict "
+        "WHERE disposition = 'override'"
+    )
+
+
 def init_db(db_path: Path | str = DEFAULT_DB_PATH) -> None:
     """Create the schema (idempotent) — doubles as the create/migrate helper."""
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA_SQL)
+        _add_snapshot_columns(conn)
         conn.commit()
     finally:
         conn.close()

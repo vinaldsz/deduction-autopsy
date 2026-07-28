@@ -1,6 +1,87 @@
 # Progress
 
 ## Current layer
+**Layer 34 — Decision integrity: accept as a snapshot complete**
+
+The one correctness bug in the 40-finding review that makes the audit trail actively lie, plus the
+one-click override that fed it. **No agent/prompt/verdict-logic changes**; the 8 ground-truth verdicts
+are untouched and the fidelity oracle was re-run explicitly to prove it.
+
+**The bug (#2).** `claim_dispositions` recorded *that* the analyst accepted, and `_EFFECTIVE_VERDICT`
+resolved `accept` by falling through to `claim_resolutions.final_verdict` — a **pointer**. So: analyst
+accepts VALID → anyone clicks Re-investigate → agents now say INVALID → the claim's effective verdict
+is INVALID with a stored "accept" the analyst never gave. A UI-only guard was rejected as unenforceable:
+`POST /api/claims/{id}/investigate`, the batch stream and `cli/run_claim.py` all reach `run_pipeline` →
+`write_claim_resolution` without passing through `app.js`, and an invariant guarded only in the client
+is not an invariant.
+
+**Schema (`mcp_server/db.py`).** `claim_dispositions` gains `decided_verdict` (the verdict actually
+signed off on — a snapshot for `accept`, not a pointer) and `decided_run_id` (which run was approved),
+declared last so a fresh and an upgraded DB agree on `PRAGMA table_info` ordinals. New
+`_add_snapshot_columns()` called from `init_db`: SQLite has no `ADD COLUMN IF NOT EXISTS`, so the
+idempotent DDL cannot reach an existing DB. Forward-only, one gate, no version table. Existing
+`override` rows are backfilled from `override_verdict`; existing `accept` rows stay NULL — they never
+were a snapshot and cannot be truthfully backfilled, so they degrade to the old behaviour rather than
+asserting a sign-off that didn't happen.
+
+**Writer (`orchestrator/dispositions.py`).** Derives and stores `decided_verdict` for every
+disposition. `accept` with no resolution now returns False and writes nothing — accepting a verdict
+that doesn't exist is meaningless. `override` without one stays legal, deliberately: `claim_documents()`
+serves the source documents regardless of any agent run, so an analyst can rule on evidence the agents
+never saw.
+
+**Read side (`ui/queries.py`).** `_EFFECTIVE_VERDICT` collapses from a five-line three-arm CASE to
+`COALESCE(d.decided_verdict, r.final_verdict)` — correct, NULL-total by construction, and legacy rows
+degrade instead of erroring. New `_DECISION_STALE`, and `agent_verdict()` (returns the verdict, not a
+bool, so the API can both 409 and reject an override to the agents' own verdict). `batch_claims` now
+returns `decided_verdict`, `note`, `decided_at` and `decision_stale` — **`note` and `decided_at` were
+always stored and never returned**, which is why the UI could only ever say "Your decision: accept"
+with no timestamp and no sight of what the analyst wrote (the cheap half of #29).
+
+**API + UI (#3).** 409 for accept-with-nothing-to-accept (distinct from 404 unknown claim); 422 for an
+override with no verdict, a blank note, or a verdict matching the agents'. In the UI the verdict
+`<select>` moved **before** the Override button and starts empty — it previously sat after the button
+and defaulted to VALID, so one stray click recorded "override → VALID" with no confirmation and no
+reason. Override is disabled until there is both a verdict and a reason, with a `title` saying which is
+missing. Re-investigating a decided claim now confirms first, naming the decision it may contradict,
+and a stale badge appears afterwards if the agents diverged.
+
+**Staleness is reported, never applied.** The human's recorded call stays the effective verdict until
+they revisit it; the badge says the machine changed its mind. Silently adopting the new agent verdict
+would be the same bug wearing a different hat.
+
+**Corrected during the build — the upgrade path.** The plan claimed the shim would self-heal on a
+uvicorn boot. It does not: `ui/server.py` never calls `init_db`. Verified against a copy of the real
+DB — an un-upgraded store fails every worklist query with `no such column: d.decided_verdict`. The
+migration entry point is **`python -m semantic_layer.etl`**, which calls `init_db` (→ the shim) and
+**upserts** rather than recreating. Confirmed on the real `data/deductions.db`: all **52
+`claim_resolutions` and 5 `claim_dispositions` rows survived**, the legacy `CLM-001` override
+backfilled to `decided_verdict='VALID'`, the four legacy accepts correctly left NULL. No deletion was
+needed at any point — `rm data/deductions.db` would have discarded real decisions and real LLM spend.
+
+**Verification:** `pytest -q` — **375 passed, 10 deselected** (was 359). Explicit
+`pytest tests/test_etl.py tests/test_db.py -q` — 58 passed, so the **fidelity oracle is untouched**
+(it selects `list(model_cls.model_fields)` over the six business tables and never sees
+`claim_dispositions`; `test_db.py` asserts table/view/index *names*, not columns — confirmed rather
+than assumed). `pyright` 0 errors; `node --check` clean. Live `uvicorn` against the upgraded real DB:
+override-with-blank-note → 422, override-to-the-agents'-own-verdict → 422 with the "accept it instead"
+message, a legitimate override → 200 with `decided_verdict`, and a follow-up accept → 200 snapshotting
+`INVALID` and nulling `override_verdict`. The test disposition written to `CLM-004` during that check
+was deleted afterwards; the DB is back to its original 5 dispositions. No live OpenRouter run — no
+agent code was touched.
+
+**Test-suite notes.** Three existing tests failed on the new rules and were rewritten, not weakened:
+`test_upsert_writes_and_refreshes` and `test_disposition_survives_resolution_upsert` both accepted a
+claim with no resolution; `test_resolved_this_month_counts_human_decisions_too` accepted the
+never-investigated `CLM-A` and now uses a claim whose resolution is dated to a *past* month, so only
+the human decision falls inside the window — the old version would have passed even if the disposition
+were ignored entirely. `test_disposition_survives_resolution_upsert` is kept as-is but is no longer the
+real guard: it only ever asserted the disposition *string* survived, which it always did. Its sibling
+`test_reinvestigation_does_not_rewrite_what_the_analyst_approved` is the actual regression.
+
+---
+
+## Previous layer
 **Layer 33 — JS test harness + render hygiene complete**
 
 First of the Layers 33–41 UX-remediation phase (`docs/PLAN.md`), which acts on a 40-finding UI/UX

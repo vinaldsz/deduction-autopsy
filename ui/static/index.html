@@ -173,6 +173,13 @@
     button.ok { background: var(--ok); color: #06210d; }
     button.danger { background: var(--bad); color: #2b0606; }
     .disp-current { font-size: 12px; color: var(--muted); }
+    .disp-note { font-style: italic; }
+    /* The agents have re-run since this decision was recorded. The decision still stands — this
+       says the machine changed its mind, it does not silently adopt the new verdict. */
+    .stale-badge {
+      font-size: 11px; font-weight: 700; color: var(--warn); border: 1px solid var(--warn);
+      border-radius: 999px; padding: 1px 8px; margin-left: 8px;
+    }
     /* Confirmation has to be legible, not a 12px grey whisper — a saved decision that looks like
        nothing happened is indistinguishable from a broken button. */
     .disp-status { font-size: 13px; font-weight: 600; color: var(--ok); }
@@ -308,15 +315,19 @@
           <div class="disp-current" id="w-disp-current"></div>
           <!-- No "send to human" button: the analyst IS the human this system escalates to, so it
                had no recipient. The agents' own ESCALATE verdict is what routes work here. -->
+          <!-- The verdict picker comes BEFORE the Override button and starts empty. Previously it
+               sat after the button and defaulted to VALID, so one stray click recorded
+               "override → VALID" with no confirmation and no stated reason. -->
           <div class="actions" id="w-decision-actions">
             <button class="ok sm" data-disp="accept">Accept verdict</button>
-            <button class="danger sm" data-disp="override">Override →</button>
             <select id="w-override-verdict">
+              <option value="">— choose verdict —</option>
               <option value="VALID">VALID</option>
               <option value="INVALID">INVALID</option>
               <option value="ESCALATE">ESCALATE</option>
             </select>
-            <input class="note" id="w-note" type="text" placeholder="Note (optional)" />
+            <button class="danger sm" data-disp="override" disabled>Override</button>
+            <input class="note" id="w-note" type="text" placeholder="Reason for override (required)" />
           </div>
           <!-- Shown instead of the buttons until the claim has been investigated: there is no
                verdict to accept or override before then. -->

@@ -128,9 +128,35 @@ class DispositionBody(BaseModel):
 
 @app.post("/api/claims/{claim_id}/disposition")
 async def disposition(claim_id: str, body: DispositionBody):
-    """Record the analyst's decision on a claim (accept / override / send to human)."""
+    """Record the analyst's decision on a claim (accept / override / send to human).
+
+    The verdict the analyst signs off on is snapshotted server-side (see
+    orchestrator/dispositions.py), so re-investigating later cannot rewrite it. The request body
+    still carries `override_verdict` — that's the client's *intent* — while the response reports the
+    `decided_verdict` actually stored.
+    """
     if not queries.claim_exists(claim_id):
         return JSONResponse(status_code=404, content={"error": f"unknown claim: {claim_id!r}"})
+
+    agent_verdict = queries.agent_verdict(claim_id)
+    if body.disposition == "accept" and agent_verdict is None:
+        # Distinct from the 404 above: the claim exists, there is just no verdict to accept.
+        return JSONResponse(status_code=409, content={
+            "error": f"claim not yet investigated — nothing to accept: {claim_id}"})
+    if body.disposition == "override":
+        # An override with no stated reason is the one decision that most needs one: it is a human
+        # overruling an audited verdict.
+        if body.override_verdict is None:
+            return JSONResponse(status_code=422, content={
+                "error": "override requires an explicit override_verdict"})
+        if not (body.note or "").strip():
+            return JSONResponse(status_code=422, content={
+                "error": "override requires a note explaining the reason"})
+        if body.override_verdict == agent_verdict:
+            return JSONResponse(status_code=422, content={
+                "error": f"override_verdict matches the agents' verdict ({agent_verdict}) — "
+                         "accept it instead"})
+
     write_claim_disposition(
         claim_id=claim_id,
         disposition=body.disposition,
@@ -138,8 +164,13 @@ async def disposition(claim_id: str, body: DispositionBody):
         note=body.note,
         decided_at=datetime.now(UTC).isoformat(),
     )
+    decided_verdict = (
+        body.override_verdict if body.disposition == "override"
+        else "ESCALATE" if body.disposition == "escalate"
+        else agent_verdict
+    )
     return {"claim_id": claim_id, "disposition": body.disposition,
-            "override_verdict": body.override_verdict}
+            "override_verdict": body.override_verdict, "decided_verdict": decided_verdict}
 
 
 @app.get("/api/batches/{batch_id}")

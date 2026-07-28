@@ -102,6 +102,53 @@ def test_init_db_is_idempotent(tmp_path):
         conn.close()
 
 
+def test_add_column_shim_upgrades_an_existing_db(tmp_path):
+    """Layer 34's only migration mechanism.
+
+    SQLite has no `ADD COLUMN IF NOT EXISTS`, so the idempotent CREATE TABLE cannot reach a DB that
+    already has the Layer 32 shape — and `build_db` upserts onto the existing file rather than
+    recreating it. Without the shim an existing data/deductions.db fails every worklist query with
+    `no such column: decided_verdict`, while the whole test suite stays green because conftest
+    builds a fresh DB in a tmp dir. That asymmetry is exactly how this would have bitten in
+    production only.
+    """
+    db_path = tmp_path / "legacy.db"
+    db.init_db(db_path)
+
+    conn = db.connect(db_path)
+    try:
+        # Rewind to the pre-Layer-34 shape, with one row of each disposition kind already recorded.
+        conn.execute("ALTER TABLE claim_dispositions DROP COLUMN decided_verdict")
+        conn.execute("ALTER TABLE claim_dispositions DROP COLUMN decided_run_id")
+        conn.execute("INSERT INTO purchase_orders (po_id) VALUES ('PO-1')")
+        for claim_id in ("CLM-1", "CLM-2"):
+            conn.execute("INSERT INTO deduction_claims (claim_id, po_id) VALUES (?, 'PO-1')",
+                         (claim_id,))
+        conn.execute("INSERT INTO claim_dispositions (claim_id, disposition, override_verdict) "
+                     "VALUES ('CLM-1', 'override', 'VALID')")
+        conn.execute("INSERT INTO claim_dispositions (claim_id, disposition) VALUES ('CLM-2', 'accept')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    db.init_db(db_path)   # the upgrade
+    db.init_db(db_path)   # and still idempotent afterwards
+
+    conn = db.connect(db_path)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(claim_dispositions)")}
+        assert {"decided_verdict", "decided_run_id"} <= columns
+        backfilled = dict(conn.execute(
+            "SELECT claim_id, decided_verdict FROM claim_dispositions").fetchall())
+        # An existing override already carried the analyst's verdict, so it can be carried forward.
+        assert backfilled["CLM-1"] == "VALID"
+        # An existing accept never was a snapshot and cannot be truthfully backfilled — it stays
+        # NULL and falls through to the agents' verdict, exactly as it behaved before.
+        assert backfilled["CLM-2"] is None
+    finally:
+        conn.close()
+
+
 def test_connect_enables_foreign_keys(tmp_path):
     db_path = tmp_path / "deductions.db"
     db.init_db(db_path)

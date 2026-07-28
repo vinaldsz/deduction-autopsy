@@ -230,8 +230,14 @@ def test_investigate_post_happy_and_errors(monkeypatch):
 
 # --- disposition (human decision) ----------------------------------------------------------------
 
-def test_disposition_writes_and_returns(monkeypatch):
+def _decidable(monkeypatch, agent_verdict="INVALID"):
+    """A claim that exists and (by default) has an agent verdict to act on."""
     monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(queries, "agent_verdict", lambda c: agent_verdict)
+
+
+def test_disposition_writes_and_returns(monkeypatch):
+    _decidable(monkeypatch)
     seen = {}
     monkeypatch.setattr(server, "write_claim_disposition",
                         lambda **kw: seen.update(kw) or True)
@@ -240,12 +246,15 @@ def test_disposition_writes_and_returns(monkeypatch):
                        json={"disposition": "override", "override_verdict": "VALID", "note": "x"})
     assert resp.status_code == 200
     assert resp.json()["disposition"] == "override"
+    # The body still carries override_verdict (the client's intent); the response reports the
+    # decided_verdict actually stored.
+    assert resp.json()["decided_verdict"] == "VALID"
     assert seen["claim_id"] == "CLM-002" and seen["override_verdict"] == "VALID"
     assert seen["note"] == "x" and "decided_at" in seen
 
 
 def test_disposition_rejects_bad_value(monkeypatch):
-    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    _decidable(monkeypatch)
     resp = client.post("/api/claims/CLM-002/disposition", json={"disposition": "maybe"})
     assert resp.status_code == 422  # pydantic Literal validation
 
@@ -254,6 +263,56 @@ def test_disposition_unknown_claim_is_404(monkeypatch):
     monkeypatch.setattr(queries, "claim_exists", lambda c: False)
     resp = client.post("/api/claims/CLM-999/disposition", json={"disposition": "accept"})
     assert resp.status_code == 404
+
+
+# --- Layer 34: you cannot sign off on something that isn't there ------------------------------------
+
+def test_accept_on_an_uninvestigated_claim_is_409(monkeypatch):
+    """Distinct from the 404 above: the claim exists, there is just no verdict to accept."""
+    _decidable(monkeypatch, agent_verdict=None)
+    wrote = []
+    monkeypatch.setattr(server, "write_claim_disposition", lambda **kw: wrote.append(kw) or True)
+
+    resp = client.post("/api/claims/CLM-002/disposition", json={"disposition": "accept"})
+    assert resp.status_code == 409
+    assert wrote == [], "must reject before writing"
+
+
+def test_override_without_a_verdict_is_422(monkeypatch):
+    _decidable(monkeypatch)
+    resp = client.post("/api/claims/CLM-002/disposition",
+                       json={"disposition": "override", "note": "x"})
+    assert resp.status_code == 422
+
+
+def test_override_without_a_note_is_422(monkeypatch):
+    """An override is a human overruling an audited verdict — the one decision that most needs a
+    stated reason. Whitespace doesn't count."""
+    _decidable(monkeypatch)
+    for note in (None, "", "   "):
+        resp = client.post("/api/claims/CLM-002/disposition",
+                           json={"disposition": "override", "override_verdict": "VALID", "note": note})
+        assert resp.status_code == 422, f"note={note!r} should be rejected"
+
+
+def test_override_to_the_agents_own_verdict_is_422(monkeypatch):
+    _decidable(monkeypatch, agent_verdict="VALID")
+    resp = client.post("/api/claims/CLM-002/disposition",
+                       json={"disposition": "override", "override_verdict": "VALID", "note": "x"})
+    assert resp.status_code == 422
+    assert "accept it instead" in resp.json()["error"]
+
+
+def test_override_on_an_uninvestigated_claim_is_allowed(monkeypatch):
+    """Asymmetric with accept on purpose: source documents are served regardless of any agent run,
+    so an analyst can rule on evidence the agents never saw."""
+    _decidable(monkeypatch, agent_verdict=None)
+    monkeypatch.setattr(server, "write_claim_disposition", lambda **kw: True)
+    resp = client.post("/api/claims/CLM-002/disposition",
+                       json={"disposition": "override", "override_verdict": "INVALID",
+                             "note": "ASN proves the short ship"})
+    assert resp.status_code == 200
+    assert resp.json()["decided_verdict"] == "INVALID"
 
 
 # --- static mount ---------------------------------------------------------------------------------
