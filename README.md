@@ -178,6 +178,17 @@ curl -sN -X POST "http://127.0.0.1:8000/api/batches/LOT-2024-09-15/investigate?c
 
 ## Running tests
 
+Every gate at once — this is what CI runs and what to run before committing a layer:
+
+```bash
+scripts/check.sh          # pytest + pyright + frontend syntax + frontend unit tests
+scripts/check.sh pytest   # or one gate at a time: pytest | types | js
+```
+
+It reports every failing gate rather than stopping at the first, and prefers `./.venv/bin`
+when present. `.github/workflows/tests.yml` calls this same script, so the gate definitions
+can't drift between local runs and CI. The individual commands, for reference:
+
 ```bash
 # Unit tests — no API key needed, runs by default
 pytest tests/ -v
@@ -192,8 +203,11 @@ pyright
 
 # Frontend: Node's built-in test runner over the pure helpers in ui/static/lib.js. No
 # package.json, no node_modules, no build step. The glob matters — `node --test tests/js/`
-# module-resolves the bare directory and fails.
-node --check ui/static/app.js && node --check ui/static/lib.js
+# module-resolves the bare directory and fails. Note the syntax check reads the file on
+# stdin: plain `node --check <file>` silently passes on these two (they use `export`) —
+# see check_js_syntax in scripts/check.sh.
+node --input-type=module --check < ui/static/app.js
+node --input-type=module --check < ui/static/lib.js
 node --test "tests/js/**/*.test.mjs"
 ```
 
