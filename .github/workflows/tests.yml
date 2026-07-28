@@ -21,27 +21,26 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
+      # scripts/check.sh is the single definition of every gate — see the script's header.
+      # No ./.venv here, so its bin() falls back to PATH.
       - name: Run unit tests
-        run: pytest tests/ -v
+        run: scripts/check.sh pytest
 
   js:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned to 22: `node --check` treats a .js file as CommonJS and fails on `import` before
-      # 22.7's unflagged module-syntax detection.
+      # Pinned to 22 for the built-in test runner. The syntax gate no longer depends on the
+      # version's module-detection behaviour — see check_js_syntax in scripts/check.sh for why
+      # it feeds stdin with --input-type=module instead of using `node --check <file>`.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Syntax-check the frontend
-        run: node --check ui/static/app.js && node --check ui/static/lib.js
-
-      # Glob, not a bare directory: `node --test tests/js/` module-resolves the path and fails.
-      - name: Run frontend unit tests
-        run: node --test "tests/js/**/*.test.mjs"
+      - name: Syntax-check the frontend and run its unit tests
+        run: scripts/check.sh js
 
   types:
     runs-on: ubuntu-latest
@@ -59,5 +58,6 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -e ".[dev]"
 
+      # The script's bin() picks up ./.venv/bin/pyright built above.
       - name: Run pyright
-        run: .venv/bin/pyright
+        run: scripts/check.sh types
