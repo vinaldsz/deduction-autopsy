@@ -120,6 +120,23 @@ def test_override_without_a_resolution_is_allowed(tmp_path):
     assert _row(db) == ("override", "INVALID", "shipped short, ASN proves it", "INVALID", None)
 
 
+def test_derive_decided_verdict_matches_what_gets_stored(tmp_path):
+    """ui/server.py reports the decided verdict in its response and the writer stores it. They share
+    this function precisely so the response can't contradict the row — pin both ends."""
+    from orchestrator.dispositions import derive_decided_verdict
+
+    assert derive_decided_verdict("override", "VALID", "INVALID") == "VALID"
+    assert derive_decided_verdict("escalate", None, "INVALID") == "ESCALATE"
+    assert derive_decided_verdict("accept", None, "INVALID") == "INVALID"
+
+    db = tmp_path / "d.db"
+    _seed_claim(db, verdict="INVALID")
+    for disposition, override in (("accept", None), ("override", "VALID"), ("escalate", None)):
+        write_claim_disposition(claim_id="CLM-1", disposition=disposition,
+                                override_verdict=override, note="n", decided_at="t", db_path=db)
+        assert _row(db)[3] == derive_decided_verdict(disposition, override, "INVALID")
+
+
 def test_escalate_snapshots_escalate(tmp_path):
     db = tmp_path / "d.db"
     _seed_claim(db, verdict="VALID")

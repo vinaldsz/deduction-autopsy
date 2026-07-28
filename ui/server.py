@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agents.base import AgentRunnerError, ToolCallRecord
-from orchestrator.dispositions import write_claim_disposition
+from orchestrator.dispositions import derive_decided_verdict, write_claim_disposition
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline
 from ui import queries
 
@@ -157,20 +157,19 @@ async def disposition(claim_id: str, body: DispositionBody):
                 "error": f"override_verdict matches the agents' verdict ({agent_verdict}) — "
                          "accept it instead"})
 
+    decided_at = datetime.now(UTC).isoformat()
     write_claim_disposition(
         claim_id=claim_id,
         disposition=body.disposition,
         override_verdict=body.override_verdict,
         note=body.note,
-        decided_at=datetime.now(UTC).isoformat(),
+        decided_at=decided_at,
     )
-    decided_verdict = (
-        body.override_verdict if body.disposition == "override"
-        else "ESCALATE" if body.disposition == "escalate"
-        else agent_verdict
-    )
+    # Same derivation the writer uses, so the response cannot contradict the row it just wrote.
     return {"claim_id": claim_id, "disposition": body.disposition,
-            "override_verdict": body.override_verdict, "decided_verdict": decided_verdict}
+            "override_verdict": body.override_verdict, "decided_at": decided_at,
+            "decided_verdict": derive_decided_verdict(
+                body.disposition, body.override_verdict, agent_verdict)}
 
 
 @app.get("/api/batches/{batch_id}")

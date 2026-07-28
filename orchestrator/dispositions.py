@@ -13,6 +13,21 @@ from pathlib import Path
 from mcp_server.db import DEFAULT_DB_PATH, connect
 
 
+def derive_decided_verdict(
+    disposition: str, override_verdict: str | None, agent_verdict: str | None
+) -> str | None:
+    """The verdict a disposition actually signs off on.
+
+    Shared with ui/server.py so the API reports exactly what gets stored — the two derivations
+    drifting apart would mean the response contradicts the row.
+    """
+    if disposition == "override":
+        return override_verdict
+    if disposition == "escalate":
+        return "ESCALATE"
+    return agent_verdict
+
+
 def write_claim_disposition(
     *,
     claim_id: str,
@@ -44,11 +59,7 @@ def write_claim_disposition(
         agent_verdict, run_id = resolution if resolution else (None, None)
         # The snapshot. Storing the agent's verdict rather than pointing at it is the whole change:
         # a later re-investigation must not retroactively rewrite what the human approved.
-        decided_verdict = (
-            override_verdict if disposition == "override"
-            else "ESCALATE" if disposition == "escalate"
-            else agent_verdict
-        )
+        decided_verdict = derive_decided_verdict(disposition, override_verdict, agent_verdict)
         conn.execute(
             "INSERT INTO claim_dispositions "
             "(claim_id, disposition, override_verdict, note, decided_at, decided_verdict, "

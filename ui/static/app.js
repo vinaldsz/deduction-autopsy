@@ -58,7 +58,10 @@ async function loadDashboard() {
     $("m-escalate").textContent = d.needs_human_review ?? "—";
     $("m-needsme").textContent = d.needs_me_count ?? "—";
     state.batchId = d.batch ? d.batch.batch_id : null;
-  } catch {
+  } catch (err) {
+    // Log the real error: the catch also covers render bugs, and without this a
+    // TypeError in here is indistinguishable from the network being down.
+    console.error("loadDashboard", err);
     showBanner("Couldn't load the dashboard metrics.", loadDashboard);
   }
 }
@@ -125,12 +128,22 @@ async function loadQueue() {
     rows.replaceChildren();
     for (const claim of data.claims) rows.appendChild(renderRow(claim));
     if (state.selected) markSelectedRow(state.selected);
+    // Re-point the open claim at the freshly-loaded row. Without this `state.selectedClaim` keeps
+    // whatever it was selected with, so the decision line, the stale badge and the re-investigate
+    // confirmation all reason about data that may be several writes out of date.
+    const reselected = data.claims.find((c) => c.claim_id === state.selected);
+    if (reselected) {
+      state.selectedClaim = reselected;
+      renderDecision(reselected);
+      syncOverrideButton();
+    }
     setQueueMessage(data.total ? "" : "No claims match this filter.");
     const shown = data.claims.length ? `${state.offset + 1}–${state.offset + data.claims.length}` : "0";
     $("page-info").textContent = `${shown} of ${data.total}`;
     $("prev").disabled = state.offset === 0;
     $("next").disabled = state.offset + LIMIT >= data.total;
-  } catch {
+  } catch (err) {
+    console.error("loadQueue", err);
     showBanner("Couldn't load the worklist.", loadQueue);
   }
 }
@@ -282,6 +295,11 @@ async function selectClaim(claim) {
   $("usage").textContent = "";
   $("w-disp-status").textContent = "";
   $("w-disp-status").classList.remove("err");
+  // Clear the override inputs: a reason typed for one claim must not carry over and attach itself
+  // to the next one — it would both enable the Override button and be submitted as that claim's
+  // justification.
+  $("w-note").value = "";
+  $("w-override-verdict").value = "";
   state.selectedClaim = claim;
   renderDecision(claim);
   syncOverrideButton();
@@ -320,7 +338,8 @@ async function loadDocuments(claim) {
     const docs = await fetchJSON(`/api/claims/${encodeURIComponent(claim.claim_id)}/documents`);
     renderReason(claim, docs.claim.retailer_notes);
     renderDocuments(docs);
-  } catch {
+  } catch (err) {
+    console.error("loadDocuments", err);
     const box = el("div", "doc-empty", "Couldn't load source documents for this claim. ");
     const retry = el("button", "ghost sm", "Retry");
     retry.onclick = () => loadDocuments(claim);
@@ -456,10 +475,17 @@ function investigateClaim(claimId) {
     $("w-investigate").textContent = "Re-investigate";
     $("w-investigate").disabled = false;
     source.close(); source = null;
+    // loadQueue as well as loadDashboard: re-investigating is the one action that can make an
+    // existing decision stale, so without a queue refresh the stale badge never appears after the
+    // very thing that causes it.
     loadDashboard();
+    loadQueue();
   });
   source.addEventListener("error", (e) => {
-    if (e.data) { showBanner(JSON.parse(e.data).error); source.close(); source = null; $("w-investigate").disabled = false; }
+    if (e.data) {
+      showBanner(`The investigation failed: ${JSON.parse(e.data).error}`);
+      source.close(); source = null; $("w-investigate").disabled = false;
+    }
   });
   source.onerror = () => {
     if (source && source.readyState === EventSource.CLOSED) {
@@ -506,7 +532,7 @@ async function runBatch() {
         else if (event === "claim_done") setRowStatus(data.claim_id, data.final_verdict);
         else if (event === "batch_done") $("run-status").textContent =
           `Done: ${data.investigated} investigated · ${data.ESCALATE} escalated`;
-        else if (event === "error") showBanner(data.error);
+        else if (event === "error") showBanner(`The lot run failed: ${data.error}`);
       });
   } catch (e) {
     showBanner("Bulk investigation stream failed.");
@@ -585,6 +611,18 @@ async function postDisposition(disposition) {
   $("w-note").value = "";
   $("w-override-verdict").value = "";
   syncOverrideButton();
+  // Apply the save to the open claim immediately. loadQueue below re-syncs from the server, but only
+  // when the claim is still in the current filter — deciding it often removes it (that is the point
+  // of working a queue), and then nothing would refresh the decision line at all.
+  if (state.selectedClaim) {
+    Object.assign(state.selectedClaim, {
+      disposition, decided_verdict: saved.decided_verdict,
+      override_verdict: saved.override_verdict, note: body.note,
+      decided_at: saved.decided_at, decision_stale: false,
+      status: saved.decided_verdict || state.selectedClaim.status,
+    });
+    renderDecision(state.selectedClaim);
+  }
   // Re-fetch both, in this order: a decision changes the claim's effective verdict, so the KPIs and
   // the row's status/filter membership are now stale. Previously only the dashboard was reloaded
   // (and no KPI read dispositions anyway), so a saved decision left the screen looking unchanged.

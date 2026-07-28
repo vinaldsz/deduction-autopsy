@@ -59,7 +59,7 @@ migration entry point is **`python -m semantic_layer.etl`**, which calls `init_d
 backfilled to `decided_verdict='VALID'`, the four legacy accepts correctly left NULL. No deletion was
 needed at any point — `rm data/deductions.db` would have discarded real decisions and real LLM spend.
 
-**Verification:** `pytest -q` — **375 passed, 10 deselected** (was 359). Explicit
+**Verification:** `pytest -q` — **376 passed, 10 deselected** (was 359). Explicit
 `pytest tests/test_etl.py tests/test_db.py -q` — 58 passed, so the **fidelity oracle is untouched**
 (it selects `list(model_cls.model_fields)` over the six business tables and never sees
 `claim_dispositions`; `test_db.py` asserts table/view/index *names*, not columns — confirmed rather
@@ -69,6 +69,38 @@ message, a legitimate override → 200 with `decided_verdict`, and a follow-up a
 `INVALID` and nulling `override_verdict`. The test disposition written to `CLM-004` during that check
 was deleted afterwards; the DB is back to its original 5 dispositions. No live OpenRouter run — no
 agent code was touched.
+
+**Self-review pass — five bugs found and fixed before moving on (four of them introduced by this
+layer's own edits).** Worth recording because none of them were caught by any test, and three are the
+same shape as the bug the previous session fixed ("analyst decisions had no effect on the dashboard"):
+state written to the server and never re-read into the view.
+
+1. **Saving a decision stopped updating the decision line.** The old `postDisposition` set
+   `w-disp-current` directly; the rewrite dropped that line and nothing replaced it — `loadQueue`
+   re-renders rows but never re-runs `renderDecision`. Fixed by applying the save to
+   `state.selectedClaim` locally and re-rendering, *before* the reload — because deciding a claim
+   usually removes it from the current filter (that is the point of working a queue), so a
+   server-only refresh would not have covered it either.
+2. **`state.selectedClaim` went stale after every reload.** Introduced with the stale-badge work: the
+   object captured at selection time was never re-pointed, so the decision line, the stale badge and
+   the re-investigate confirmation could all reason about data several writes out of date.
+   `loadQueue` now re-syncs it from the freshly-loaded row.
+3. **The stale badge never appeared after the action that creates staleness.** `investigateClaim`'s
+   `done` handler called `loadDashboard()` but not `loadQueue()`, so re-investigating a decided claim
+   left the badge invisible until the analyst navigated away and back.
+4. **A note typed for one claim carried over to the next.** `selectClaim` never cleared `w-note` /
+   `w-override-verdict`. The *submission* half of this was pre-existing; this layer made it worse by
+   having the leftover text also enable the Override button on an unrelated claim. Both inputs are
+   now cleared on selection.
+5. **Duplicated verdict derivation.** `ui/server.py` and `orchestrator/dispositions.py` each computed
+   `decided_verdict` independently, so a drift would make the API response contradict the row it had
+   just written. Extracted to `derive_decided_verdict()` and pinned by a test that asserts the shared
+   function agrees with what actually lands in the DB for all three dispositions.
+
+Also tightened while in there: the three `catch` blocks now `console.error` the real error (they wrap
+render code too, so a `TypeError` was indistinguishable from the network being down), and the two SSE
+error paths — which still passed a raw `str(exc)` straight to the banner — get a human prefix. Full
+de-rawing of those two belongs to Layer 40, which owns run reporting.
 
 **Test-suite notes.** Three existing tests failed on the new rules and were rewritten, not weakened:
 `test_upsert_writes_and_refreshes` and `test_disposition_survives_resolution_upsert` both accepted a
