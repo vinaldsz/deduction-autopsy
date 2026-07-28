@@ -20,9 +20,8 @@ async function loadDashboard() {
   const p = d.priority_breakdown;
   $("m-priority").textContent = `${p.HIGH}/${p.MEDIUM}/${p.LOW}`;
   $("m-batch").textContent = d.batch ? `${d.batch.batch_id} (${d.batch.status})` : "—";
-  // needs_me = unresolved + escalated; escalate count isn't in dashboard payload, derive via the batch.
   $("m-escalate").textContent = d.needs_human_review ?? "—";
-  $("m-needsme").textContent = "—";
+  $("m-needsme").textContent = d.needs_me_count ?? "—";
   state.batchId = d.batch ? d.batch.batch_id : null;
 }
 
@@ -33,11 +32,18 @@ function renderRow(claim) {
   tr.dataset.claimId = claim.claim_id;
   tr.tabIndex = 0;
   const disp = claim.disposition ? `<span class="disp-badge">${claim.disposition}</span>` : "";
+  // `status` is the effective verdict, so an override shows the analyst's answer as the claim's
+  // answer. The superseded agent verdict stays visible beside it — dropping it would erase the
+  // audit trail that keeping the two spines separate exists to preserve.
+  const superseded =
+    claim.disposition === "override" && claim.agent_status !== claim.status
+      ? `<span class="status-sup">was ${claim.agent_status}</span>`
+      : "";
   tr.innerHTML =
     `<td>${claim.claim_id}</td><td>${claim.retailer}</td><td>${claim.claimed_reason}</td>` +
     `<td class="num">${dollars(claim.claimed_amount)}</td>` +
     `<td><span class="pill p-${claim.priority}">${claim.priority}</span></td>` +
-    `<td class="status"><span class="dot d-${claim.status}"></span>${claim.status}${disp}</td>`;
+    `<td class="status"><span class="dot d-${claim.status}"></span>${claim.status}${superseded}${disp}</td>`;
   const open = () => selectClaim(claim);
   tr.addEventListener("click", open);
   tr.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
@@ -74,14 +80,6 @@ function setRowStatus(claimId, verdict) {
   if (!tr) return;
   const cell = tr.querySelector(".status");
   cell.innerHTML = `<span class="dot d-${verdict}"></span>${verdict}`;
-}
-
-function setRowDisposition(claimId, disp) {
-  const tr = document.querySelector(`tr[data-claim-id="${claimId}"]`);
-  if (!tr) return;
-  const cell = tr.querySelector(".status");
-  cell.querySelector(".disp-badge")?.remove();
-  cell.insertAdjacentHTML("beforeend", `<span class="disp-badge">${disp}</span>`);
 }
 
 // --- filters / sort / search ---------------------------------------------------------------------
@@ -225,9 +223,12 @@ async function selectClaim(claim) {
   $("trace").innerHTML = "";
   $("usage").textContent = "";
   $("w-disp-status").textContent = "";
-  $("w-disp-current").textContent = claim.disposition ? `Your decision: ${claim.disposition}` : "No analyst decision recorded yet.";
-  $("w-investigate").textContent = claim.status === "unresolved" ? "Investigate" : "Re-investigate";
+  $("w-disp-status").classList.remove("err");
+  $("w-disp-current").textContent = describeDecision(claim);
+  const investigated = claim.status !== "unresolved";
+  $("w-investigate").textContent = investigated ? "Re-investigate" : "Investigate";
   $("w-investigate").disabled = false;
+  setDecisionEnabled(investigated);
 
   // Source documents + reason are always available from the DB, regardless of agent runs.
   const docResp = await fetch(`/api/claims/${encodeURIComponent(claim.claim_id)}/documents`);
@@ -438,6 +439,21 @@ async function runBatch() {
 
 // --- disposition (human decision) ----------------------------------------------------------------
 
+function describeDecision(claim) {
+  if (!claim.disposition) return "No analyst decision recorded yet.";
+  if (claim.disposition === "override") {
+    return `Your decision: override → ${claim.override_verdict} (agents said ${claim.agent_status})`;
+  }
+  return `Your decision: ${claim.disposition}`;
+}
+
+// A verdict can only be accepted or overridden once one exists. Leaving these live on an
+// un-investigated claim invited "accept" on nothing at all.
+function setDecisionEnabled(enabled) {
+  $("w-decision-actions").classList.toggle("hidden", !enabled);
+  $("w-decision-blocked").classList.toggle("hidden", enabled);
+}
+
 async function postDisposition(disposition) {
   if (!state.selected) return;
   const body = { disposition, note: $("w-note").value || null };
@@ -445,12 +461,21 @@ async function postDisposition(disposition) {
   const resp = await fetch(`/api/claims/${encodeURIComponent(state.selected)}/disposition`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
-  if (!resp.ok) { $("w-disp-status").textContent = "Failed to save decision."; return; }
+  const status = $("w-disp-status");
+  if (!resp.ok) {
+    status.textContent = "Failed to save decision.";
+    status.classList.add("err");
+    return;
+  }
   const label = disposition === "override" ? `override → ${body.override_verdict}` : disposition;
+  status.classList.remove("err");
+  status.textContent = `Saved — decision recorded: ${label}.`;
   $("w-disp-current").textContent = `Your decision: ${label}`;
-  $("w-disp-status").textContent = "Saved.";
-  setRowDisposition(state.selected, disposition);
-  loadDashboard();
+  $("w-note").value = "";
+  // Re-fetch both, in this order: a decision changes the claim's effective verdict, so the KPIs and
+  // the row's status/filter membership are now stale. Previously only the dashboard was reloaded
+  // (and no KPI read dispositions anyway), so a saved decision left the screen looking unchanged.
+  await Promise.all([loadDashboard(), loadQueue()]);
 }
 
 // --- wiring --------------------------------------------------------------------------------------

@@ -100,6 +100,88 @@ def test_batch_claims_includes_human_disposition(db):
     assert rows["CLM-B"] is None
 
 
+def _escalate(db, claim_id="CLM-D"):
+    """Give a claim an agent ESCALATE verdict, the state that routes work to the analyst."""
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO claim_resolutions (claim_id, final_verdict, resolved_at) VALUES (?, ?, ?)",
+            (claim_id, "ESCALATE", datetime.now(UTC).isoformat()),
+        )
+
+
+# --- effective verdict: the human's decision outranks the agents' ---------------------------------
+#
+# These pin the bug the analyst hit: dispositions were written but no view read them, so accepting a
+# verdict changed nothing on screen and "Needs human review" could never fall.
+
+
+def test_escalated_claim_awaits_a_human_until_decided(db):
+    _escalate(db)
+    ids = lambda f: [c["claim_id"] for c in queries.batch_claims("LOT-2024-09-15", status_filter=f)["claims"]]
+    assert "CLM-D" in ids("escalated")
+    assert "CLM-D" in ids("needs_me")
+    assert "CLM-D" not in ids("resolved")
+
+
+def test_accepting_settles_the_claim_and_drains_the_queue(db):
+    """The analyst's core complaint: accepting a verdict must move the claim to Resolved."""
+    from orchestrator.dispositions import write_claim_disposition
+
+    _escalate(db)
+    write_claim_disposition(claim_id="CLM-D", disposition="accept", decided_at="t", db_path=db)
+    ids = lambda f: [c["claim_id"] for c in queries.batch_claims("LOT-2024-09-15", status_filter=f)["claims"]]
+    assert "CLM-D" in ids("resolved")
+    assert "CLM-D" not in ids("needs_me")
+    assert "CLM-D" not in ids("escalated")
+
+
+def test_override_replaces_the_effective_verdict_but_keeps_the_agent_verdict(db):
+    from orchestrator.dispositions import write_claim_disposition
+
+    _escalate(db)
+    write_claim_disposition(claim_id="CLM-D", disposition="override",
+                            override_verdict="INVALID", decided_at="t", db_path=db)
+    row = next(c for c in queries.batch_claims("LOT-2024-09-15")["claims"] if c["claim_id"] == "CLM-D")
+    assert row["status"] == "INVALID"        # effective: what the claim's answer is now
+    assert row["agent_status"] == "ESCALATE"  # preserved for the audit trail
+    ids = lambda f: [c["claim_id"] for c in queries.batch_claims("LOT-2024-09-15", status_filter=f)["claims"]]
+    assert "CLM-D" in ids("disputable")
+    assert "CLM-D" not in ids("needs_me")
+
+
+def test_undecided_claims_are_not_dropped_by_the_not_decided_predicate(db):
+    """Regression guard for a SQL NULL trap: `NOT (d.disposition IN (...))` is NULL — not true — for
+    a claim with no disposition row, which would have silently emptied the analyst's whole queue."""
+    _escalate(db)
+    needs_me = queries.batch_claims("LOT-2024-09-15", status_filter="needs_me")
+    assert needs_me["total"] == 4  # 3 un-investigated + the escalated one, none lost to NULL
+
+
+def test_kpis_equal_the_row_counts_of_the_tabs_they_link_to(db):
+    from orchestrator.dispositions import write_claim_disposition
+
+    _escalate(db)
+    metrics = queries.dashboard_metrics()
+    assert metrics["needs_human_review"] == queries.batch_claims(
+        "LOT-2024-09-15", status_filter="escalated")["total"]
+    assert metrics["needs_me_count"] == queries.batch_claims(
+        "LOT-2024-09-15", status_filter="needs_me")["total"]
+
+    # ...and the KPI actually moves when the analyst works the claim.
+    before = queries.dashboard_metrics()["needs_human_review"]
+    write_claim_disposition(claim_id="CLM-D", disposition="accept", decided_at="t", db_path=db)
+    assert queries.dashboard_metrics()["needs_human_review"] == before - 1
+
+
+def test_resolved_this_month_counts_human_decisions_too(db):
+    from orchestrator.dispositions import write_claim_disposition
+
+    before = queries.dashboard_metrics()["resolved_this_month"]
+    write_claim_disposition(claim_id="CLM-A", disposition="accept",
+                            decided_at=datetime.now(UTC).isoformat(), db_path=db)
+    assert queries.dashboard_metrics()["resolved_this_month"] == before + 1
+
+
 def test_unresolved_claim_ids_caps_and_excludes_resolved(db):
     assert queries.unresolved_claim_ids("LOT-2024-09-15", cap=3) == ["CLM-A", "CLM-B", "CLM-C"]
     assert "CLM-E" not in queries.unresolved_claim_ids("LOT-2024-09-15", cap=99)

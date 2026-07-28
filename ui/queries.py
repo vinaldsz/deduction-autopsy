@@ -56,15 +56,53 @@ def _batch_load_date(conn, batch_id: str) -> str:
     return conn.execute("SELECT load_date FROM batches WHERE batch_id = ?", (batch_id,)).fetchone()[0]
 
 
-# SQL status predicates for the worklist filter tabs (applied against the resolution's
-# final_verdict; "unresolved" = no resolution row yet).
+# The effective verdict: the analyst's decision when they have made one, otherwise the agents'.
+#
+# This is the single idea that keeps the dashboard coherent now that there are two verdict spines.
+# `claim_resolutions` records what the AI concluded and is never rewritten by a human — that is the
+# audit trail, and the whole reason it is a separate table from `claim_dispositions`. So "what is
+# this claim's status" has to be *derived* at read time rather than stored, or the human's decision
+# is invisible to every view (which is exactly the bug this replaced: accepting a verdict changed
+# nothing on screen because every KPI and filter read only the agent's row).
+#
+# accept -> falls through to the agent's verdict (that is what accepting means). override -> the
+# analyst's verdict wins. escalate -> ESCALATE; its button is gone from the UI (the analyst *is* the
+# human, so it had no recipient), but the schema still accepts it and older rows still exist.
+_EFFECTIVE_VERDICT = """CASE
+        WHEN d.disposition = 'override' THEN d.override_verdict
+        WHEN d.disposition = 'escalate' THEN 'ESCALATE'
+        ELSE r.final_verdict
+    END"""
+
+# A human has settled the claim. 'escalate' is deliberately excluded: parking a claim for someone
+# else is not deciding it. COALESCE is load-bearing — for a claim with no disposition row
+# `d.disposition` is NULL, and `NOT (NULL IN (...))` is NULL, not true, so an un-decided claim would
+# silently fail every "not yet decided" predicate and vanish from the queue.
+_DECIDED = "COALESCE(d.disposition, '') IN ('accept', 'override')"
+_NOT_DECIDED = "COALESCE(d.disposition, '') NOT IN ('accept', 'override')"
+
+# Every status predicate above references both spines, so both joins are mandatory everywhere they
+# are used — including the COUNT query, which used to join only resolutions.
+_JOINS = (
+    "LEFT JOIN claim_resolutions r ON r.claim_id = c.claim_id "
+    "LEFT JOIN claim_dispositions d ON d.claim_id = c.claim_id"
+)
+
+# SQL status predicates for the worklist filter tabs. Every KPI is counted with the predicate of the
+# tab its card links to, so the number on a card always equals the rows you get by clicking it.
+_ESCALATED_AWAITING_HUMAN = f"({_EFFECTIVE_VERDICT} = 'ESCALATE' AND {_NOT_DECIDED})"
 _STATUS_SQL = {
-    # "needs_me" = the analyst's actual queue: not yet investigated, or escalated for a human.
-    "needs_me": "(r.claim_id IS NULL OR r.final_verdict = 'ESCALATE')",
+    # The analyst's actual queue: never investigated, or escalated and not yet decided.
+    "needs_me": f"(r.claim_id IS NULL OR {_ESCALATED_AWAITING_HUMAN})",
+    # Never investigated at all — so there is no agent verdict to accept or override.
     "unresolved": "r.claim_id IS NULL",
-    "escalated": "r.final_verdict = 'ESCALATE'",
-    "disputable": "r.final_verdict = 'INVALID'",
-    "resolved": "r.claim_id IS NOT NULL",
+    # Reads as the card's label, "needs human review": still awaiting a human, not "ever escalated".
+    # Deciding it drains this, which is what makes the number respond to working the queue.
+    "escalated": _ESCALATED_AWAITING_HUMAN,
+    "disputable": f"{_EFFECTIVE_VERDICT} = 'INVALID'",
+    # Settled: either a human decided it, or the agents reached a verdict that wasn't "ask a human".
+    "resolved": f"({_DECIDED} OR ({_EFFECTIVE_VERDICT} IS NOT NULL "
+                f"AND {_EFFECTIVE_VERDICT} <> 'ESCALATE'))",
 }
 _SORT_SQL = {
     "claim_id": "c.claim_id",
@@ -101,16 +139,13 @@ def batch_claims(
     with closing(connect(_db_path())) as conn:
         ref_date = _batch_load_date(conn, batch_id)
         total = conn.execute(
-            f"SELECT COUNT(*) FROM deduction_claims c "
-            f"LEFT JOIN claim_resolutions r ON r.claim_id = c.claim_id WHERE {where_sql}",
+            f"SELECT COUNT(*) FROM deduction_claims c {_JOINS} WHERE {where_sql}",
             params,
         ).fetchone()[0]
         rows = conn.execute(
             "SELECT c.claim_id, c.po_id, c.retailer, c.claimed_reason, c.claimed_amount, "
-            "c.claim_date, r.final_verdict, d.disposition "
-            "FROM deduction_claims c "
-            "LEFT JOIN claim_resolutions r ON r.claim_id = c.claim_id "
-            "LEFT JOIN claim_dispositions d ON d.claim_id = c.claim_id "
+            f"c.claim_date, {_EFFECTIVE_VERDICT}, r.final_verdict, d.disposition, d.override_verdict "
+            f"FROM deduction_claims c {_JOINS} "
             f"WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
             [*params, limit, offset],
         ).fetchall()
@@ -119,10 +154,15 @@ def batch_claims(
             "claim_id": cid, "po_id": po, "retailer": retailer, "claimed_reason": reason,
             "claimed_amount": amount, "claim_date": cdate,
             "priority": priority(amount, cdate, ref_date),
-            "status": final_verdict or "unresolved",
+            # `status` is the effective verdict (what the claim's answer actually is now);
+            # `agent_status` keeps the AI's original answer so an override can show what it superseded.
+            "status": effective or "unresolved",
+            "agent_status": agent_verdict or "unresolved",
             "disposition": disp,
+            "override_verdict": override_verdict,
         }
-        for cid, po, retailer, reason, amount, cdate, final_verdict, disp in rows
+        for cid, po, retailer, reason, amount, cdate, effective, agent_verdict, disp, override_verdict
+        in rows
     ]
     return {"batch_id": batch_id, "total": total, "offset": offset, "limit": limit, "claims": claims}
 
@@ -191,34 +231,52 @@ def dashboard_metrics() -> dict:
     batch = active_batch()
     if batch is None:
         return {"unresolved_count": 0, "resolved_this_month": 0, "dollars_at_risk_cents": 0,
-                "needs_human_review": 0,
+                "needs_human_review": 0, "needs_me_count": 0,
                 "priority_breakdown": {"HIGH": 0, "MEDIUM": 0, "LOW": 0}, "batch": None}
 
     month_start = datetime.now(UTC).strftime("%Y-%m-01")
     with closing(connect(_db_path())) as conn:
-        summary = conn.execute(
-            "SELECT claims_total, claims_resolved, needs_human_review, dollars_at_risk_cents "
-            "FROM v_batch_summary WHERE batch_id = ?", (batch["batch_id"],)
-        ).fetchone() or (0, 0, 0, 0)
+
+        def count(predicate: str) -> int:
+            return conn.execute(
+                f"SELECT COUNT(*) FROM deduction_claims c {_JOINS} "
+                f"WHERE c.batch_id = ? AND {predicate}",
+                (batch["batch_id"],),
+            ).fetchone()[0]
+
+        # Counted with the same predicates the filter tabs use, so each KPI equals the number of
+        # rows you get by clicking it. These deliberately no longer come from `v_batch_summary`:
+        # that view only knows about `claim_resolutions`, so its needs_human_review could never
+        # respond to an analyst's decision. The view is left untouched for the ETL/batch reporting
+        # that owns it.
+        unresolved_count = count(_STATUS_SQL["unresolved"])
+        needs_human_review = count(_STATUS_SQL["escalated"])
+        needs_me_count = count(_STATUS_SQL["needs_me"])
+        # Settled this month by either spine — an accepted or overridden claim is worked, so it has
+        # to count here or the number stays flat no matter how much the analyst gets through.
         resolved_this_month = conn.execute(
-            "SELECT COUNT(*) FROM claim_resolutions WHERE resolved_at >= ?", (month_start,)
-        ).fetchone()[0]
-        unresolved = conn.execute(
-            "SELECT c.claimed_amount, c.claim_date FROM deduction_claims c "
+            "SELECT COUNT(*) FROM deduction_claims c "
             "LEFT JOIN claim_resolutions r ON r.claim_id = c.claim_id "
-            "WHERE c.batch_id = ? AND r.claim_id IS NULL", (batch["batch_id"],)
+            "LEFT JOIN claim_dispositions d ON d.claim_id = c.claim_id "
+            "WHERE r.resolved_at >= ? OR d.decided_at >= ?",
+            (month_start, month_start),
+        ).fetchone()[0]
+        at_risk = conn.execute(
+            f"SELECT c.claimed_amount, c.claim_date FROM deduction_claims c {_JOINS} "
+            f"WHERE c.batch_id = ? AND NOT ({_STATUS_SQL['resolved']})",
+            (batch["batch_id"],),
         ).fetchall()
 
     breakdown = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
-    for amount, cdate in unresolved:
+    for amount, cdate in at_risk:
         breakdown[priority(amount, cdate, batch["load_date"])] += 1
 
-    claims_total, claims_resolved, needs_human_review, dollars_at_risk_cents = summary
     return {
-        "unresolved_count": claims_total - claims_resolved,
+        "unresolved_count": unresolved_count,
         "resolved_this_month": resolved_this_month,
-        "dollars_at_risk_cents": dollars_at_risk_cents or 0,
-        "needs_human_review": needs_human_review or 0,
+        "dollars_at_risk_cents": sum(amount for amount, _ in at_risk),
+        "needs_human_review": needs_human_review,
+        "needs_me_count": needs_me_count,
         "priority_breakdown": breakdown,
         "batch": {"batch_id": batch["batch_id"], "status": batch["status"]},
     }

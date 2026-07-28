@@ -34,6 +34,10 @@
       background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
       padding: 10px 14px; min-width: 130px; display: flex; flex-direction: column; gap: 3px;
       cursor: pointer; text-align: left;
+      /* Most cards are <button>s, and buttons do NOT inherit color/font from body — the UA
+         stylesheet forces color:buttontext (black), which is invisible on this dark panel. Only
+         .card .k and .card.attn .v set a color explicitly, so every other value rendered black. */
+      color: var(--text); font: inherit;
     }
     .card:hover { border-color: var(--accent); }
     .card.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -159,6 +163,11 @@
     button.ok { background: var(--ok); color: #06210d; }
     button.danger { background: var(--bad); color: #2b0606; }
     .disp-current { font-size: 12px; color: var(--muted); }
+    /* Confirmation has to be legible, not a 12px grey whisper — a saved decision that looks like
+       nothing happened is indistinguishable from a broken button. */
+    .disp-status { font-size: 13px; font-weight: 600; color: var(--ok); }
+    .disp-status.err { color: var(--bad); }
+    .status-sup { color: var(--muted); font-size: 11px; margin-left: 6px; }
     .hidden { display: none; }
   </style>
 </head>
@@ -280,9 +289,11 @@
           <div class="usage" id="usage"></div>
         </details>
 
-        <div class="decision">
+        <div class="decision" id="w-decision">
           <div class="disp-current" id="w-disp-current"></div>
-          <div class="actions">
+          <!-- No "send to human" button: the analyst IS the human this system escalates to, so it
+               had no recipient. The agents' own ESCALATE verdict is what routes work here. -->
+          <div class="actions" id="w-decision-actions">
             <button class="ok sm" data-disp="accept">Accept verdict</button>
             <button class="danger sm" data-disp="override">Override →</button>
             <select id="w-override-verdict">
@@ -290,10 +301,14 @@
               <option value="INVALID">INVALID</option>
               <option value="ESCALATE">ESCALATE</option>
             </select>
-            <button class="ghost sm" data-disp="escalate">Send to human</button>
             <input class="note" id="w-note" type="text" placeholder="Note (optional)" />
           </div>
-          <span id="w-disp-status" class="muted"></span>
+          <!-- Shown instead of the buttons until the claim has been investigated: there is no
+               verdict to accept or override before then. -->
+          <div class="muted hidden" id="w-decision-blocked">
+            Not investigated yet — run the investigation before recording a decision.
+          </div>
+          <span id="w-disp-status" class="disp-status"></span>
         </div>
       </div>
     </section>
