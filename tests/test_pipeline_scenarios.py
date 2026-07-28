@@ -34,6 +34,25 @@ pytestmark = [
 ]
 
 
+# The tool name behind each production REQUIRED_TOOL_CALLS entry, keyed the same way the
+# production gate is (by claim_id). The sync assertion below runs at import — i.e. during
+# collection of a normal `pytest` run, even though every test here is deselected as
+# integration — so re-keying the production dict can't silently strand these assertions
+# again (Layer 29 re-keyed it from scenario ids to claim ids, and this lookup kept asking
+# for "s02", quietly returning None for every case).
+REQUIRED_TOOL_NAMES = {
+    "CLM-002": "normalize_uom",
+    "CLM-003": "get_asns_for_po",
+    "CLM-006": "get_trade_agreement",
+    "CLM-007b": "list_claims_for_po",
+    "CLM-008": "list_claims_for_po",
+}
+assert REQUIRED_TOOL_NAMES.keys() == REQUIRED_TOOL_CALLS.keys(), (
+    "REQUIRED_TOOL_NAMES is out of sync with orchestrator.pipeline.REQUIRED_TOOL_CALLS: "
+    f"{sorted(REQUIRED_TOOL_NAMES)} != {sorted(REQUIRED_TOOL_CALLS)}"
+)
+
+
 def _investigator_tool_names(run_dir: Path) -> set[str]:
     trace_path = run_dir / "reasoning_trace.json"
     trace = json.loads(trace_path.read_text())
@@ -60,15 +79,8 @@ async def test_scenario_matches_ground_truth(case, tmp_path):
     assert (run_dir / "reasoning_trace.json").exists()
     assert (run_dir / "dispute_packet.md").exists() == (result.final_verdict == "INVALID")
 
-    required_check = REQUIRED_TOOL_CALLS.get(case["scenario"][:3])
-    if required_check is not None:
-        required_tool = {
-            "s02": "normalize_uom",
-            "s03": "get_asns_for_po",
-            "s06": "get_trade_agreement",
-            "s07": "list_claims_for_po",
-            "s08": "list_claims_for_po",
-        }[case["scenario"][:3]]
+    required_tool = REQUIRED_TOOL_NAMES.get(case["claim_id"])
+    if required_tool is not None:
         assert required_tool in _investigator_tool_names(result.run_dir)
 
 
