@@ -5,6 +5,7 @@ import pytest
 from fastmcp import Client
 
 from agents.base import ToolCallRecord
+from mcp_server.db import connect
 from mcp_server.server import mcp
 from orchestrator.config import SETTINGS
 from orchestrator.pipeline import (
@@ -15,7 +16,7 @@ from orchestrator.pipeline import (
     run_pipeline,
     strip_reasoning,
 )
-from tests.agent_stubs import StubAsyncOpenAI, make_completion
+from tests.agent_stubs import StubAsyncOpenAI, floor_tool_calls, make_completion
 
 VALID_CASE_FILE_JSON = json.dumps(
     {
@@ -60,6 +61,23 @@ INVALID_CASE_FILE_JSON = json.dumps(
 )
 
 
+def _corrections_sent(stub, needle: str) -> list[str]:
+    """The distinct correction messages the pipeline injected into a retry, found by content rather
+    than by request index (the index shifts whenever a scripted turn is added).
+
+    Deduplicated because one correction is carried in the user message for the whole attempt, so it
+    reappears in every model turn of that attempt — the interesting count is how many corrections
+    were issued, not how many requests echoed one.
+    """
+    seen = {
+        message["content"]
+        for request in stub.requests
+        for message in request["messages"]
+        if message["role"] == "user" and needle in message["content"]
+    }
+    return sorted(seen)
+
+
 def confirm_json(claim_id: str) -> str:
     return json.dumps(
         {
@@ -84,6 +102,7 @@ def confirm_json(claim_id: str) -> str:
 async def test_happy_path_valid_confirmed_no_dispute_packet(monkeypatch, tmp_path):
     stub = StubAsyncOpenAI(
         [
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-001")),
         ]
@@ -130,6 +149,7 @@ async def test_reruns_are_archived_side_by_side_and_latest_repoints(monkeypatch,
     async def _run(run_id: str):
         stub = StubAsyncOpenAI(
             [
+                floor_tool_calls("CLM-001"),
                 make_completion(content=VALID_CASE_FILE_JSON),
                 make_completion(content=confirm_json("CLM-001")),
             ]
@@ -158,6 +178,7 @@ async def test_run_id_defaults_to_a_generated_timestamp(monkeypatch, tmp_path):
     """Omitting run_id auto-generates one so the default path is non-overwriting too."""
     stub = StubAsyncOpenAI(
         [
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-001")),
         ]
@@ -183,6 +204,7 @@ async def test_constructs_openai_client_with_configured_timeout(monkeypatch, tmp
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     stub = StubAsyncOpenAI(
         [
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-001")),
         ]
@@ -211,15 +233,7 @@ async def test_constructs_openai_client_with_configured_timeout(monkeypatch, tmp
 async def test_happy_path_invalid_confirmed_writes_dispute_packet(monkeypatch, tmp_path):
     stub = StubAsyncOpenAI(
         [
-            make_completion(
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "name": "normalize_uom",
-                        "args": {"qty": 5, "from_uom": "CASE", "to_uom": "EACH", "sku": "SKU-002"},
-                    }
-                ]
-            ),
+            floor_tool_calls("CLM-002"),
             make_completion(content=INVALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-002")),
         ]
@@ -245,6 +259,7 @@ async def test_missing_required_field_triggers_correction_retry(monkeypatch, tmp
     stub = StubAsyncOpenAI(
         [
             make_completion(content=incomplete),
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-001")),
         ]
@@ -259,10 +274,7 @@ async def test_missing_required_field_triggers_correction_retry(monkeypatch, tmp
         )
 
     assert result.investigator_verdict == "VALID"
-    second_attempt_user_message = next(
-        m for m in stub.requests[1]["messages"] if m["role"] == "user"
-    )
-    assert "could not be parsed" in second_attempt_user_message["content"]
+    assert len(_corrections_sent(stub, "could not be parsed")) == 1
 
 
 async def test_verdict_json_sums_usage_across_investigator_retries(monkeypatch, tmp_path):
@@ -270,6 +282,7 @@ async def test_verdict_json_sums_usage_across_investigator_retries(monkeypatch, 
     stub = StubAsyncOpenAI(
         [
             make_completion(content=incomplete, usage=(40, 5)),
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON, usage=(60, 15)),
             make_completion(content=confirm_json("CLM-001"), usage=(25, 8)),
         ]
@@ -294,18 +307,18 @@ async def test_verdict_json_sums_usage_across_investigator_retries(monkeypatch, 
 
 
 async def test_missing_required_tool_call_triggers_correction_retry(monkeypatch, tmp_path):
+    """Attempt 1 collects every document but never normalizes UOM, so the *conditional* requirement
+    is what fails and the correction must name it.
+
+    Deliberately not "no tool calls at all" (how this read before Layer 31): with a universal floor
+    that would fail the floor instead, and a generic assertion would still have passed — a green test
+    that had stopped covering the UOM rule.
+    """
     stub = StubAsyncOpenAI(
         [
-            make_completion(content=INVALID_CASE_FILE_JSON),  # valid JSON, but no normalize_uom call
-            make_completion(
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "name": "normalize_uom",
-                        "args": {"qty": 5, "from_uom": "CASE", "to_uom": "EACH", "sku": "SKU-002"},
-                    }
-                ]
-            ),
+            floor_tool_calls("CLM-002", omit="normalize_uom"),
+            make_completion(content=INVALID_CASE_FILE_JSON),
+            floor_tool_calls("CLM-002"),
             make_completion(content=INVALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-002")),
         ]
@@ -320,10 +333,9 @@ async def test_missing_required_tool_call_triggers_correction_retry(monkeypatch,
         )
 
     assert result.investigator_verdict == "INVALID"
-    second_attempt_user_message = next(
-        m for m in stub.requests[1]["messages"] if m["role"] == "user"
-    )
-    assert "did not make the tool call" in second_attempt_user_message["content"]
+    corrections = _corrections_sent(stub, "investigation is incomplete")
+    assert len(corrections) == 1
+    assert "normalize_uom" in corrections[0]
 
 
 async def test_exceeding_max_attempts_raises_pipeline_error(monkeypatch, tmp_path):
@@ -348,6 +360,7 @@ async def test_exceeding_max_attempts_raises_pipeline_error(monkeypatch, tmp_pat
 async def test_reviewer_receives_case_file_without_reasoning(monkeypatch, tmp_path):
     stub = StubAsyncOpenAI(
         [
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-001")),
         ]
@@ -388,9 +401,7 @@ def test_strip_reasoning_drops_only_the_reasoning_field():
 async def test_tool_call_hooks_fire_only_for_their_own_agent(monkeypatch, tmp_path):
     stub = StubAsyncOpenAI(
         [
-            make_completion(
-                tool_calls=[{"id": "call_1", "name": "get_po", "args": {"po_id": "PO-001"}}]
-            ),
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(
                 tool_calls=[{"id": "call_2", "name": "get_po", "args": {"po_id": "PO-001"}}]
@@ -434,6 +445,71 @@ def test_resolve_final_verdict(investigator_verdict, reviewer_verdict, expected)
 
 
 @pytest.mark.parametrize(
+    "investigator_verdict,reviewer_verdict",
+    [
+        ("VALID", "CONFIRM"),
+        ("INVALID", "CONFIRM"),
+        ("VALID", "OVERTURN"),
+        ("INVALID", "OVERTURN"),
+        ("INVALID", "ESCALATE"),
+    ],
+)
+def test_a_data_gap_forces_escalate_whatever_the_agents_said(
+    investigator_verdict, reviewer_verdict
+):
+    """Layer 31: a claim whose source documents are provably absent cannot be decided, so the
+    orchestrator widens any agreed verdict to ESCALATE."""
+    assert (
+        _resolve_final_verdict(investigator_verdict, reviewer_verdict, ["no invoice for PO-T"])
+        == "ESCALATE"
+    )
+
+
+async def test_pipeline_escalates_end_to_end_when_a_document_is_absent(monkeypatch, tmp_path):
+    """The wiring, not just the pure resolver: against a store missing CLM-001's invoice, both agents
+    agree on VALID/CONFIRM and the run still lands on ESCALATE.
+
+    The corpus is complete, so this branch is unreachable without doctoring a copy of the DB.
+    """
+    from semantic_layer.etl import build_db
+
+    db_path = tmp_path / "gap.db"
+    build_db(db_path=db_path)
+    with connect(db_path) as conn:
+        conn.execute("DELETE FROM invoices WHERE po_id = 'PO-001'")
+    monkeypatch.setenv("DEDUCTIONS_DB", str(db_path))
+
+    stub = StubAsyncOpenAI(
+        [
+            floor_tool_calls("CLM-001"),
+            make_completion(content=VALID_CASE_FILE_JSON),
+            make_completion(content=confirm_json("CLM-001")),
+        ]
+    )
+    async with Client(mcp) as mcp_client:
+        result = await run_pipeline(
+            claim_id="CLM-001",
+            openai_client=stub,
+            mcp_client=mcp_client,
+            output_dir=tmp_path / "out",
+        )
+
+    assert result.investigator_verdict == "VALID"
+    assert result.reviewer_verdict == "CONFIRM"
+    assert result.final_verdict == "ESCALATE"
+    # ESCALATE is not INVALID, so no dispute packet is produced.
+    assert not (result.run_dir / "dispute_packet.md").exists()
+
+
+def test_gap_override_only_widens_and_an_empty_gap_list_is_inert():
+    """The override must never narrow a verdict to VALID/INVALID, and no-gaps must behave exactly
+    as before it existed."""
+    assert _resolve_final_verdict("VALID", "CONFIRM", []) == "VALID"
+    assert _resolve_final_verdict("VALID", "CONFIRM", ()) == "VALID"
+    assert _resolve_final_verdict("INVALID", "OVERTURN", []) == "VALID"
+
+
+@pytest.mark.parametrize(
     "raw,expected",
     [
         ('{"a": 1}', '{"a": 1}'),
@@ -464,6 +540,7 @@ async def test_happy_path_survives_prose_before_fenced_json(monkeypatch, tmp_pat
     )
     stub = StubAsyncOpenAI(
         [
+            floor_tool_calls("CLM-001"),
             make_completion(content=prose_wrapped_case_file),
             make_completion(content=confirm_json("CLM-001")),
         ]
@@ -488,7 +565,11 @@ async def test_run_writes_claim_resolution_and_reruns_upsert(monkeypatch, tmp_pa
 
     def _run_once():
         stub = StubAsyncOpenAI(
-            [make_completion(content=VALID_CASE_FILE_JSON), make_completion(content=confirm_json("CLM-001"))]
+            [
+                floor_tool_calls("CLM-001"),
+                make_completion(content=VALID_CASE_FILE_JSON),
+                make_completion(content=confirm_json("CLM-001")),
+            ]
         )
 
         async def _go():

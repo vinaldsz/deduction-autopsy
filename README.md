@@ -19,8 +19,8 @@ Full domain spec: [`docs/SPEC.md`](docs/SPEC.md). Full implementation plan:
 ## Status
 
 This project was built layer by layer (see [`PROGRESS.md`](PROGRESS.md) for the
-authoritative, up-to-date state). All layers are complete except Layer 31, which is
-deliberately deferred pending sign-off (it touches the agent prompts — see "Future work"):
+authoritative, up-to-date state). All layers are complete (31 was built last, after 32, because
+it was gated on sign-off — it is the only layer that edits the agent prompts):
 
 | Layer | What | Status |
 |---|---|---|
@@ -55,7 +55,7 @@ deliberately deferred pending sign-off (it touches the agent prompts — see "Fu
 | 29 | Scenario-less pipeline + CLI + resolution persistence | ✅ Done |
 | 30a | Synthetic daily lot (~50 claims) — `CLM-SYN` volume for the worklist | ✅ Done |
 | 30b | Dashboard + daily-lot worklist UI (`ui/queries.py`, removes `/api/scenarios`) | ✅ Done |
-| 31 | Universal completeness check + ESCALATE on missing source data | ⏸ Deferred (needs sign-off) |
+| 31 | Universal completeness check + ESCALATE on missing source data (`orchestrator/completeness.py`) | ✅ Done |
 | 32 | Analyst review workspace — evidence-first UI + human decisions (`claim_dispositions`, `cli/process_lot.py`) | ✅ Done |
 
 ## Setup
@@ -236,11 +236,12 @@ detail.
 These are deliberately out of scope for the current build (see [`CLAUDE.md`](CLAUDE.md)'s
 "Explicit out of scope" section for the authoritative list):
 
-- **Universal completeness check + ESCALATE on missing source data** (Layer 31, deferred) —
-  the pipeline's `REQUIRED_TOOL_CALLS` gate is keyed per claim; replacing it with a universal
-  minimum-investigation requirement, and teaching both agents to ESCALATE on genuinely missing or
-  contradictory source data (driven by the ETL's quarantine/DQ signals), would be the honest
-  generalization. It changes the agent prompts, so it needs explicit sign-off before it's built.
+- **Wiring the ETL's quarantine/DQ signals into escalation** — Layer 31 escalates on documents that
+  are *absent* from the store, but a row the ETL **quarantined** is invisible to it: `reject_rows`
+  records only batch/source/raw_row/reason, dropping `source_row_ref` and `target`, and the DQ report
+  aggregates per source file. So nothing can tie a quarantined row back to a `claim_id`. Doing it
+  properly means adding `target` + `entity_pk` columns and backfilling them in the loader — an ETL
+  schema change, which is why it was scoped out of Layer 31 rather than bolted on.
 - **Parallel/concurrent orchestration** — scenarios and claims currently run sequentially.
 - **SKU-to-product-name mapping** — SKUs stay opaque codes (e.g. `SKU-001`) everywhere; a
   display-only product catalog for dispute packets would be cosmetic, not functional.

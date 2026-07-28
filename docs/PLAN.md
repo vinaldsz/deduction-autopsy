@@ -451,12 +451,24 @@ Data model + relational schema, ETL contract, and the updated UI API contract li
   investigation" button; rows fill live with verdict/dispute-grounds/priority (ESCALATE flagged);
   row drill-in reuses the existing trace/verdict rendering. Update `tests/test_ui_server.py`.
 
-### 31. (deferred, needs sign-off) Universal completeness + escalate-on-missing
+### 31. Universal completeness + escalate-on-missing — BUILT (signed off; built after Layer 32)
 
-- Replace claim-keyed `REQUIRED_TOOL_CALLS` with a universal minimum-investigation requirement and
-  update Investigator/Reviewer prompts to ESCALATE on genuinely missing/contradictory source data
-  (powered by the ETL's quarantine/DQ signals). Touches agent prompts → separate sign-off. Not
-  built now; kept here + in README as future work.
+- Replaced claim-keyed `REQUIRED_TOOL_CALLS` with `orchestrator/completeness.py`:
+  `required_tool_calls(claim_id)` (universal floor anchored to the authoritative `po_id`, plus
+  conditionals derived from the store — mixed UOM → `normalize_uom`, `promo_billback` →
+  `get_trade_agreement`) and `data_gaps(claim_id)` (absent documents → deterministic ESCALATE via
+  `_resolve_final_verdict`, one-directional). Both prompts updated: Investigator handles tool
+  `ERROR`s and stops substituting zeros for unreadable documents; Reviewer gets a trusted
+  `<orchestrator_findings>` block and a `data_completeness_check` that can only ESCALATE, never
+  OVERTURN.
+- **Scope reduction, recorded:** the "powered by the ETL's quarantine/DQ signals" half was dropped.
+  `reject_rows` stores only batch/source/raw_row/reason — `source_row_ref` and `target` are never
+  persisted — and `DQReport` aggregates per source *file*, so a DQ signal cannot be tied to a
+  `claim_id` without adding `target`/`entity_pk` columns and backfilling them in the loader. That is
+  an ETL schema change, so it is now README future work rather than a bolted-on approximation.
+- **Verify:** offline suite green (352 passed); live 8-scenario ground-truth suite green (9 passed);
+  plus a doctored-DB gap probe, since the real corpus has 0 gaps and 0 reject rows and therefore
+  cannot exercise the escalation path at all.
 
 **Rule:** same as every prior phase — one commit per layer; do not start layer N+1 until layer N
 has passing tests. Layers 23 and 24 gate the rest (schema, then sources, before any ETL code).

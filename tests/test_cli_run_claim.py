@@ -6,7 +6,7 @@ from rich.console import Console
 
 from cli.run_claim import main, parse_args
 from mcp_server.server import mcp
-from tests.agent_stubs import StubAsyncOpenAI, make_completion
+from tests.agent_stubs import StubAsyncOpenAI, floor_tool_calls, make_completion
 from tests.test_orchestrator_pipeline import (
     INVALID_CASE_FILE_JSON,
     VALID_CASE_FILE_JSON,
@@ -52,6 +52,7 @@ def test_parse_args_overrides():
 async def test_happy_path_prints_verdict_and_returns_zero(monkeypatch, tmp_path):
     stub = StubAsyncOpenAI(
         [
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-001")),
         ]
@@ -126,18 +127,7 @@ async def test_missing_api_key_returns_one_without_network(monkeypatch):
 async def test_explain_prints_tool_calls_case_file_and_review_findings(monkeypatch, tmp_path):
     stub = StubAsyncOpenAI(
         [
-            make_completion(
-                tool_calls=[{"id": "call_1", "name": "get_po", "args": {"po_id": "PO-002"}}]
-            ),
-            make_completion(
-                tool_calls=[
-                    {
-                        "id": "call_2",
-                        "name": "normalize_uom",
-                        "args": {"qty": 5, "from_uom": "CASE", "to_uom": "EACH", "sku": "SKU-002"},
-                    }
-                ]
-            ),
+            floor_tool_calls("CLM-002"),
             make_completion(content=INVALID_CASE_FILE_JSON),
             make_completion(
                 tool_calls=[
@@ -209,6 +199,7 @@ async def test_explain_prints_overturn_callout_pointing_to_dispute_grounds(monke
     )
     stub = StubAsyncOpenAI(
         [
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=overturn_json),
         ]
@@ -241,6 +232,7 @@ async def test_explain_prints_overturn_callout_pointing_to_dispute_grounds(monke
 async def test_without_explain_output_is_unchanged(monkeypatch, tmp_path):
     stub = StubAsyncOpenAI(
         [
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=confirm_json("CLM-001")),
         ]

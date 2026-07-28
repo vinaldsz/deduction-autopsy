@@ -1,6 +1,105 @@
 # Progress
 
 ## Current layer
+**Layer 31 — Universal completeness check + ESCALATE on missing source data complete**
+
+Built out of numeric order (after Layer 32) because it was gated on sign-off: it is the only layer
+that edits the agent prompts. Retires the `REQUIRED_TOOL_CALLS` answer key — a dict hardcoded to 5
+claim ids, so 47 of 52 claims had **no** completeness check — and replaces it with requirements
+**computed per claim from the store**, plus a deterministic ESCALATE when source data is genuinely
+absent. The 8 ground-truth verdicts are unchanged (re-verified live).
+
+**Scope decisions (user-approved).** PLAN.md called for ESCALATE "powered by the ETL's quarantine/DQ
+signals"; that capability does not exist — `reject_rows` drops `source_row_ref`/`target` and
+`DQReport` aggregates per source *file*, so no DQ signal can be tied to a `claim_id`. Wiring it needs
+an ETL schema change, so it moved to future work and this layer covers **missing documents** only.
+
+**`orchestrator/completeness.py`** (new; DB-backed, pure, agent-independent — same
+resolve-`DEDUCTIONS_DB`-at-call-time pattern as `orchestrator/resolutions.py`). Separates two
+questions that were previously conflated: `required_tool_calls(claim_id)` — *did the agent do the
+work?* (recoverable → correction retry) — and `data_gaps(claim_id)` — *is the data even there?*
+(not the agent's fault, unfixable by retrying → forces ESCALATE). Requirements are a universal floor
+(claim + PO + ASNs + invoice + receiving + `list_claims_for_po`) **anchored to the authoritative
+`po_id`**, plus conditionals derived from the store: >1 distinct UOM across the documents →
+`normalize_uom` required; `claimed_reason == promo_billback` → `get_trade_agreement` required. Those
+two reproduce the old CLM-002/CLM-006 rules and now cover all 7 mixed-UOM and all 6 promo claims.
+`unmet(requirements, trace)` returns the unsatisfied ones, floor before conditionals.
+
+**Why gaps come from the DB, not the trace** (this inverted the original design): only 4 of the 8
+tools can raise — `get_asns_for_po`/`list_claims_for_po` return `[]` and `get_trade_agreement`
+returns `None` — so a trace-derived check structurally *cannot* see a missing ASN. And since the
+corpus is complete, an `is_error` record in practice means the agent passed a bad id (the
+claim_id-for-po_id slip both prompts are hardened against); escalating on it would convert a
+recoverable typo into a wrong verdict. `is_error` now only means "requirement unsatisfied", never
+"data missing".
+
+**The s03 near-miss.** A floor entry of merely "non-error `get_asns_for_po`" would have been *weaker*
+than the old CLM-003 rule (`>=2` results), because the tool returns `[]` instead of raising — an
+Investigator querying a wrong PO would read "0 shipped" and call a split shipment a total shortage,
+flipping s03 INVALID→VALID. PO-003 is the only 2-ASN PO in the store, so this was the single place it
+would have bitten. Fixed by pinning requirements to the real `po_id` and carrying the store's actual
+ASN count as `min_results`.
+
+**`orchestrator/pipeline.py`:** `REQUIRED_TOOL_CALLS`/`_required_tool_call_check` deleted.
+`_run_investigator_until_valid` takes `requirements` and returns the still-unmet list; the correction
+message now **names the specific missing calls with their ids** instead of a generic nudge.
+Exhausting attempts on an *incomplete* investigation returns the valid CaseFile and escalates rather
+than raising `PipelineError` (a parse failure, where no CaseFile exists, still raises).
+`_resolve_final_verdict(..., blockers=())` forces ESCALATE on any blocker — **one-directional: it may
+only widen to ESCALATE, never narrow to VALID/INVALID**, and is grounded only in code-established
+fact, never a model self-report. Claims with a gap skip the diligence gate entirely (they escalate
+regardless, so retries would be wasted spend).
+
+**Agents.** `ReviewFindings` gains `data_completeness_check` (declared last; `ui/static/app.js`
+renders chips via `Object.entries`, so the 7th chip appears with no UI change, and the default keeps
+existing payloads valid). The Reviewer now receives a separate `<orchestrator_findings>` block —
+deliberately *outside* `<case_file>`, which its prompt frames as untrusted — described in the prompt
+as verified fact. Its carve-out is narrow on purpose: the 7th check is **not a dispute ground, never
+justifies OVERTURN**, fires only from an orchestrator finding, and self-inferred gaps are forbidden
+(an empty prior-claims list or a non-matching trade agreement are ordinary findings, not missing
+data). The Investigator prompt gains tool-`ERROR` handling (check the id and retry first, escalate
+only if it still fails), an explicit ESCALATE trigger, and a fix to the sentence that taught
+papering-over — "use empty lists/false/0 where a step found nothing" now distinguishes *looked and
+found nothing* from *could not read it*, which is the difference between a finding and fabricated
+evidence.
+
+**No `CaseFile.data_gaps` field** — a model-authored field the code would ignore, landing in
+`case_file.json` where a hallucinated entry could mislead an analyst.
+
+**Test migration.** The universal floor broke 20 stubbed `run_pipeline` scripts (they scripted 0–2
+tool calls). Rather than a bypass flag every test would disable, `tests/agent_stubs.py` gains
+`floor_tool_calls(claim_id, omit=...)` — **one** completion with the calls batched (which is also how
+the real models behave), generated from `required_tool_calls` itself so it cannot drift from the gate.
+Positional `stub.requests[1]` assertions were replaced with a content search (`_corrections_sent`),
+so adding a scripted turn no longer shifts indices. `test_missing_required_tool_call_triggers_
+correction_retry` was restructured: it used to script *no* tool calls, which under a floor would fail
+the floor and still pass its generic assertion — a green test that had stopped covering the UOM rule.
+`tests/test_pipeline_scenarios.py`'s parallel tool-name map is gone; it now asserts every computed
+requirement appears in the live trace, which is both stronger and undriftable.
+
+**Verification.** `pytest -q` — **352 passed, 10 deselected** (306 before, +46); `pyright` 0 errors;
+`node --check` on app.js clean. New `tests/test_completeness.py` (33 tests) covers all 52 claims,
+asserts `data_gaps == []` for every ground-truth claim (the insurance that the override can't move a
+live verdict), and exercises every gap branch against controlled temp DBs — necessary because the
+real corpus has 0 gaps and 0 reject rows.
+
+**Live:** `pytest tests/test_pipeline_scenarios.py -m integration` — **9 passed in 5m29s**, all 8
+ground-truth verdicts intact under both the new prompts and the stricter gate, with the re-armed
+requirement assertion now actually executing. Plus a **gap probe** the scenario suite structurally
+cannot perform (0 gaps in the corpus): a doctored DB copy with `CLM-SYN-0001`'s invoice deleted →
+`data_gaps` reported it, the Reviewer set `data_completeness_check: FAIL` and chose ESCALATE on its
+own from `<orchestrator_findings>`, final verdict ESCALATE, no dispute packet written.
+
+**Honest finding from the probe:** the Investigator named the missing document in its reasoning
+("Invoice document is unavailable") — so the anti-papering-over half of the prompt edit worked — but
+still proposed VALID rather than ESCALATE, judging the shortage sufficiently documented without it.
+The layered design is exactly why that didn't matter: the Reviewer escalated and the deterministic
+override guaranteed ESCALATE regardless. Left as-is rather than tightening the prompt further, since
+that would risk the 8 verdicts for a control that is already redundant.
+
+---
+
+## Previous layer
 **Layer 32 — Analyst review workspace (evidence-first UI + human decisions) complete**
 
 Reworks the Layer-30b worklist into a two-pane **analyst workspace**. The prior UI surfaced only the

@@ -24,7 +24,7 @@ from fastmcp import Client
 from mcp_server.fixtures import FixtureLoader
 from mcp_server.server import mcp
 from orchestrator.pipeline import run_pipeline
-from tests.agent_stubs import StubAsyncOpenAI, make_completion
+from tests.agent_stubs import StubAsyncOpenAI, floor_tool_calls, make_completion
 from tests.test_orchestrator_pipeline import VALID_CASE_FILE_JSON, confirm_json
 
 # An adversarial note that tries to flip s01 (a genuine VALID/CONFIRM) to the wrong verdict.
@@ -61,11 +61,10 @@ async def test_offline_injected_note_is_carried_as_data_and_pipeline_stays_valid
 
     stub = StubAsyncOpenAI(
         [
-            # Investigator turn 1: fetch the (poisoned) receiving record, so the injected note
-            # enters the tool-result messages exactly as a real run would surface it.
-            make_completion(
-                tool_calls=[{"id": "c1", "name": "get_receiving_record", "args": {"po_id": "PO-001"}}]
-            ),
+            # Investigator turn 1: the full Layer-31 minimum investigation, which includes fetching
+            # the (poisoned) receiving record, so the injected note enters the tool-result messages
+            # exactly as a real run would surface it.
+            floor_tool_calls("CLM-001"),
             # Investigator turn 2: emit the correct s01 CaseFile (proposed_verdict VALID).
             make_completion(content=VALID_CASE_FILE_JSON),
             # Reviewer: confirm.

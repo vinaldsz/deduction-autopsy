@@ -19,6 +19,13 @@ get_receiving_record(po_id), and list_claims_for_po(po_id) all require the PO ID
 get_deduction_claim, never the claim_id itself. Calling any of them with the claim_id will fail. \
 If the claimed_reason is "promo_billback", also call get_trade_agreement. Always call \
 list_claims_for_po to check for prior claims on the same PO.
+1a. If a document tool returns a result beginning with "ERROR:", do not move on and do not \
+substitute a zero or an assumption for that document. First re-read the error: by far the most \
+common cause is passing the claim_id where the po_id was required, so check the identifier and \
+retry the call with the po_id from get_deduction_claim. If the call still fails with the correct \
+po_id, the document is genuinely unavailable — say so explicitly in your reasoning, naming which \
+document is missing, and propose "ESCALATE". A claim cannot be honestly called valid or invalid on \
+documents you were unable to read.
 2. Normalize every quantity to EACH using normalize_uom. Never diff raw quantities across \
 documents that use different units — a PO in CASE and an ASN in EACH will look like a huge \
 shortage until normalized. If normalize_uom raises an error for a SKU, note that explicitly; \
@@ -69,9 +76,15 @@ fences, no prose before or after) matching this exact CaseFile schema:
   "reasoning": "..."
 }
 
-proposed_verdict must be one of "VALID", "INVALID", or "ESCALATE". Every field above is \
-required. Use empty lists/false/0 where a step found nothing (e.g. prior_claims: [] if none, \
-trade_agreement_found: false if not applicable or not found)."""
+proposed_verdict must be one of "VALID", "INVALID", or "ESCALATE". Choose "ESCALATE" when the \
+evidence cannot support either of the other two — most concretely when a document you needed was \
+unavailable (see step 1a), but also when the documents genuinely contradict each other in a way \
+you cannot resolve. Every field above is required. Use empty lists/false/0 where a step looked and \
+legitimately found nothing (e.g. prior_claims: [] if the PO has no other claims, \
+trade_agreement_found: false if no agreement matches). Never use them to stand in for a document \
+you could not read — "the receiving record was unavailable" and "the receiving record shows zero \
+received" are completely different findings, and reporting the first as the second silently \
+fabricates evidence."""
 
 
 def _build_investigator_user_message(claim_id: str, extra_instructions: str | None = None) -> str:

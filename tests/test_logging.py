@@ -16,6 +16,7 @@ from mcp_server.server import mcp
 from orchestrator.pipeline import PipelineError, run_pipeline
 from tests.agent_stubs import (
     StubAsyncOpenAI,
+    floor_tool_calls,
     make_completion,
     make_status_error,
 )
@@ -62,7 +63,11 @@ class _FakeSleep:
 
 async def test_pipeline_start_and_final_verdict_are_logged(monkeypatch, tmp_path, caplog):
     stub = StubAsyncOpenAI(
-        [make_completion(content=VALID_CASE_FILE_JSON), make_completion(content=CONFIRM_JSON)]
+        [
+            floor_tool_calls("CLM-001"),
+            make_completion(content=VALID_CASE_FILE_JSON),
+            make_completion(content=CONFIRM_JSON),
+        ]
     )
 
     with caplog.at_level(logging.INFO, logger="orchestrator.pipeline"):
@@ -87,6 +92,7 @@ async def test_case_file_validation_failure_logs_warning(monkeypatch, tmp_path, 
     stub = StubAsyncOpenAI(
         [
             make_completion(content="I could not complete the investigation."),
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=CONFIRM_JSON),
         ]
@@ -132,6 +138,7 @@ async def test_validation_failure_log_cannot_forge_a_second_line(monkeypatch, tm
     stub = StubAsyncOpenAI(
         [
             make_completion(content=incomplete),
+            floor_tool_calls("CLM-001"),
             make_completion(content=VALID_CASE_FILE_JSON),
             make_completion(content=CONFIRM_JSON),
         ]

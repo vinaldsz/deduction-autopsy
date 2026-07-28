@@ -57,6 +57,55 @@ def make_completion(content=None, tool_calls=None, usage=None):
     )
 
 
+def floor_tool_calls(claim_id: str, *, omit: str | None = None):
+    """One scripted assistant turn whose batched tool calls satisfy the Layer-31 completeness gate.
+
+    Since Layer 31 the pipeline requires a full minimum investigation of *every* claim
+    (orchestrator/completeness.py), so a stubbed `run_pipeline` script has to contain those calls or
+    the gate triggers a correction retry and the scripted queue runs dry. Generated from
+    `required_tool_calls` itself rather than a hardcoded list, so it cannot drift from the gate.
+
+    One completion, not six: `make_completion` takes a list of tool calls and `agents/base.py`
+    executes them all in a single loop iteration — which is also how the real models behave (live
+    traces show 6-8 calls across 3-4 turns).
+
+    Pass `omit="normalize_uom"` to deliberately leave one requirement unsatisfied, for tests that
+    exercise the correction-retry path.
+    """
+    from mcp_server.fixtures import FixtureLoader
+    from orchestrator.completeness import required_tool_calls
+
+    requirements = required_tool_calls(claim_id)
+    if not requirements:
+        raise ValueError(f"{claim_id!r} is not in the store, so it has no requirements to satisfy")
+
+    loader = FixtureLoader()
+    claim = loader.get_claim(claim_id)
+    assert claim is not None  # guaranteed by the requirements check above
+    po = loader.get_po(claim.po_id)
+
+    calls = []
+    for index, requirement in enumerate(requirements, start=1):
+        if requirement.tool == omit:
+            continue
+        args = dict(requirement.args)
+        if requirement.tool == "normalize_uom" and po is not None:
+            # from_uom == to_uom is an identity no-op in the real tool, so this satisfies the
+            # requirement regardless of which document supplied the differing unit.
+            args = {
+                "qty": po.ordered_qty,
+                "from_uom": po.ordered_uom,
+                "to_uom": "EACH",
+                "sku": po.sku,
+            }
+        elif requirement.tool == "get_trade_agreement" and po is not None:
+            # A non-matching promo_code returns None, which is not an error, so the requirement is
+            # met by having consulted the tool at all.
+            args = {"retailer": claim.retailer, "sku": po.sku, "promo_code": "PROMO-STUB"}
+        calls.append({"id": f"floor_{index}", "name": requirement.tool, "args": args})
+    return make_completion(tool_calls=calls)
+
+
 class StubAsyncOpenAI:
     def __init__(self, responses):
         self._responses = iter(responses)

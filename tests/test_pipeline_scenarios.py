@@ -16,10 +16,10 @@ from pydantic import ValidationError
 
 from agents.reviewer import run_reviewer
 from mcp_server.server import mcp
+from orchestrator.completeness import required_tool_calls
 from orchestrator.ground_truth import GROUND_TRUTH
 from orchestrator.pipeline import (
     OPENROUTER_BASE_URL,
-    REQUIRED_TOOL_CALLS,
     ReviewerOutput,
     _extract_json,
     run_pipeline,
@@ -32,25 +32,6 @@ pytestmark = [
         reason="requires OPENROUTER_API_KEY to hit the real OpenRouter API",
     ),
 ]
-
-
-# The tool name behind each production REQUIRED_TOOL_CALLS entry, keyed the same way the
-# production gate is (by claim_id). The sync assertion below runs at import — i.e. during
-# collection of a normal `pytest` run, even though every test here is deselected as
-# integration — so re-keying the production dict can't silently strand these assertions
-# again (Layer 29 re-keyed it from scenario ids to claim ids, and this lookup kept asking
-# for "s02", quietly returning None for every case).
-REQUIRED_TOOL_NAMES = {
-    "CLM-002": "normalize_uom",
-    "CLM-003": "get_asns_for_po",
-    "CLM-006": "get_trade_agreement",
-    "CLM-007b": "list_claims_for_po",
-    "CLM-008": "list_claims_for_po",
-}
-assert REQUIRED_TOOL_NAMES.keys() == REQUIRED_TOOL_CALLS.keys(), (
-    "REQUIRED_TOOL_NAMES is out of sync with orchestrator.pipeline.REQUIRED_TOOL_CALLS: "
-    f"{sorted(REQUIRED_TOOL_NAMES)} != {sorted(REQUIRED_TOOL_CALLS)}"
-)
 
 
 def _investigator_tool_names(run_dir: Path) -> set[str]:
@@ -79,9 +60,14 @@ async def test_scenario_matches_ground_truth(case, tmp_path):
     assert (run_dir / "reasoning_trace.json").exists()
     assert (run_dir / "dispute_packet.md").exists() == (result.final_verdict == "INVALID")
 
-    required_tool = REQUIRED_TOOL_NAMES.get(case["claim_id"])
-    if required_tool is not None:
-        assert required_tool in _investigator_tool_names(result.run_dir)
+    # Layer 31: assert against the production requirement function itself rather than a parallel
+    # map of tool names (the previous map was keyed by scenario id and had silently returned None
+    # for every case since Layer 29 re-keyed the gate). Deriving from the real function means there
+    # is nothing left to drift, and the assertion is now much stronger: every claim's full minimum
+    # investigation must appear in the trace, not just the one tool that scenario was known to need.
+    required = {r.tool for r in required_tool_calls(case["claim_id"])}
+    assert required, f"expected computed requirements for {case['claim_id']}"
+    assert required <= _investigator_tool_names(run_dir)
 
 
 async def test_reviewer_overturns_a_missed_duplicate(monkeypatch):

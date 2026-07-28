@@ -2,13 +2,42 @@ import json
 
 from fastmcp import Client
 
-from agents.investigator import INVESTIGATOR_MODEL, run_investigator
+from agents.investigator import (
+    INVESTIGATOR_MODEL,
+    INVESTIGATOR_SYSTEM_PROMPT,
+    run_investigator,
+)
 from mcp_server.server import mcp
 from tests.agent_stubs import StubAsyncOpenAI, make_completion
 
 
 async def test_default_model_is_confirmed_openrouter_slug():
     assert INVESTIGATOR_MODEL == "anthropic/claude-haiku-4.5"
+
+
+def test_prompt_forbids_substituting_zeros_for_an_unreadable_document():
+    """Layer 31 guard, and the first assertion on this prompt at all.
+
+    The prompt used to end with a bare "use empty lists/false/0 where a step found nothing", which
+    is exactly the instruction that turns an unreadable receiving record into a reported zero — a
+    fabricated shortage. The distinction between "looked and found nothing" and "could not read it"
+    has to stay explicit, along with the ESCALATE that follows from the latter.
+    """
+    prompt = INVESTIGATOR_SYSTEM_PROMPT.lower()
+    assert "never use them to stand in for a document you could not read" in prompt
+    assert "silently fabricates evidence" in prompt
+
+
+def test_prompt_handles_tool_errors_by_retrying_the_id_then_escalating():
+    """A document tool surfaces failure as an "ERROR:" tool result, and the overwhelmingly common
+    cause is passing claim_id where po_id was required. The prompt must send the model to check the
+    identifier first and only escalate once the call fails with the right po_id — escalating on the
+    first error would turn a recoverable typo into a human-review ticket."""
+    prompt = INVESTIGATOR_SYSTEM_PROMPT.lower()
+    assert 'returns a result beginning with "error:"' in prompt
+    assert "retry the call with the po_id" in prompt
+    assert 'the document is genuinely unavailable' in prompt
+    assert 'propose "escalate"' in prompt
 
 
 async def test_user_message_references_claim_id(monkeypatch):
