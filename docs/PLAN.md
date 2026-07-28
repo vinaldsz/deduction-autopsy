@@ -460,3 +460,37 @@ Data model + relational schema, ETL contract, and the updated UI API contract li
 
 **Rule:** same as every prior phase — one commit per layer; do not start layer N+1 until layer N
 has passing tests. Layers 23 and 24 gate the rest (schema, then sources, before any ETL code).
+
+## Layer 32 — Analyst review workspace (evidence-first UI + human decisions)
+
+Added after Layers 23–31 in response to a gap the 30b worklist exposed: the UI surfaced only the
+raw tool-call trace + token counts (developer telemetry), dead-ended at a read-only verdict, and
+showed nothing at all for claims resolved in a past run. This layer makes the analyst's real loop —
+**triage → read evidence → decide** — the shape of the UI, and has the agents process the whole lot
+up front so the analyst opens to fully-evidenced cases. **No agent/prompt/verdict-logic changes**;
+the 8 ground-truth verdicts are untouched.
+
+- **Evidence surface.** `orchestrator/output.py::write_case_file_json` persists the full `CaseFile`
+  + `ReviewerOutput` per run to `outputs/<claim_id>/<run_id>/case_file.json`, so a past
+  investigation's evidence rebuilds without re-running the agents. `ui/queries.py::claim_documents`
+  assembles the source-document graph (claim → PO → ASN(s)/invoice/receiving/trade agreement/prior
+  claims) straight from the DB, so evidence is available independent of any agent run.
+- **Human decisions.** A new `claim_dispositions` table (accept/override/escalate +
+  `override_verdict` + note + `decided_at`), kept **separate from `claim_resolutions`** so
+  re-investigating a claim never clobbers the human decision; written via
+  `orchestrator/dispositions.py::write_claim_disposition` (UPSERT).
+- **API.** `GET /api/claims/{id}/documents`, `/casefile`, `/dispute-packet` (Markdown download),
+  `POST /api/claims/{id}/disposition`; `GET /api/batches/{id}` gains `status_filter`/`sort`/`q` for
+  the triage queue; batch investigate processes the whole lot by default (`cap` now optional).
+- **Batch/ingestion.** `cli/process_lot.py` — the post-ingestion step that runs the pipeline over
+  every unresolved claim in the active lot. Kept out of `semantic_layer/` so the ETL stays pure and
+  testable; true auto-at-ingestion = have the ingestion job call it.
+- **Frontend** (`ui/static/`, still no framework/build): two-pane grid — clickable KPI strip, left
+  triage queue (search/filter/sort, keyboard-navigable, disposition badges), right review pane
+  (verdict + provenance chain + confidence meter, retailer's claim, source documents built with
+  `textContent` — safe against the retailer-notes injection surface, agent reconciliation + check
+  chips + dispute grounds when investigated), raw trace + token usage demoted to a collapsed audit
+  drawer, and a decision bar.
+- **Verify:** `pytest -q` green; new coverage for the case-file writer, the disposition writer
+  (incl. surviving a resolution UPSERT), the four new endpoints (200s/404s/422), queue
+  filter/sort/search, `claim_documents`, uncapped lot processing, and `cli/process_lot.py`.

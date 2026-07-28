@@ -19,7 +19,8 @@ Full domain spec: [`docs/SPEC.md`](docs/SPEC.md). Full implementation plan:
 ## Status
 
 This project was built layer by layer (see [`PROGRESS.md`](PROGRESS.md) for the
-authoritative, up-to-date state). All layers are complete:
+authoritative, up-to-date state). All layers are complete except Layer 31, which is
+deliberately deferred pending sign-off (it touches the agent prompts — see "Future work"):
 
 | Layer | What | Status |
 |---|---|---|
@@ -54,6 +55,8 @@ authoritative, up-to-date state). All layers are complete:
 | 29 | Scenario-less pipeline + CLI + resolution persistence | ✅ Done |
 | 30a | Synthetic daily lot (~50 claims) — `CLM-SYN` volume for the worklist | ✅ Done |
 | 30b | Dashboard + daily-lot worklist UI (`ui/queries.py`, removes `/api/scenarios`) | ✅ Done |
+| 31 | Universal completeness check + ESCALATE on missing source data | ⏸ Deferred (needs sign-off) |
+| 32 | Analyst review workspace — evidence-first UI + human decisions (`claim_dispositions`, `cli/process_lot.py`) | ✅ Done |
 
 ## Setup
 
@@ -95,6 +98,17 @@ Run all 8 scenarios and print a pass/fail table against ground truth:
 python -m cli.run_all
 ```
 
+Process a whole daily lot — run both agents over every unresolved claim in it, so the UI's
+triage queue opens to fully-evidenced cases. This is the intended post-ingestion step (run it
+right after the ETL loads a lot); it lives outside `semantic_layer/` on purpose, so the ETL stays
+pure and testable while the paid OpenRouter calls stay here:
+
+```bash
+python -m cli.process_lot                    # active lot, all unresolved claims
+python -m cli.process_lot --batch LOT-2024-09-15
+python -m cli.process_lot --cap 5            # limit, for a smoke test
+```
+
 Each claim run writes its artifacts to `outputs/<claim_id>/<run_id>/` (the `run_id` defaults
 to a UTC timestamp, or pass `--run-id`), so reruns are archived side by side instead of
 overwriting. `outputs/<claim_id>/latest` is a symlink to the most recent run; `run_all` uses
@@ -114,25 +128,51 @@ uvicorn ui.server:app --host 127.0.0.1 --port 8000
 ```
 
 Build the DB first (`python -m semantic_layer.etl`), then open http://127.0.0.1:8000/ for the
-**daily-lot dashboard + worklist**: headline metrics (unresolved, resolved-this-month, $ at risk,
-priority breakdown, active lot), a paginated worklist of the lot's claims (with derived priority and
-resolution status), one **Run investigation** button that bulk-runs the pipeline over the unresolved
-claims (filling rows live, ESCALATE flagged), and click any row to drill into that claim's live
-tool-call trace + verdict card. Dependency-free static client (`ui/static/`, no build step).
+**analyst workspace** — a two-pane surface shaped around the analyst's loop (**triage → read
+evidence → decide**):
+
+- **KPI strip** — unresolved, needs-human-review, resolved-this-month, $ at risk, priority
+  breakdown, active lot. Each tile is clickable and filters the queue.
+- **Left: triage queue** — the lot's claims with search, status filter tabs
+  (needs-me / unresolved / escalated / disputable / resolved), sortable priority/amount, keyboard
+  navigation, and disposition badges.
+- **Right: review pane** — the verdict header with the Investigator→Reviewer provenance chain and
+  a confidence meter; the **retailer's claim** (reason + notes); a **source documents** panel
+  (PO / ASNs / invoice / receiving / trade agreement / prior claims), which is read straight from
+  the DB and so is available whether or not the claim has been investigated; then, once
+  investigated, the agent reconciliation, six check chips, dispute grounds, and a dispute-packet
+  download. The raw tool-call trace and token usage are developer telemetry and sit in a collapsed
+  audit drawer.
+- **Decision bar** — accept / override / send-to-human, persisted to `claim_dispositions` (a
+  separate table from `claim_resolutions`, so re-investigating a claim never clobbers the human
+  decision).
+
+**Process lot (investigate + review all)** runs the pipeline over every unresolved claim in the lot,
+so the analyst opens to fully-evidenced cases. Dependency-free static client (`ui/static/`, no
+build step).
 
 API (data comes from the relational store — there is no "scenario"):
 
-- `GET /api/dashboard` → `{unresolved_count, resolved_this_month, dollars_at_risk_cents,
-  priority_breakdown, batch}`.
-- `GET /api/batches/{batch_id}?offset=&limit=` → a page of the lot's claims (each with `priority` +
-  `status`); 404 for an unknown batch.
-- `POST /api/batches/{batch_id}/investigate?cap=10` (SSE) → bulk-run over unresolved claims:
-  per-claim `tool_call` + `claim_done`, then a `batch_done` summary.
+- `GET /api/dashboard` → `{unresolved_count, needs_human_review, resolved_this_month,
+  dollars_at_risk_cents, priority_breakdown, batch}`.
+- `GET /api/batches/{batch_id}?offset=&limit=&status_filter=&sort=&q=` → a page of the lot's claims
+  (each with `priority`, `status`, and any disposition); 404 for an unknown batch.
+- `POST /api/batches/{batch_id}/investigate?cap=` (SSE) → run over the lot's unresolved claims
+  (the whole lot by default; `cap` limits it): per-claim `tool_call` + `claim_done`, then a
+  `batch_done` summary.
+- `GET /api/claims/{claim_id}/documents` → the claim's source-document graph from the DB.
+- `GET /api/claims/{claim_id}/casefile` → the full CaseFile + ReviewerOutput from the latest run;
+  404 if the claim hasn't been investigated.
+- `GET /api/claims/{claim_id}/dispute-packet` → the Markdown packet for an `INVALID` claim's latest
+  run (download).
+- `POST /api/claims/{claim_id}/disposition` → record the analyst's decision
+  `{disposition: accept|override|escalate, override_verdict?, note?}`.
 - `GET /api/claims/{claim_id}/stream` (SSE) / `POST /api/claims/{claim_id}/investigate` → single-claim
   drill-in / run; 404 for an unknown claim, 502 on an upstream agent failure.
 
 ```bash
 curl -s http://127.0.0.1:8000/api/dashboard
+curl -s http://127.0.0.1:8000/api/claims/CLM-003/documents
 curl -sN -X POST "http://127.0.0.1:8000/api/batches/LOT-2024-09-15/investigate?cap=2"
 ```
 
@@ -196,6 +236,11 @@ detail.
 These are deliberately out of scope for the current build (see [`CLAUDE.md`](CLAUDE.md)'s
 "Explicit out of scope" section for the authoritative list):
 
+- **Universal completeness check + ESCALATE on missing source data** (Layer 31, deferred) —
+  the pipeline's `REQUIRED_TOOL_CALLS` gate is keyed per claim; replacing it with a universal
+  minimum-investigation requirement, and teaching both agents to ESCALATE on genuinely missing or
+  contradictory source data (driven by the ETL's quarantine/DQ signals), would be the honest
+  generalization. It changes the agent prompts, so it needs explicit sign-off before it's built.
 - **Parallel/concurrent orchestration** — scenarios and claims currently run sequentially.
 - **SKU-to-product-name mapping** — SKUs stay opaque codes (e.g. `SKU-001`) everywhere; a
   display-only product catalog for dispute packets would be cosmetic, not functional.
