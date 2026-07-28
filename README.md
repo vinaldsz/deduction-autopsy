@@ -18,9 +18,10 @@ Full domain spec: [`docs/SPEC.md`](docs/SPEC.md). Full implementation plan:
 
 ## Status
 
-This project was built layer by layer (see [`PROGRESS.md`](PROGRESS.md) for the
-authoritative, up-to-date state). All layers are complete (31 was built last, after 32, because
-it was gated on sign-off — it is the only layer that edits the agent prompts):
+This project was built layer by layer. The table below is the layer index;
+[`PROGRESS.md`](PROGRESS.md) is the narrative log — what each layer decided, what broke, and
+what was corrected mid-build. All layers are complete (31 was built last, after 32, because it
+was gated on sign-off — it is the only layer that edits the agent prompts):
 
 | Layer | What | Status |
 |---|---|---|
@@ -57,6 +58,9 @@ it was gated on sign-off — it is the only layer that edits the agent prompts):
 | 30b | Dashboard + daily-lot worklist UI (`ui/queries.py`, removes `/api/scenarios`) | ✅ Done |
 | 31 | Universal completeness check + ESCALATE on missing source data (`orchestrator/completeness.py`) | ✅ Done |
 | 32 | Analyst review workspace — evidence-first UI + human decisions (`claim_dispositions`, `cli/process_lot.py`) | ✅ Done |
+| 33 | JS test harness + render hygiene (`tests/js/`, `ui/static/lib.js`) | ✅ Done |
+| 34 | Decision integrity — accept recorded as a snapshot, not a pointer (`decided_verdict`) | ✅ Done |
+| — | Layer-end verification tooling (`scripts/check.sh`, `/layer-done`, `tests/test_invariants.py`) | ✅ Done |
 
 ## Setup
 

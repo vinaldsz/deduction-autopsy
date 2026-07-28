@@ -2046,118 +2046,56 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-Layers 1-13 are complete, including the s04 Reviewer regression bugfix (fixed and
-live-confirmed 6/6 in an earlier session), Layer 11's CLI demo mode (live double-confirmed
-with and without `--explain`), Layer 12's consolidated settings module, and Layer 13's
-retry/backoff + timeout around OpenRouter calls (this session, unit tests only — see "Current
-layer" above for why no live run was needed). Nothing outstanding is known to be broken.
-Suggested next steps, in rough priority order:
+All layers in `docs/PLAN.md` are complete through 34 (see the README table for the index and
+`## Current layer` at the top of this file for the most recent one). Nothing is known to be
+broken: all four gates are green and CI passes on `main`.
 
-1. Start Layer 14 (`docs/PLAN.md`): token/cost usage capture — capture
-   `prompt_tokens`/`completion_tokens` per agent call in `AgentResult`, sum per claim, write to
-   a `usage` block in `verdict.json`. Natural consumer of Layer 12's config module if a
-   cost-cap tunable is ever added.
-2. Layer 15 (CI — `.github/workflows/tests.yml`) is next after that.
-3. Nothing else is currently flagged. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
-   orchestration, SKU-to-product-name mapping, heterogeneous mock data sources, API-facing
-   deployment concerns) only if the user asks to expand scope beyond the original 9-layer build.
+**Run `/layer-done` at the end of every layer from here on.** It runs `scripts/check.sh` (the
+four mechanical gates), then the checks a script can't do — scope diff against the layer's goal,
+the non-negotiables in `CLAUDE.md`, a smoke test against the *real* `data/deductions.db`, and the
+PROGRESS.md + commit drafts. The smoke test matters because `tests/conftest.py` builds its own DB
+in a temp dir, so a green suite says nothing about the real store — which is exactly how Layer
+34's `init_db` bug got through.
+
+No layer is currently queued. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
+orchestration, SKU-to-product-name mapping, API-facing deployment concerns) only if the user asks
+to expand scope.
 
 ## Layer status
 
-| Layer | What | Status |
-|---|---|---|
-| 0 | CLAUDE.md, SPEC.md, PROGRESS.md | ✅ Done |
-| 1 | `mcp_server/models.py` + UOM conversion table | ✅ Done |
-| 2 | All 7 scenario fixture JSON files + fixture validation tests | ✅ Done |
-| 3 | `mcp_server/fixtures.py` + `mcp_server/tools/` + unit tests passing | ✅ Done |
-| 4 | `mcp_server/server.py` (FastMCP wiring) | ✅ Done |
-| 5 | `agents/base.py` (shared tool loop) | ✅ Done |
-| 6 | `agents/investigator.py` + `agents/reviewer.py` | ✅ Done |
-| 7 | `orchestrator/pipeline.py` + `orchestrator/output.py` | ✅ Done |
-| 8 | `cli/run_claim.py` + `cli/run_all.py` | ✅ Done |
-| 9 | Integration tests + README | ✅ Done |
-| 10 | `scenarios/s08_reviewer_overturn/` (8th scenario) | ✅ Done |
-| 11 | CLI demo mode (`--explain` flag) | ✅ Done |
-| 12 | `orchestrator/config.py` (consolidated settings) | ✅ Done |
-| 13 | Retry/backoff + timeout around OpenRouter calls | ✅ Done |
+The layer-by-layer index lives in **[README.md](README.md#status)** — one table, so it can't
+drift against a second copy here. This file is the narrative log: what each layer decided, what
+broke, and what was corrected mid-build. Start at `## Current layer` at the top.
 
 ## Tests passing
-`pytest tests/` — 146 passed, 0 failed, 9 deselected (the 9 deselected are
-`test_pipeline_scenarios.py`'s integration tests — 8 parametrized scenarios + the dedicated
-`test_reviewer_overturns_a_missed_duplicate`):
-- `test_cli_run_claim.py` (9): argparse required-flag enforcement and `--output-dir`/
-  `--max-attempts`/`--explain` defaults/overrides, happy path against s01 (exit 0, verdict
-  fields printed, `verdict.json` written under a custom `--output-dir`), `PipelineError` path
-  (exit 1, clean error message, no traceback), missing-`OPENROUTER_API_KEY` path (exit 1
-  without touching `run_pipeline` at all); Layer 11's `--explain` tests: live tool-call lines/
-  stripped CaseFile/per-check re-fetch annotations against a stubbed s02 run, a scripted
-  `OVERTURN` response prints the overturn callout pointing at the Reviewer's own
-  `dispute_grounds` text (not a static per-scenario description — see "Current layer" above for
-  the mid-session correction), and a regression test that omitting `--explain` prints none of
-  the explain-only sections.
-- `test_cli_run_all.py` (7): all-7-pass summary line and exit 0; one scenario's
-  `investigator_verdict` mismatch fails only that row (exit 1, others still pass); a
-  `PipelineError` on one scenario is recorded as an error row and the loop continues to the
-  rest; missing-`OPENROUTER_API_KEY` returns 1 without ever calling `run_pipeline_fn`; explicit
-  regression test that the ground-truth check compares `reviewer_verdict` (not `final_verdict`)
-  against `"CONFIRM"`; `parse_args` regression test that `--help`/an unrecognized flag raises
-  `SystemExit` rather than falling through to a real run (see Layer 8 notes above for why this
-  matters); Layer 13's regression test that the real (non-injected) `AsyncOpenAI` client is
-  constructed with `timeout=SETTINGS.openrouter_timeout_seconds`.
-- `test_orchestrator_pipeline.py` (24): s01/s02 happy paths (investigator/reviewer wiring,
-  output-artifact presence/absence), missing-required-field and missing-required-tool-call
-  correction retries, `max_investigator_attempts` exhaustion, reasoning-strip safeguard,
-  full `_resolve_final_verdict` truth table, `_extract_json` parametrized cases (fenced,
-  unfenced, prose-before-fence, prose-before-unfenced-brace) and a full-pipeline regression test
-  reproducing the exact live prose-before-fence failure; Layer 11's `strip_reasoning` unit test
-  and a test that `on_investigator_tool_call`/`on_reviewer_tool_call` each capture real tool
-  calls from their own agent only; Layer 13's regression test that the real (non-injected)
-  `AsyncOpenAI` client is constructed with `timeout=SETTINGS.openrouter_timeout_seconds`.
-- `test_orchestrator_output.py` (5): `verdict.json`/`reasoning_trace.json`/`dispute_packet.md`
-  writers — paths, JSON shape, markdown content, empty-dispute-grounds handling, nested
-  output-dir creation.
-- `test_fixtures.py` (52): Pydantic model validation for every fixture file, po_id/retailer
-  cross-document consistency, file-layout expectations per scenario (now 8 — `prior_claim.json`
-  allowed in both s07 and s08), ground-truth claim_id matches, and each scenario's specific
-  numeric trap, including s08's clean-agreement-before-shortage and
-  amount-implies-the-same-shortage checks.
-- `test_pipeline_scenarios.py` (9, `-m integration` only): all 8 `GROUND_TRUTH` scenarios
-  end-to-end against the real pipeline, plus `test_reviewer_overturns_a_missed_duplicate`
-  (see Layer 10 notes above).
-- `test_uom_tools.py` (6): direct/reverse/multi-hop/same-unit conversions, unknown-SKU and
-  undefined-path `ValueError`s.
-- `test_document_tools.py` (7): s01 basic wiring, s03 split-ASN aggregation, s06
-  trade-agreement promo match/mismatch, s07 claim_id resolution across two claim files,
-  po_id mismatch raises.
-- `test_server.py` (5): all 8 tools registered and listed by name, `get_po`/`normalize_uom`
-  round-trip through the real MCP protocol (in-process `fastmcp.Client`), `None` return
-  serializes correctly (s06 promo mismatch), `ValueError` surfaces as `ToolError` through
-  `call_tool` rather than being swallowed.
-- `test_agents_base.py` (14): text-only response, single/parallel tool-call round trips,
-  real `ToolError` surfaced without crashing, malformed tool-call JSON handled, max-iterations
-  safety bound raises `AgentRunnerError`, MCP→OpenAI tool-schema translation with a
-  non-empty-description regression guard, and Layer 11's `on_tool_call` hook tests (fires once
-  per call in order, never fires for a text-only response); Layer 13's transport-retry tests: a
-  transient 429 (and separately an `APITimeoutError`) is retried once then succeeds, a
-  non-retryable 400 raises immediately with zero sleep calls, retries exhausted raises the
-  underlying error once `max_transport_attempts` is hit, and backoff durations passed to the
-  injected `sleep` grow exponentially across multiple failures.
-- `test_agents_investigator.py` (6): confirmed model slug, claim_id present in the user
-  message, default vs. overridden `model`, a real `normalize_uom` tool-call round trip
-  against s02's fixtures, and Layer 11's `on_tool_call` passthrough test.
-- `test_agents_reviewer.py` (7): confirmed model slug, `reasoning` field absent from the
-  actual prompt text sent to the model, case file XML-delimited and valid JSON inside the
-  tags, default vs. overridden `model`, a real `list_claims_for_po` tool-call round trip
-  against s07's fixtures, a static regression guard that the timeline-check bullet and
-  its liability-scoping carve-out (the s04 bugfix, see below) are both present in the prompt
-  text, and Layer 11's `on_tool_call` passthrough test.
-- `test_orchestrator_config.py` (4): defaults match the previously hardcoded confirmed values
-  (now including Layer 13's `openrouter_timeout_seconds`/`max_transport_attempts`/
-  `retry_backoff_base_seconds`); `load_settings()` honors all nine env-var overrides; a
-  regression guard that `agents.investigator.INVESTIGATOR_MODEL`/
-  `agents.reviewer.REVIEWER_MODEL`/`orchestrator.pipeline.OPENROUTER_BASE_URL` read from the
-  `SETTINGS` singleton rather than a re-hardcoded copy; `AgentRunner`'s default `temperature`
-  reaches the actual OpenRouter request when not overridden.
+
+Run `scripts/check.sh` — it is the single definition of all four gates (pytest, pyright,
+frontend syntax, frontend unit tests) and reports every failure in one pass. Exact counts are
+deliberately **not** tracked inline here: the previous count sat at "146 passed" for twenty-odd
+layers. As of the layer-end-verification tooling commit: 385 passed, 10 deselected, 0 type
+errors, 8 frontend tests.
+
+The 10 deselected are the paid integration tests, excluded by `addopts = "-m 'not integration'"`
+in `pyproject.toml` — `test_pipeline_scenarios.py`'s 8 parametrized ground-truth scenarios plus
+`test_reviewer_overturns_a_missed_duplicate`, and the live half of `test_prompt_injection.py`.
+Opt in explicitly, and only when a change touches prompts, the pipeline, or the tools:
+
+```bash
+pytest tests/test_pipeline_scenarios.py -m integration -v
+```
+
+What each suite covers, by area (what a *given layer* verified is in that layer's own entry
+above, which is why this is a map rather than a per-test enumeration):
+
+| Area | Suites |
+|---|---|
+| MCP server, models, tools | `test_fixtures.py`, `test_fixtures_db.py`, `test_db.py`, `test_document_tools.py`, `test_uom_tools.py`, `test_server.py` |
+| ETL / semantic layer | `test_etl.py` (incl. the **fidelity oracle** — DB equals the frozen `scenarios/*.json` field-for-field), `test_extract.py`, `test_transform.py`, `test_generate_source_systems.py` |
+| Agents | `test_agents_base.py`, `test_agents_investigator.py`, `test_agents_reviewer.py` |
+| Orchestrator | `test_orchestrator_pipeline.py`, `test_orchestrator_output.py`, `test_orchestrator_config.py`, `test_completeness.py`, `test_resolutions.py`, `test_dispositions.py`, `test_logging.py` |
+| CLI | `test_cli_run_claim.py`, `test_cli_run_all.py`, `test_cli_process_lot.py` |
+| Web UI | `test_ui_server.py`, `test_ui_queries.py`, `tests/js/lib.test.mjs` (Node's runner over `ui/static/lib.js`) |
+| Architectural controls | `test_invariants.py` (nothing under `agents/` may reach data except through injected tool callables), `test_prompt_injection.py` |
 
 ## Known issues / decisions pending
 - **Resolved (this session, see "Current layer" above)**: `agents/reviewer.py`'s prompt had

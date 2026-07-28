@@ -1,7 +1,12 @@
 name: Tests
 
+# `push` is scoped to main so a branch with an open PR doesn't run the whole suite twice (once
+# for the push, once for the PR) — the two events produce different refs, so a concurrency
+# group can't dedupe them. Trade-off: a branch pushed *without* a PR gets no CI. Open the PR
+# early, or run scripts/check.sh locally.
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -11,10 +16,10 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -29,13 +34,13 @@ jobs:
   js:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Pinned to 22 for the built-in test runner. The syntax gate no longer depends on the
       # version's module-detection behaviour — see check_js_syntax in scripts/check.sh for why
       # it feeds stdin with --input-type=module instead of using `node --check <file>`.
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -45,10 +50,10 @@ jobs:
   types:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
