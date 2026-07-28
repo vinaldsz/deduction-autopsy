@@ -1,72 +1,135 @@
-// Analyst workspace over the Layer 30/32 API. No framework, no build step.
+// Analyst workspace over the Layer 30/32 API. DOM + fetch only — pure logic lives in lib.js where
+// `node --test` can reach it (tests/js/). No framework, no build step.
+
+import { dollars, dollarsCompact } from "./lib.js";
 
 const LIMIT = 25;
 const state = { batchId: null, offset: 0, total: 0, filter: "needs_me", sort: "priority", q: "", selected: null };
 
 const $ = (id) => document.getElementById(id);
 const banner = $("banner");
-const dollars = (cents) => "$" + (cents / 100).toFixed(2);
 const safeClass = (v) => (v === "N/A" ? "NA" : v);
 
-function showBanner(msg) { banner.textContent = msg; banner.classList.remove("hidden"); }
+/** Build an element. `text` goes in via textContent — never innerHTML, for any value that came from
+    the DB or a model. Declared here rather than beside the document builders because the whole file
+    now uses it. */
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+// --- errors ---------------------------------------------------------------------------------------
+
+/** A human sentence, never a raw exception string, and a way out. */
+function showBanner(msg, retry) {
+  $("banner-msg").textContent = msg;
+  const retryBtn = $("banner-retry");
+  retryBtn.classList.toggle("hidden", !retry);
+  retryBtn.onclick = retry ? () => { hideBanner(); retry(); } : null;
+  banner.classList.remove("hidden");
+}
+
+function hideBanner() { banner.classList.add("hidden"); }
+
+/** fetch + JSON that fails loudly. Previously `resp.ok` was checked in one place and ignored in
+    three, which is how a failed request became "the previous claim's data, silently". */
+async function fetchJSON(url, opts) {
+  const resp = await fetch(url, opts);
+  if (!resp.ok) throw new Error(`${resp.status} ${url}`);
+  return resp.json();
+}
 
 // --- dashboard (KPI strip) -----------------------------------------------------------------------
 
 async function loadDashboard() {
-  const d = await (await fetch("/api/dashboard")).json();
-  $("m-unresolved").textContent = d.unresolved_count;
-  $("m-resolved").textContent = d.resolved_this_month;
-  $("m-risk").textContent = dollars(d.dollars_at_risk_cents);
-  const p = d.priority_breakdown;
-  $("m-priority").textContent = `${p.HIGH}/${p.MEDIUM}/${p.LOW}`;
-  $("m-batch").textContent = d.batch ? `${d.batch.batch_id} (${d.batch.status})` : "—";
-  $("m-escalate").textContent = d.needs_human_review ?? "—";
-  $("m-needsme").textContent = d.needs_me_count ?? "—";
-  state.batchId = d.batch ? d.batch.batch_id : null;
+  try {
+    const d = await fetchJSON("/api/dashboard");
+    $("m-unresolved").textContent = d.unresolved_count;
+    $("m-resolved").textContent = d.resolved_this_month;
+    $("m-risk").textContent = dollarsCompact(d.dollars_at_risk_cents);
+    const p = d.priority_breakdown;
+    $("m-priority").textContent = `${p.HIGH}/${p.MEDIUM}/${p.LOW}`;
+    $("m-batch").textContent = d.batch ? `${d.batch.batch_id} (${d.batch.status})` : "—";
+    $("m-escalate").textContent = d.needs_human_review ?? "—";
+    $("m-needsme").textContent = d.needs_me_count ?? "—";
+    state.batchId = d.batch ? d.batch.batch_id : null;
+  } catch {
+    showBanner("Couldn't load the dashboard metrics.", loadDashboard);
+  }
 }
 
 // --- worklist queue ------------------------------------------------------------------------------
+
+/** The status cell: effective verdict, plus what it superseded. Shared with setRowStatus so a live
+    run and a page load render the same thing. */
+function statusCell(claim) {
+  const td = el("td", "status");
+  td.appendChild(el("span", `dot d-${claim.status}`));
+  td.appendChild(document.createTextNode(claim.status));
+  // `status` is the effective verdict, so an override shows the analyst's answer as the claim's
+  // answer. The superseded agent verdict stays visible beside it — dropping it would erase the
+  // audit trail that keeping the two spines separate exists to preserve.
+  if (claim.disposition === "override" && claim.agent_status !== claim.status) {
+    td.appendChild(el("span", "status-sup", `was ${claim.agent_status}`));
+  }
+  if (claim.disposition) td.appendChild(el("span", "disp-badge", claim.disposition));
+  return td;
+}
 
 function renderRow(claim) {
   const tr = document.createElement("tr");
   tr.dataset.claimId = claim.claim_id;
   tr.tabIndex = 0;
-  const disp = claim.disposition ? `<span class="disp-badge">${claim.disposition}</span>` : "";
-  // `status` is the effective verdict, so an override shows the analyst's answer as the claim's
-  // answer. The superseded agent verdict stays visible beside it — dropping it would erase the
-  // audit trail that keeping the two spines separate exists to preserve.
-  const superseded =
-    claim.disposition === "override" && claim.agent_status !== claim.status
-      ? `<span class="status-sup">was ${claim.agent_status}</span>`
-      : "";
-  tr.innerHTML =
-    `<td>${claim.claim_id}</td><td>${claim.retailer}</td><td>${claim.claimed_reason}</td>` +
-    `<td class="num">${dollars(claim.claimed_amount)}</td>` +
-    `<td><span class="pill p-${claim.priority}">${claim.priority}</span></td>` +
-    `<td class="status"><span class="dot d-${claim.status}"></span>${claim.status}${superseded}${disp}</td>`;
+  tr.appendChild(el("td", null, claim.claim_id));
+  tr.appendChild(el("td", null, claim.retailer));
+  tr.appendChild(el("td", null, claim.claimed_reason));
+  tr.appendChild(el("td", "num", dollars(claim.claimed_amount)));
+  const priority = el("td");
+  priority.appendChild(el("span", `pill p-${claim.priority}`, claim.priority));
+  tr.appendChild(priority);
+  tr.appendChild(statusCell(claim));
   const open = () => selectClaim(claim);
   tr.addEventListener("click", open);
   tr.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
   return tr;
 }
 
+/** One message region under the table: no lot at all, or a filter that matched nothing. Without it
+    both states rendered as a blank table and "0 of ", which reads as a broken page. */
+function setQueueMessage(msg) {
+  const node = $("queue-msg");
+  node.textContent = msg || "";
+  node.classList.toggle("hidden", !msg);
+}
+
 async function loadQueue() {
-  if (!state.batchId) return;
+  if (!state.batchId) {
+    $("rows").replaceChildren();
+    $("page-info").textContent = "";
+    setQueueMessage("No lot loaded. Run the ETL (python -m semantic_layer.etl), then reload.");
+    return;
+  }
   const params = new URLSearchParams({
     offset: state.offset, limit: LIMIT, status_filter: state.filter, sort: state.sort,
   });
   if (state.q) params.set("q", state.q);
-  const data = await (await fetch(`/api/batches/${encodeURIComponent(state.batchId)}?${params}`)).json();
-  state.total = data.total;
-  const rows = $("rows");
-  rows.innerHTML = "";
-  for (const claim of data.claims) rows.appendChild(renderRow(claim));
-  if (state.selected) markSelectedRow(state.selected);
-  const shown = data.claims.length ? `${state.offset + 1}–${state.offset + data.claims.length}` : "0";
-  $("page-info").textContent = `${shown} of ${data.total}`;
-  $("prev").disabled = state.offset === 0;
-  $("next").disabled = state.offset + LIMIT >= data.total;
-  $("m-needsme").textContent = state.filter === "needs_me" ? data.total : $("m-needsme").textContent;
+  try {
+    const data = await fetchJSON(`/api/batches/${encodeURIComponent(state.batchId)}?${params}`);
+    state.total = data.total;
+    const rows = $("rows");
+    rows.replaceChildren();
+    for (const claim of data.claims) rows.appendChild(renderRow(claim));
+    if (state.selected) markSelectedRow(state.selected);
+    setQueueMessage(data.total ? "" : "No claims match this filter.");
+    const shown = data.claims.length ? `${state.offset + 1}–${state.offset + data.claims.length}` : "0";
+    $("page-info").textContent = `${shown} of ${data.total}`;
+    $("prev").disabled = state.offset === 0;
+    $("next").disabled = state.offset + LIMIT >= data.total;
+  } catch {
+    showBanner("Couldn't load the worklist.", loadQueue);
+  }
 }
 
 function markSelectedRow(claimId) {
@@ -78,8 +141,7 @@ function markSelectedRow(claimId) {
 function setRowStatus(claimId, verdict) {
   const tr = document.querySelector(`tr[data-claim-id="${claimId}"]`);
   if (!tr) return;
-  const cell = tr.querySelector(".status");
-  cell.innerHTML = `<span class="dot d-${verdict}"></span>${verdict}`;
+  tr.querySelector(".status").replaceWith(statusCell({ status: verdict }));
 }
 
 // --- filters / sort / search ---------------------------------------------------------------------
@@ -98,13 +160,6 @@ const EVIDENCE_BLOCKS = ["w-recon-block", "w-timeline-block", "w-checks-block"];
 let source = null;
 
 // --- source documents (primary evidence, from the DB — injection-safe DOM building) --------------
-
-function el(tag, cls, text) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text != null) e.textContent = text;   // textContent — never innerHTML for DB text
-  return e;
-}
 
 function docCard(title, id, body) {
   const card = el("div", "doc");
@@ -151,14 +206,14 @@ function emptyNode(msg) {
 }
 
 function renderReason(claim, notes) {
-  const box = $("w-reason"); box.innerHTML = "";
+  const box = $("w-reason"); box.replaceChildren();
   box.appendChild(el("div", "lead",
     `${claim.retailer} claims ${claim.claimed_reason} for ${dollars(claim.claimed_amount)} · claimed ${claim.claim_date}`));
   if (notes) box.appendChild(el("div", "notes", `“${notes}”`));
 }
 
 function renderDocuments(docs) {
-  const wrap = $("w-docs"); wrap.innerHTML = "";
+  const wrap = $("w-docs"); wrap.replaceChildren();
   const po = docs.purchase_order;
   if (po) {
     wrap.appendChild(docCard("Purchase order", po.po_id, kvTable([
@@ -220,7 +275,7 @@ async function selectClaim(claim) {
   $("ws-body").classList.remove("hidden");
   $("w-claim").textContent = claim.claim_id;
   $("w-meta").textContent = `${claim.retailer} · ${claim.claimed_reason} · ${dollars(claim.claimed_amount)} · claimed ${claim.claim_date}`;
-  $("trace").innerHTML = "";
+  $("trace").replaceChildren();
   $("usage").textContent = "";
   $("w-disp-status").textContent = "";
   $("w-disp-status").classList.remove("err");
@@ -230,13 +285,12 @@ async function selectClaim(claim) {
   $("w-investigate").disabled = false;
   setDecisionEnabled(investigated);
 
-  // Source documents + reason are always available from the DB, regardless of agent runs.
-  const docResp = await fetch(`/api/claims/${encodeURIComponent(claim.claim_id)}/documents`);
-  if (docResp.ok) {
-    const docs = await docResp.json();
-    renderReason(claim, docs.claim.retailer_notes);
-    renderDocuments(docs);
-  }
+  // Source documents + reason are always available from the DB, regardless of agent runs. Cleared
+  // before the fetch: leaving the previous claim's documents under a new claim's header is the worst
+  // outcome available in a reconciliation tool, and that is exactly what an unhandled failure did.
+  $("w-reason").replaceChildren();
+  $("w-docs").replaceChildren();
+  await loadDocuments(claim);
 
   // Agent-derived evidence (reconciliation, checks, dispute grounds) exists only once investigated.
   if (claim.status === "unresolved") {
@@ -256,6 +310,20 @@ async function selectClaim(claim) {
   }
 }
 
+async function loadDocuments(claim) {
+  try {
+    const docs = await fetchJSON(`/api/claims/${encodeURIComponent(claim.claim_id)}/documents`);
+    renderReason(claim, docs.claim.retailer_notes);
+    renderDocuments(docs);
+  } catch {
+    const box = el("div", "doc-empty", "Couldn't load source documents for this claim. ");
+    const retry = el("button", "ghost sm", "Retry");
+    retry.onclick = () => loadDocuments(claim);
+    box.appendChild(retry);
+    $("w-docs").replaceChildren(box);
+  }
+}
+
 function hideAgentEvidence() {
   EVIDENCE_BLOCKS.forEach((id) => $(id).classList.add("hidden"));
   $("w-uom").classList.add("hidden");
@@ -265,7 +333,8 @@ function hideAgentEvidence() {
 
 function showDisputeDownloadOnly(claimId) {
   $("w-dispute-block").classList.remove("hidden");
-  $("w-grounds").innerHTML = "<li class=\"muted\">Grounds not stored for this older run — re-investigate to regenerate.</li>";
+  $("w-grounds").replaceChildren(
+    el("li", "muted", "Grounds not stored for this older run — re-investigate to regenerate."));
   $("w-download").onclick = () => window.open(`/api/claims/${encodeURIComponent(claimId)}/dispute-packet`, "_blank");
 }
 
@@ -282,9 +351,12 @@ function renderVerdictHeader(ev) {
   }
   const prov = $("w-provenance");
   if (ev.investigator_verdict && ev.reviewer_verdict) {
-    prov.innerHTML =
-      `Investigator proposed <span class="v V-${ev.investigator_verdict}">${ev.investigator_verdict}</span> → ` +
-      `Reviewer <span class="v r-${ev.reviewer_verdict}">${ev.reviewer_verdict}</span>`;
+    prov.replaceChildren(
+      document.createTextNode("Investigator proposed "),
+      el("span", `v V-${ev.investigator_verdict}`, ev.investigator_verdict),
+      document.createTextNode(" → Reviewer "),
+      el("span", `v r-${ev.reviewer_verdict}`, ev.reviewer_verdict),
+    );
   } else { prov.textContent = ""; }
 }
 
@@ -293,12 +365,18 @@ function renderRecon(po, discQty, discCents) {
     ["Ordered", po.ordered_qty_each], ["Shipped", po.shipped_qty_each],
     ["Received", po.received_qty_each], ["Invoiced", po.invoiced_qty_each],
   ];
-  let html = "<tbody>";
-  for (const [label, v] of rows) html += `<tr><td>${label}</td><td class="num">${v}</td></tr>`;
-  const bad = discQty ? " bad" : "";
-  html += `<tr class="disc"><td>Discrepancy</td><td class="num${bad}">${discQty} EACH · ${dollars(discCents)}</td></tr>`;
-  html += "</tbody>";
-  $("w-recon").innerHTML = html;
+  const body = el("tbody");
+  for (const [label, v] of rows) {
+    const tr = el("tr");
+    tr.appendChild(el("td", null, label));
+    tr.appendChild(el("td", "num", v));
+    body.appendChild(tr);
+  }
+  const disc = el("tr", "disc");
+  disc.appendChild(el("td", null, "Discrepancy"));
+  disc.appendChild(el("td", discQty ? "num bad" : "num", `${discQty} EACH · ${dollars(discCents)}`));
+  body.appendChild(disc);
+  $("w-recon").replaceChildren(body);
 }
 
 function renderEvidence(claimId, ev) {
@@ -311,21 +389,18 @@ function renderEvidence(claimId, ev) {
   if (uom.length) { $("w-uom").classList.remove("hidden"); $("w-uom-body").textContent = uom.join("; "); }
   else $("w-uom").classList.add("hidden");
 
-  const tl = $("w-timeline"); tl.innerHTML = "";
+  const tl = $("w-timeline"); tl.replaceChildren();
   for (const e of ev.timeline || []) {
-    const div = document.createElement("div");
-    div.className = "tl-event" + (e.valid ? "" : " invalid");
-    div.innerHTML = `<span class="e">${e.event}</span><span class="d">${e.date}</span>`;
+    const div = el("div", "tl-event" + (e.valid ? "" : " invalid"));
+    div.appendChild(el("span", "e", e.event));
+    div.appendChild(el("span", "d", e.date));
     tl.appendChild(div);
   }
 
-  const checks = $("w-checks"); checks.innerHTML = "";
+  const checks = $("w-checks"); checks.replaceChildren();
   for (const [k, v] of Object.entries(ev.review_findings || {})) {
     const label = k.replace(/_check$/, "").replace(/_/g, " ");
-    const span = document.createElement("span");
-    span.className = "check " + safeClass(v);
-    span.textContent = `${label}: ${v}`;
-    checks.appendChild(span);
+    checks.appendChild(el("span", "check " + safeClass(v), `${label}: ${v}`));
   }
 
   const chips = [];
@@ -333,13 +408,13 @@ function renderEvidence(claimId, ev) {
   if ((ev.prior_claims || []).length) chips.push("Prior claims: " + ev.prior_claims.join(", "));
   if (chips.length) {
     $("w-context-block").classList.remove("hidden");
-    $("w-context").innerHTML = chips.map((c) => `<span class="chip">${c}</span>`).join("");
+    $("w-context").replaceChildren(...chips.map((c) => el("span", "chip", c)));
   } else $("w-context-block").classList.add("hidden");
 
   const grounds = ev.dispute_grounds || [];
   if (ev.final_verdict === "INVALID" && grounds.length) {
     $("w-dispute-block").classList.remove("hidden");
-    $("w-grounds").innerHTML = grounds.map((g) => `<li>${g}</li>`).join("");
+    $("w-grounds").replaceChildren(...grounds.map((g) => el("li", null, g)));
     $("w-download").onclick = () => window.open(`/api/claims/${encodeURIComponent(claimId)}/dispute-packet`, "_blank");
   } else $("w-dispute-block").classList.add("hidden");
 
@@ -354,16 +429,16 @@ function renderEvidence(claimId, ev) {
 // --- investigate (single claim, live SSE) --------------------------------------------------------
 
 function appendTrace(d) {
-  const li = document.createElement("li");
-  if (d.is_error) li.classList.add("error");
-  li.innerHTML = `<span class="agent-tag agent-${d.agent}">${d.agent}</span>` +
-    `<span>${d.name}</span><span class="tool-args"> ${JSON.stringify(d.args)}</span>`;
+  const li = el("li", d.is_error ? "error" : null);
+  li.appendChild(el("span", `agent-tag agent-${d.agent}`, d.agent));
+  li.appendChild(el("span", null, d.name));
+  li.appendChild(el("span", "tool-args", " " + JSON.stringify(d.args)));
   $("trace").appendChild(li);
 }
 
 function investigateClaim(claimId) {
   if (source) source.close();
-  $("trace").innerHTML = "";
+  $("trace").replaceChildren();
   $("w-investigate").disabled = true;
   document.querySelector("details.audit").open = true;
 
@@ -415,7 +490,7 @@ async function streamSSE(url, opts, onEvent) {
 
 async function runBatch() {
   if (!state.batchId) return;
-  banner.classList.add("hidden");
+  hideBanner();
   $("run").disabled = true;
   $("run-status").textContent = "Running…";
   try {
@@ -481,6 +556,7 @@ async function postDisposition(disposition) {
 // --- wiring --------------------------------------------------------------------------------------
 
 $("run").addEventListener("click", runBatch);
+$("banner-dismiss").addEventListener("click", hideBanner);
 $("prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - LIMIT); loadQueue(); });
 $("next").addEventListener("click", () => { state.offset += LIMIT; loadQueue(); });
 $("w-investigate").addEventListener("click", () => { if (state.selected) investigateClaim(state.selected); });

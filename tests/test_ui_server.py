@@ -263,3 +263,11 @@ def test_index_served_and_api_not_shadowed(monkeypatch):
     assert root.status_code == 200 and "Deduction Autopsy" in root.text
     monkeypatch.setattr(queries, "dashboard_metrics", lambda: {"ok": True})
     assert client.get("/api/dashboard").json() == {"ok": True}  # /api/* still routes, not the mount
+
+
+def test_lib_module_is_served():
+    """app.js is `type=module` and imports ./lib.js, so a 404 here is a completely dead page — and
+    test_index_served_and_api_not_shadowed above would still pass."""
+    resp = client.get("/lib.js")
+    assert resp.status_code == 200
+    assert "export function dollars" in resp.text

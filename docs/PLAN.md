@@ -506,3 +506,159 @@ the 8 ground-truth verdicts are untouched.
 - **Verify:** `pytest -q` green; new coverage for the case-file writer, the disposition writer
   (incl. surviving a resolution UPSERT), the four new endpoints (200s/404s/422), queue
   filter/sort/search, `claim_documents`, uncapped lot processing, and `cli/process_lot.py`.
+
+---
+
+## Layers 33–41 — Analyst-workspace UX remediation (approved 2026-07-28)
+
+A UI/UX review of the Layer 30/32 dashboard, taken from the end user's seat (a deductions analyst who
+lives in spreadsheets, ERP worklists and ledgers), produced 40 findings in three classes: two
+correctness bugs that make the audit trail lie, numbers that don't survive scrutiny, and no support
+for volume work. 34 findings are in scope here. **No agent/prompt/verdict-logic changes and no
+fixture edits in any of these layers** — the 8 ground-truth verdicts stay untouched.
+
+Locked decisions: verdicts are recoloured by **money direction** (INVALID = "disputable, we recover"
+reads positive; VALID = "conceded" reads cautionary) because the old palette told the analyst the
+opposite of the financial outcome; pure frontend logic moves to `ui/static/lib.js` and is tested with
+Node's built-in runner (zero deps, no `package.json`, no build step) while `app.js` stays DOM+fetch;
+`v_batch_summary` is dropped (nothing reads it and its `needs_human_review` is wrong by
+construction); and the schema change in Layer 34 ships an **additive `ALTER` shim in `init_db`** so no
+one has to delete `data/deductions.db` and lose real decisions and LLM spend.
+
+**Rule:** one commit per layer, tests green before the commit; do not start layer N+1 until layer N
+passes. Layer 33 is first because it builds the JS harness the later layers verify against, and Layer
+34 precedes 35 because 35's predicates are written against 34's new effective-verdict expression.
+Layer 34 is the only schema gate.
+
+### 33. JS test harness + render hygiene
+
+- `ui/static/lib.js` (new): ESM, pure functions only — `dollars` via `Intl.NumberFormat` (grouped;
+  the old `toFixed(2)` rendered `$1234567.89`) and `dollarsCompact` for KPI cards.
+- `ui/static/app.js`: becomes `type=module`, importing from `lib.js`. Drops the line that overwrote
+  the "Needs me" KPI with the current search's row count. Adds `fetchJSON` (throws on `!ok`) and
+  wraps `loadDashboard`/`loadQueue`, which had no error handling at all. `selectClaim` clears the
+  reason/document panes *before* fetching and renders a retry node on failure — the `if (docResp.ok)`
+  with no else left the previous claim's documents under the new claim's header. Converts every
+  remaining `innerHTML` on agent- or DB-supplied text (`appendTrace`, dispute grounds, prior-claim
+  chips, reconciliation, provenance, worklist rows) to the `el()` builders, holding the agent-output
+  path to the standard `renderDocuments` was already written to.
+- `ui/static/index.html`: banner gains a message slot, Retry and dismiss; a queue message region
+  distinguishes "no lot loaded" from "no claims match this filter".
+- `tests/js/lib.test.mjs` (new) + `.github/workflows/tests.yml`: a `js` job pinned to Node 22
+  (`node --check` treats `.js` as CommonJS and fails on `import` before 22.7) running
+  `node --check` and `node --test "tests/js/**/*.test.mjs"` — the glob matters, a bare directory arg
+  gets module-resolved and fails.
+- `tests/test_ui_server.py`: `test_lib_module_is_served` — a 404 on `/lib.js` is a dead page, and the
+  existing static-mount test would not notice.
+- **Verify:** `pytest -q`, `node --test`, `node --check`, `pyright`; live uvicorn against a broken
+  `DEDUCTIONS_DB` returns 500 so the banner path is real, and `/lib.js` returns 200.
+
+### 34. Decision integrity — accept as a snapshot (SCHEMA)
+
+- `mcp_server/db.py`: `claim_dispositions` gains `decided_verdict` and `decided_run_id` (declared
+  last, so a fresh and a shimmed DB agree on column order), plus `_add_snapshot_columns` called from
+  `init_db` — SQLite has no `ADD COLUMN IF NOT EXISTS`, so the idempotent DDL cannot reach an
+  existing DB. Forward-only, one gate, no version table; backfills `decided_verdict` from
+  `override_verdict` for existing overrides.
+- `orchestrator/dispositions.py`: derive and store the verdict the analyst actually signed off on.
+  `accept` snapshots the agent verdict instead of pointing at it, and is refused when there is no
+  resolution to accept; `override` without one stays legal (source documents don't depend on an
+  agent run).
+- `ui/queries.py`: `_EFFECTIVE_VERDICT` becomes `COALESCE(d.decided_verdict, r.final_verdict)`;
+  `batch_claims` returns `decided_verdict`, `note`, `decided_at` (all three already stored, never
+  surfaced) and a computed `decision_stale`. Staleness never changes the effective verdict.
+- `ui/server.py`: 409 for accept-with-nothing-to-accept, 422 for an override with no verdict, no
+  note, or a verdict equal to the agents' current one.
+- `ui/static/`: the verdict `<select>` moves before the Override button and no longer defaults to
+  VALID; note becomes required for override; a stale-decision badge; a confirm before re-investigating
+  a decided claim.
+- **Verify:** `pytest -q` plus an explicit `pytest tests/test_etl.py -v` (the fidelity oracle covers
+  only the six business tables, so it should be untouched — confirm, don't assume) and a uvicorn run
+  against the **existing** `data/deductions.db` to prove the shim self-heals.
+
+### 35. KPIs that add up
+
+- `ui/queries.py`: rewrite the status predicates so the arithmetic closes by construction —
+  `not_investigated` and `awaiting_my_call` are disjoint, `todo` is their union, `decided` is
+  `NOT todo`. Drop the cross-lot `resolved_this_month` (no tab can reproduce a cross-lot month
+  window, so that card could never equal its own rows) for a lot-scoped `decided_count`; rename
+  `dollars_at_risk_cents` → `open_amount_cents` and `needs_me_count` → `todo_count`; add `lot_total`
+  and `oldest_open_days`.
+- `mcp_server/db.py`: `DROP VIEW IF EXISTS v_batch_summary` and delete the `CREATE VIEW`.
+- `ui/static/`: 7 look-alike cards become 2 clickable ones plus a visually distinct read-only stats
+  block. "Needs human review" is gone as a label — the analyst *is* the human. Subtitle becomes the
+  state of the day rather than a description of the architecture.
+- **Verify:** partition tests, and the existing KPI-equals-tab-rows invariant **extended** to every
+  remaining clickable card, never weakened. Response-key renames land as one commit across
+  `queries.py`/`server.py`/`index.html`/`app.js`.
+
+### 36. Verdict semantics that match the money
+
+- `ui/static/lib.js`: `verdictLabel` (money-direction text + tone + glyph), `confidenceBand`,
+  `discrepancyPhrase` (states which way the discrepancy runs and in whose favour), `reasonLabel`,
+  `titleCase`.
+- `ui/static/index.html`: swap the verdict tone tokens; both decision buttons become neutral
+  `.ghost`; the UOM callout stops being warning-yellow for what is a neutral explanation; the
+  confidence meter gets `role="progressbar"` + ARIA values + an explanation of what it measures.
+- **Verify:** `node --test`, plus a `filter: grayscale(1)` pass — this layer lands no Python change,
+  so `pytest` cannot regress it.
+
+### 37. A grid you can work
+
+- `ui/queries.py`: split sort direction out of `_SORT_SQL` (whitelisted, never interpolated) and add
+  a `c.claim_id` tiebreaker — amount sorting is currently non-deterministic across pages on ties.
+  New `retailer`/`reason`/`date_from`/`date_to` filters; `total_amount_cents` over the filtered set
+  (not the page) folded into the existing COUNT query; per-claim `age_days` and `priority_reason`,
+  both server-side because age is measured against the lot's `load_date`, which the client doesn't
+  have. Unknown filter/sort/direction values are rejected instead of silently falling back to "all".
+- `ui/static/`: PO and Age columns (`po_id` was already returned and searchable but never rendered);
+  `cursor:pointer` scoped to `th.sortable`; sort indicators; a `<tfoot>` total; page-size selector;
+  the priority thresholds stated in the UI; URL-hash routing for filter/sort/search/page/selection.
+- **Verify:** `pytest -q`, `node --test`; deep-link a URL, refresh, confirm restore.
+
+### 38. Working the volume
+
+- `orchestrator/dispositions.py`: extract `_write` returning a per-claim outcome; add
+  `write_claim_dispositions` (one connection, one transaction, one decision timestamp).
+- `ui/server.py`: `POST /api/batches/{id}/dispositions`, **accept only** — bulk override is the same
+  "approved something they never saw" failure this phase exists to remove. Transactional at the DB
+  level, best-effort per claim, 200 with a per-claim result map.
+- `ui/static/`: independent pane scrolling, a sticky claim header and decision bar *inside* the
+  right pane's scroller, checkbox column + bulk-accept bar, `j/k` navigation, `a`/`o`/`s` shortcuts,
+  and save-and-next auto-advance.
+- `ui/static/lib.js`: `keyAction` (pure — the reason the keymap is testable).
+- **Verify:** `pytest -q`, `node --test`; work three claims keyboard-only.
+
+### 39. Explainability — reasoning, runs, checks, timeline
+
+- `ui/server.py`: carry `investigator_reasoning`/`reviewer_reasoning` in the live SSE payload (both
+  are already in `case_file.json`; the UI just ignored them). Add `GET /api/claims/{id}/runs`
+  (timestamped run dirs already on disk — filter the `latest` symlink or the newest run
+  double-counts), `?run_id=` on the artifact endpoints **with a path-traversal guard**, and
+  `/reasoning`. Stripping `reasoning` from the Reviewer's input is an anti-anchoring prompt control
+  and does not imply hiding it from the analyst.
+- `ui/static/lib.js`: `checkDescription` (what each reviewer check tested), `timelineGaps` (interval
+  labels — the interval is the point, e.g. a claim filed 90 days after receipt).
+- `ui/static/app.js`: stop force-opening the audit drawer on every run.
+- **Verify:** `pytest -q` with a fixture that creates `latest` as a **real symlink** (every existing
+  test uses `mkdir`, so a double-counting bug would pass unnoticed).
+
+### 40. Run transparency
+
+- `ui/server.py`: move the `try` inside the per-claim loop of the batch stream — today one failing
+  claim aborts the rest of the lot and loses the tally. Emit `claim_error`, continue, and report
+  `failed` in `batch_done`.
+- `ui/static/`: a confirm naming the claim count and the real token spend, a progress counter, a
+  Cancel button, and a failure list.
+- **Verify:** stubbed SSE tests asserting the stream continues past a failure (a live run costs
+  money); no ETA — no timing history exists and a fabricated one is a new lie.
+
+### 41. Export, print, light mode, density
+
+- `ui/queries.py`: `limit=None` means the whole filtered set, mirroring `unresolved_claim_ids(cap=None)`.
+- `ui/server.py`: `GET /api/batches/{id}/export.csv` over the same filter params, stdlib `csv`.
+  Server-side because the only correct export is the filtered set unpaginated.
+- `ui/static/index.html`: `@media print` (analysts PDF dispute files) and
+  `@media (prefers-color-scheme: light)`; a density pass on the 10–11px uppercase labels. No manual
+  theme toggle.
+- **Verify:** `pytest -q`; print preview in greyscale, light-mode switch, CSV opens in Excel.

@@ -1,6 +1,63 @@
 # Progress
 
 ## Current layer
+**Layer 33 — JS test harness + render hygiene complete**
+
+First of the Layers 33–41 UX-remediation phase (`docs/PLAN.md`), which acts on a 40-finding UI/UX
+review of the Layer 30/32 dashboard taken from the analyst's seat. **No agent/prompt/verdict-logic
+changes, no fixture edits** — the 8 ground-truth verdicts are untouched, here and for the whole phase.
+
+**Frontend test harness.** New `ui/static/lib.js` holds pure functions only (no DOM, no fetch) and is
+tested by `tests/js/lib.test.mjs` under `node --test` — zero dependencies, no `package.json`, no
+`node_modules`, no build step. `ui/static/app.js` becomes `type=module` and imports from it, and is
+now DOM + fetch only. This is the boundary that makes the biggest untested surface in the repo
+testable at all; keep it — resist putting a DOM helper in `lib.js` because it's convenient.
+
+Two Node gotchas found and worked around, both now encoded in CI and the README:
+- `node --test tests/js/` **fails** — a bare directory argument gets module-resolved
+  (`Cannot find module '…/tests/js'`). The glob form `node --test "tests/js/**/*.test.mjs"` works.
+- `node --check` treats a `.js` file as CommonJS and errors on `import` before Node 22.7's unflagged
+  module-syntax detection, so the new CI `js` job pins `node-version: "22"`. Local is v22.13.0.
+
+**Findings closed (numbering from the review):**
+- **#21** money formatting — `dollars` was `"$" + (cents / 100).toFixed(2)`, i.e. `$1234567.89` with
+  no thousands separator, for a user who scans ledger columns by grouping. Now `Intl.NumberFormat`,
+  and the `$ at risk` KPI uses a new `dollarsCompact` (`$12.5k`) since full cents are noise on a card.
+- **#4** searching silently corrupted a KPI — `loadQueue` overwrote the "Needs me" card with the
+  current query's `data.total`, so typing `walmart` made the headline count drop. Line deleted.
+- **#6** stale evidence + no error handling. `selectClaim` rendered documents only `if (docResp.ok)`
+  with no else, so a failed fetch left the **previous claim's** purchase order and receiving records
+  under the new claim's header — silently wrong data, the worst outcome available in a reconciliation
+  tool. Now the panes are cleared *before* the fetch and a failure renders an inline Retry.
+  `loadDashboard`/`loadQueue` had no error handling at all; both now go through a new `fetchJSON` that
+  throws on `!resp.ok` and surface a banner.
+- **#34** the error banner had no dismiss (only `runBatch` ever hid it) so an error from one claim
+  stayed pinned for the rest of the session, and its content was a raw `str(exc)` from the server. It
+  now has a message slot, a dismiss `×`, and an optional Retry that re-runs the failed load.
+- **#36** no empty or first-run state — with no batch `loadQueue` returned silently, leaving a blank
+  table and `0 of `. A `#queue-msg` region now distinguishes "no lot loaded, run the ETL" from "no
+  claims match this filter".
+- **#40** (found during the design pass, not in the original 39) the agent-output render path used
+  `innerHTML` on model-generated text: `appendTrace` interpolated the tool name and
+  `JSON.stringify(args)`, and `renderEvidence` did the same for `dispute_grounds` and `prior_claims`,
+  plus `renderRecon`, `renderVerdictHeader` and `renderRow` for DB text. `renderDocuments` was
+  carefully written with `textContent` and says so in a comment — the agent path simply wasn't held to
+  the same standard, even though free-text `receiving_records.notes` is a documented injection surface
+  and CLAUDE.md carries an XML-delimiting safeguard for exactly this. All of it now goes through the
+  `el()` builder, which was hoisted out of the document-builder block since the whole file uses it.
+  `grep -n innerHTML ui/static/app.js` now matches only the comment that forbids it.
+
+**Verification:** `pytest -q` — **359 passed, 10 deselected** (was 358; +`test_lib_module_is_served`,
+which exists because `/lib.js` 404ing would be a completely dead page and the pre-existing static-mount
+test would still pass). `pyright` 0 errors. `node --check` clean on both files;
+`node --test "tests/js/**/*.test.mjs"` — 8 passing. Live `uvicorn`: `/lib.js` → 200, index carries
+`<script type="module">`, `/api/dashboard` against a deliberately broken `DEDUCTIONS_DB` → 500 (so the
+banner path is real, not hypothetical), `/api/claims/CLM-NOPE/documents` → 404 (the retry-node path).
+No live OpenRouter run — this layer touches no agent code.
+
+---
+
+## Previous layer
 **Layer 31 — Universal completeness check + ESCALATE on missing source data complete**
 
 Built out of numeric order (after Layer 32) because it was gated on sign-off: it is the only layer

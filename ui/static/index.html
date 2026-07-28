@@ -45,7 +45,14 @@
     .card .v { font-size: 20px; font-weight: 700; }
     .card.attn .v { color: var(--warn); }
 
-    #banner { border: 1px solid var(--bad); color: var(--bad); border-radius: 8px; padding: 10px 14px; margin: 0 24px 12px; }
+    /* An error the analyst can't dismiss stays pinned above the workspace for the rest of the
+       session, and one with no way forward is just a dead end — hence the retry slot. */
+    #banner {
+      border: 1px solid var(--bad); color: var(--bad); border-radius: 8px; padding: 10px 14px;
+      margin: 0 24px 12px; display: flex; align-items: center; gap: 12px;
+    }
+    #banner-msg { flex: 1; }
+    #banner button { color: var(--bad); border-color: var(--bad); }
 
     /* Two-pane layout */
     .workspace { display: grid; grid-template-columns: 420px 1fr; gap: 16px; padding: 0 24px 48px; align-items: start; }
@@ -78,6 +85,9 @@
     .row-spin { color: var(--accent); }
     .disp-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
     .pager { display: flex; gap: 12px; align-items: center; padding: 10px 14px; }
+    /* An empty table with "0 of " reads as a broken page; both the no-lot and no-match states need
+       to say which one they are. */
+    .queue-msg { color: var(--muted); font-size: 13px; padding: 16px 14px; }
 
     /* Workspace */
     #ws-empty { padding: 48px 24px; color: var(--muted); text-align: center; }
@@ -191,7 +201,11 @@
     <div class="card" style="cursor:default"><span class="k">Lot</span><span class="v" id="m-batch">–</span></div>
   </div>
 
-  <div id="banner" class="hidden"></div>
+  <div id="banner" class="hidden">
+    <span id="banner-msg"></span>
+    <button class="ghost sm hidden" id="banner-retry">Retry</button>
+    <button class="ghost sm" id="banner-dismiss" aria-label="Dismiss">×</button>
+  </div>
 
   <div class="workspace">
     <!-- LEFT: triage queue -->
@@ -217,6 +231,7 @@
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
+      <div id="queue-msg" class="queue-msg hidden"></div>
       <div class="pager">
         <button class="ghost sm" id="prev">Prev</button>
         <span id="page-info" class="muted"></span>
@@ -313,6 +328,8 @@
       </div>
     </section>
   </div>
-  <script src="/app.js"></script>
+  <!-- type=module so app.js can import the tested pure helpers from lib.js. Safe: there are no
+       inline event handlers anywhere in this file, and module scripts are deferred. -->
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

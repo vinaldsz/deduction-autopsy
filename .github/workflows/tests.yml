@@ -24,6 +24,25 @@ jobs:
       - name: Run unit tests
         run: pytest tests/ -v
 
+  js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to 22: `node --check` treats a .js file as CommonJS and fails on `import` before
+      # 22.7's unflagged module-syntax detection.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Syntax-check the frontend
+        run: node --check ui/static/app.js && node --check ui/static/lib.js
+
+      # Glob, not a bare directory: `node --test tests/js/` module-resolves the path and fails.
+      - name: Run frontend unit tests
+        run: node --test "tests/js/**/*.test.mjs"
+
   types:
     runs-on: ubuntu-latest
     steps:

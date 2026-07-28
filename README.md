@@ -189,7 +189,17 @@ pytest tests/test_pipeline_scenarios.py -m integration -v
 
 # Static type check (same gate CI runs; config in pyproject.toml [tool.pyright])
 pyright
+
+# Frontend: Node's built-in test runner over the pure helpers in ui/static/lib.js. No
+# package.json, no node_modules, no build step. The glob matters — `node --test tests/js/`
+# module-resolves the bare directory and fails.
+node --check ui/static/app.js && node --check ui/static/lib.js
+node --test "tests/js/**/*.test.mjs"
 ```
+
+`ui/static/app.js` is deliberately DOM + fetch only; anything that is real logic (money
+formatting, verdict labels, the keymap, URL-hash state) lives in `ui/static/lib.js` so it can
+be tested. CI runs all three gates — `pytest`, `pyright`, and the `js` job.
 
 Unit tests mock OpenRouter responses (`tests/agent_stubs.py`) but always exercise the real
 MCP server in-process — no test hits OpenRouter or spawns a subprocess except the
