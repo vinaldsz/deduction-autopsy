@@ -5,6 +5,7 @@ these assert endpoint shapes, 404s, and SSE event order. The query SQL itself is
 tests/test_ui_queries.py; the pipeline by tests/test_orchestrator_pipeline.py.
 """
 
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -139,15 +140,214 @@ def test_batch_investigate_streams_per_claim_then_batch_done(monkeypatch):
     monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
     events = _sse_events(client.post("/api/batches/LOT-2024-09-15/investigate").text)
     names = [e for e, _ in events]
-    assert names == ["tool_call", "tool_call", "claim_done",
-                     "tool_call", "tool_call", "claim_done", "batch_done"]
+    # `batch_start` leads: the progress counter needs a denominator, and only the server knows the
+    # worklist. `failed`/`stopped_reason` joined the tally with the per-claim try (Layer 40).
+    assert names == ["batch_start", "claim_start", "tool_call", "tool_call", "claim_done",
+                     "claim_start", "tool_call", "tool_call", "claim_done", "batch_done"]
+    assert events[0][1] == {"total": 2}
     assert [d["claim_id"] for e, d in events if e == "claim_done"] == ["CLM-1", "CLM-2"]
-    assert events[-1][1] == {"investigated": 2, "VALID": 0, "INVALID": 1, "ESCALATE": 1}
+    assert events[-1][1] == {"investigated": 2, "VALID": 0, "INVALID": 1, "ESCALATE": 1,
+                             "failed": 0, "stopped_reason": None}
 
 
 def test_batch_investigate_unknown_batch_is_404(monkeypatch):
     monkeypatch.setattr(queries, "batch_exists", lambda b: False)
     assert client.post("/api/batches/nope/investigate").status_code == 404
+
+
+# --- Layer 40: a batch stream that survives one claim failing -------------------------------------
+
+def _failing_pipeline(monkeypatch, fails: set[str], seen: list[str]):
+    """Stub `run_pipeline` that raises for the named claims and records every claim it was asked
+    for. The call list is what proves a claim was never *started*, which no frame can show."""
+    async def fake_pipeline(*, claim_id, **kw):
+        seen.append(claim_id)
+        if claim_id in fails:
+            raise PipelineError(f"boom on {claim_id}")
+        return _fake_result(claim_id)
+
+    monkeypatch.setattr(server, "run_pipeline", fake_pipeline)
+
+
+def test_one_failing_claim_does_not_end_the_lot(monkeypatch):
+    """The defect this layer exists for: the `try` used to wrap the whole loop, so claim 2 of 3
+    raising abandoned claim 3 and threw away the tally for claim 1."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: ["CLM-1", "CLM-2", "CLM-3"])
+    seen: list[str] = []
+    _failing_pipeline(monkeypatch, {"CLM-2"}, seen)
+
+    events = _sse_events(client.post("/api/batches/LOT-2024-09-15/investigate").text)
+    assert [e for e, _ in events] == ["batch_start",
+                                      "claim_start", "claim_done",
+                                      "claim_start", "claim_error",
+                                      "claim_start", "claim_done", "batch_done"]
+    assert seen == ["CLM-1", "CLM-2", "CLM-3"]
+    error = next(d for e, d in events if e == "claim_error")
+    assert error["claim_id"] == "CLM-2" and "boom on CLM-2" in error["error"]
+    assert events[-1][1] == {"investigated": 2, "VALID": 0, "INVALID": 2, "ESCALATE": 0,
+                             "failed": 1, "stopped_reason": None}
+
+
+def test_every_claim_announces_itself_before_it_can_fail(monkeypatch):
+    """`claim_start` precedes the attempt, so a claim that dies before its first tool call has still
+    named itself. The progress counter used to infer the current claim from `tool_call`; a claim that
+    failed at the first LLM call therefore never announced itself, and the line went on naming the
+    PREVIOUS claim while the counter advanced past it — seen live, on a real run."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: ["CLM-1", "CLM-2", "CLM-3"])
+    _failing_pipeline(monkeypatch, {"CLM-2"}, [])
+
+    events = _sse_events(client.post("/api/batches/LOT-2024-09-15/investigate").text)
+    assert [d["claim_id"] for e, d in events if e == "claim_start"] == ["CLM-1", "CLM-2", "CLM-3"]
+    # The failing claim announced itself even though it emitted no tool_call at all.
+    order = [e for e, _ in events]
+    assert order.index("claim_start") < order.index("claim_error")
+
+
+def test_three_consecutive_failures_stop_the_lot(monkeypatch):
+    """Per-claim recovery alone turns a dead API key into one paid failure per claim. The call
+    list, not the frame count, is what shows claims 4 and 5 were never attempted."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    ids = ["CLM-1", "CLM-2", "CLM-3", "CLM-4", "CLM-5"]
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: ids)
+    seen: list[str] = []
+    _failing_pipeline(monkeypatch, set(ids), seen)
+
+    events = _sse_events(client.post("/api/batches/LOT-2024-09-15/investigate").text)
+    assert [e for e, _ in events] == ["batch_start",
+                                      "claim_start", "claim_error",
+                                      "claim_start", "claim_error",
+                                      "claim_start", "claim_error", "batch_done"]
+    assert seen == ["CLM-1", "CLM-2", "CLM-3"]
+    assert events[-1][1] == {"investigated": 0, "VALID": 0, "INVALID": 0, "ESCALATE": 0,
+                             "failed": 3, "stopped_reason": "consecutive_failures"}
+
+
+def test_a_success_resets_the_consecutive_failure_count(monkeypatch):
+    """Scattered failures across a long lot are not a systemic fault. Two, a success, then three
+    more: the breaker must fire on the trailing run, not on the total of five."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    ids = ["CLM-1", "CLM-2", "CLM-3", "CLM-4", "CLM-5", "CLM-6", "CLM-7"]
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: ids)
+    seen: list[str] = []
+    _failing_pipeline(monkeypatch, {"CLM-1", "CLM-2", "CLM-4", "CLM-5", "CLM-6"}, seen)
+
+    events = _sse_events(client.post("/api/batches/LOT-2024-09-15/investigate").text)
+    assert seen == ["CLM-1", "CLM-2", "CLM-3", "CLM-4", "CLM-5", "CLM-6"]  # CLM-7 never started
+    assert events[-1][1]["failed"] == 5
+    assert events[-1][1]["investigated"] == 1
+    assert events[-1][1]["stopped_reason"] == "consecutive_failures"
+
+
+async def test_cancelling_the_stream_stops_the_lot_at_the_next_claim(monkeypatch):
+    """Cancel is a real stop, not a client that looks away while the server keeps spending.
+
+    Driven against the generator directly rather than through TestClient, which consumes a
+    streaming response whole and so can never disconnect mid-stream. CLM-2 is *gated* rather than
+    merely slow: the event queue is unbounded, so a stub that returns instantly lets the producer
+    finish the entire lot before the consumer reads its first frame, and there would be nothing
+    left to cancel. Parking CLM-2 reproduces the only state a real cancel ever happens in — one
+    claim in flight, the rest untouched.
+    """
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: ["CLM-1", "CLM-2", "CLM-3"])
+    seen: list[str] = []
+    release = asyncio.Event()
+
+    async def gated_pipeline(*, claim_id, **kw):
+        seen.append(claim_id)
+        if claim_id != "CLM-1":
+            await release.wait()
+        return _fake_result(claim_id)
+
+    monkeypatch.setattr(server, "run_pipeline", gated_pipeline)
+
+    before = set(server._background_tasks)
+    response = await server.investigate_batch("LOT-2024-09-15")
+    body = response.body_iterator
+    frames = []
+    async for chunk in body:
+        frames.append(chunk)
+        if "claim_done" in chunk:
+            break
+    task = next(iter(set(server._background_tasks) - before))
+
+    await body.aclose()
+    assert seen == ["CLM-1", "CLM-2"], "CLM-2 was in flight when the client disconnected"
+
+    release.set()  # the in-flight claim is allowed to finish and be persisted
+    await asyncio.wait_for(task, timeout=1)
+    assert seen == ["CLM-1", "CLM-2"], f"the lot kept running after cancel: {seen}"
+    assert any("batch_start" in f for f in frames)
+
+
+async def test_cancelling_does_not_block_on_the_in_flight_claim(monkeypatch):
+    """`finally: await task` would have made aclose() wait out the running claim — ~40s of held
+    response teardown for a click whose whole purpose is to stop waiting."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: ["CLM-1", "CLM-2"])
+    started = asyncio.Event()
+
+    async def slow_pipeline(*, claim_id, **kw):
+        started.set()
+        await asyncio.sleep(5)
+        return _fake_result(claim_id)
+
+    monkeypatch.setattr(server, "run_pipeline", slow_pipeline)
+    response = await server.investigate_batch("LOT-2024-09-15")
+    body = response.body_iterator
+    await body.__anext__()          # batch_start
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.wait_for(body.aclose(), timeout=1)
+
+
+# --- Layer 40: the spend estimate behind the run confirm ------------------------------------------
+
+def _write_run(tmp_path, claim_id, run_id, usage):
+    run_dir = tmp_path / claim_id / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "verdict.json").write_text(json.dumps({"final_verdict": "VALID", "usage": usage}))
+
+
+def test_run_estimate_reports_the_median_of_real_past_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: ["CLM-1", "CLM-2"])
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    for run_id, total in (("r1", 100), ("r2", 300), ("r3", 200)):
+        _write_run(tmp_path, "CLM-9", run_id, {
+            "investigator": {"prompt_tokens": total // 2, "completion_tokens": 0},
+            "reviewer": {"prompt_tokens": total // 2, "completion_tokens": 0},
+        })
+    assert client.get("/api/batches/LOT-2024-09-15/run-estimate").json() == {
+        "claims": 2, "median_tokens_per_claim": 200, "runs_measured": 3}
+
+
+def test_run_estimate_says_so_rather_than_guessing_with_no_history(monkeypatch, tmp_path):
+    """The same rule as the absent ETA: no measurement is reported as no measurement."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: ["CLM-1"])
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path / "gone")
+    assert client.get("/api/batches/LOT-2024-09-15/run-estimate").json() == {
+        "claims": 1, "median_tokens_per_claim": None, "runs_measured": 0}
+
+
+def test_run_estimate_skips_runs_that_recorded_no_usage(monkeypatch, tmp_path):
+    """17 of the 57 real run dirs predate the current layout. A run with no usage is not a run
+    that cost zero, so counting it as 0 would drag the median toward a number nothing measured."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "unresolved_claim_ids", lambda b, cap: [])
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    _write_run(tmp_path, "CLM-9", "r1", None)
+    _write_run(tmp_path, "CLM-9", "r2", {"investigator": {"prompt_tokens": 40,
+                                                          "completion_tokens": 10}})
+    assert client.get("/api/batches/LOT-2024-09-15/run-estimate").json() == {
+        "claims": 0, "median_tokens_per_claim": 50, "runs_measured": 1}
+
+
+def test_run_estimate_unknown_batch_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "batch_exists", lambda b: False)
+    assert client.get("/api/batches/nope/run-estimate").status_code == 404
 
 
 # --- single-claim drill-in -----------------------------------------------------------------------

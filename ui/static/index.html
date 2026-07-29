@@ -18,6 +18,16 @@
     header.top h1 { font-size: 20px; margin: 0 0 2px; }
     header.top .sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
     .run-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    /* Deliberately sets no `display`: `.hidden` is also a plain class, so a `display: block` here
+       would be a same-specificity tie decided by source order — the Layer 33 banner bug and the
+       Layer 38 media-query bug were both exactly that. A div is block anyway. */
+    .run-failures {
+      margin: -8px 0 16px; padding: 10px 12px; font-size: 13px;
+      border: 1px solid var(--border); border-left: 3px solid var(--bad); border-radius: 8px;
+    }
+    .run-failures-head { margin-bottom: 6px; }
+    .run-failures ul { margin: 0; padding-left: 18px; }
+    .run-failure-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     button {
       font: inherit; background: var(--accent); color: #06122b; border: none; border-radius: 8px;
       font-weight: 600; cursor: pointer; padding: 8px 16px;
@@ -358,8 +368,14 @@
     <p class="sub" id="sub">Loading today's lot…</p>
     <div class="run-row">
       <button id="run">Process lot (investigate + review all)</button>
+      <!-- Cancel stops the lot at the next claim boundary; the claim already running finishes. -->
+      <button class="ghost sm hidden" id="run-cancel">Cancel</button>
       <span id="run-status" class="muted"></span>
     </div>
+    <!-- Claims the run could not investigate. Session-only on purpose: a failure writes nothing to
+         claim_resolutions, so there is no row for it to survive in. Outside .run-row, which is a
+         flex line. -->
+    <div class="run-failures hidden" id="run-failures"></div>
   </header>
 
   <!-- Two cards, and they partition the lot: to-do + decided == every claim in it. -->

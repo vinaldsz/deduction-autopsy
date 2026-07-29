@@ -1,6 +1,118 @@
 # Progress
 
-## Not a layer — frontend modularization (after Layer 39)
+## Current layer
+**Layer 40 — Run transparency: a batch stream that survives one claim failing — complete**
+
+Eighth of the Layers 33–41 UX-remediation phase. No agent/prompt/verdict-logic changes, no fixture
+edits, **no schema change**; the 8 ground-truth verdicts are untouched and the fidelity oracle was
+re-run explicitly.
+
+**The lot run was the only action in the app that spends money, and the only one with no
+transparency.** `investigate_batch` wrapped the *whole* per-claim loop in one `try`, so claim 7 of 50
+raising abandoned claims 8–50, discarded the tally for the six that had succeeded, and emitted one
+`error` frame carrying a raw `str(exc)` and no claim id. `#run-status` was left reading
+`Investigating CLM-SYN-0017…` — the last claim that happened to emit a `tool_call`, not the one that
+failed — and never cleared. `cli/process_lot.py:75-81` has always done this correctly (catch per
+claim, count `errors`, continue, print a tally); the UI was the odd one out. One click also started
+~50 paid agent runs with **no confirmation at all**, while bulk accept — which spends nothing —
+confirms.
+
+**Five additions beyond `docs/PLAN.md`'s bullets, all recorded there.** `batch_start {total}` (a
+counter needs a denominator only the server has); `GET /run-estimate`; the circuit breaker; client-side
+token accumulation; and `run-bar.js` as a new layer-1 renderer.
+
+**The confirm quotes measured spend or admits it has none.** Usage lives only in each run's
+`verdict.json`, and this phase forbids a schema change, so `/run-estimate` walks the run dirs on demand
+and returns `claims` + a **median** + `runs_measured` — live, `Investigate 5 claims? … about 22k tokens
+per claim (median of 61 past runs), so expect roughly 112k tokens of real spend.` With no history the
+median is `null` and the sentence says there is nothing to estimate from, which is the same rule that
+keeps a fabricated ETA off this screen. `claims` comes from `unresolved_claim_ids`, the query the run
+itself uses — deliberately not `/api/dashboard`'s `not_investigated_count`, which excludes
+decided-but-never-investigated claims and would under-report the spend.
+
+**The per-claim `except` is broad, unlike the CLI's `(PipelineError, AgentRunnerError)`** — an
+unexpected `TypeError` on claim 7 must not cost the other 43 — but a **3-consecutive-failure circuit
+breaker** keeps that from turning one dead API key into 50 paid failures. A success resets the count,
+so scattered failures across a long lot still run to the end. `batch_done` carries `stopped_reason`,
+and `batchSummaryLine` refuses to render that as an ordinary "Done:".
+
+**Cancel stops the lot, it does not merely look away.** The client aborts the fetch; the generator's
+`finally` sets an `asyncio.Event` the loop checks between claims and **does not** `await` the task —
+that code runs inside `aclose()`, and awaiting would hold response teardown for the ~40s the in-flight
+claim needs. Proved by mutation: restoring the unconditional `await task` **deadlocks the test suite
+outright**. That claim finishes and is persisted (paid for either way; killing it mid-run would leave a
+run dir with no `verdict.json` that `/runs` would list as unrebuildable), which is why the cancelled
+summary says *"Any claim already running will finish and be saved"* rather than `Cancelled: 0
+investigated` — the analyst's queue gains a row thirty seconds later either way. The task is parked in a
+module-level set, because asyncio holds only a weak reference and a detached batch could otherwise be
+collected mid-claim.
+
+**Two things only the running app showed.**
+
+1. **The progress line named a claim that had already finished.** `current` was set from the first
+   `tool_call`, so a claim failing at its first LLM call never announced itself: the line read
+   `Investigating CLM-001 · 2 of 3`, then `· 3 of 3 · 1 failed`, while CLM-001 was long done and
+   CLM-003 was running. Fixed with an explicit `claim_start` event — which claim is being worked is a
+   fact the server should state, not something the client infers from a side effect that may not
+   happen. Now `CLM-001 · 1 of 5 → CLM-002 · 2 of 5 · 1 failed → CLM-003 · 3 of 5 · 2 failed`, verified
+   on a lot where **no claim emits a tool call at all**, which is the exact shape that hid it.
+2. **A transitional "Cancelling — finishing CLM-007…" line and a self-disabling Cancel button were
+   both unreachable**, cut rather than kept. Aborting rejects the pending read within a tick, so the
+   cancelled summary is on screen before either state could be read, and `cancelBatch`'s `live` guard
+   already makes a second click a no-op. Also moved: `renderRunFailures([])` now runs *after* the
+   confirm, so declining the dialog leaves the previous run's report standing.
+
+**Also done here, inherited from Layer 39's notes:** the SSE error paths no longer hand a raw
+`str(exc)` to the banner. The exception goes to `console.error`; the analyst gets a sentence naming
+what failed and what state it leaves the work in ("nothing was recorded, so the claim is unchanged").
+A failed claim gets **no queue-row badge** — nothing was written to `claim_resolutions`, so the grid
+stays a faithful view of the store and the run bar's list is the only record it was attempted.
+
+**Verification.** `scripts/check.sh` — `pytest` **446 passed, 10 deselected** (was 436); `pyright` 0
+errors; `node --test` **170 passing** (was 153). Explicit `pytest tests/test_etl.py tests/test_db.py` —
+59 passed, so the fidelity oracle is untouched (confirmed, not assumed, as in Layers 34/35/37a/38/39).
+Two cancel tests are driven against the generator directly, not `TestClient`, which consumes a
+streaming response whole and so can never disconnect mid-stream; CLM-2 is *gated* rather than slow
+because the event queue is unbounded and an instant stub finishes the whole lot before the consumer
+reads a frame, leaving nothing to cancel. The circuit-breaker tests assert the **stub's call list**,
+not the frame count — only that shows claims 4 and 5 were never *started*.
+
+**Live.** Real `uvicorn` + headless Chrome over CDP against a **copy** of `data/deductions.db` (this
+layer writes), with `confirm` handled through `Page.javascriptDialogOpening` rather than monkey-patched
+away, so the asserted text is what an analyst would read. **37 browser assertions across four passes.**
+The real DB was confirmed afterwards at its original 52 resolutions / 6 dispositions.
+
+- **Every claim failing, at zero cost:** `OPENROUTER_BASE_URL` pointed at a local always-500 stub, so
+  five claims fail through the real transport path. The confirm named 5 claims and real measured spend;
+  the breaker stopped at exactly 3; the failure list named those three and no others; `Stopped after 3
+  failures in a row: 0 investigated · 3 failed. Check the API key or the connection, then run again.`;
+  no error banner, and the queue kept all 25 rows.
+- **Cancel, also free:** a parking stub. Cancel appeared only while running, the counter had its
+  denominator from the first moment, the cancelled summary did not say "Done", Cancel was withdrawn and
+  Run offered again immediately — and the server attempted **exactly one claim** (one `ui_claim_failed`
+  in the log, and 0 new resolutions), so the remaining four were never started.
+- **A genuinely mixed lot, with real spend:** a proxy that forwards to real OpenRouter but 500s one
+  designated claim — the only way to see a real failure *between* real successes, which is the layer's
+  headline behaviour. `CLM-001 · 1 of 3 → CLM-002 · 2 of 3 → CLM-003 · 3 of 3 · 1 failed → Done: 2
+  investigated · 1 failed · 54k tokens`, with CLM-002 alone in the failure list and two real
+  resolutions (`CLM-001 VALID`, `CLM-003 INVALID`) written to the copy.
+- **Measured, not guessed:** the failure box is 0px tall while hidden and 106px with three items, adds
+  no horizontal overflow at 1600px, stays inside the viewport, pushes the KPI strip down (142→256px)
+  instead of overlapping it, and under `grayscale(1)` still says *"3 claims could not be investigated:"*
+  in words rather than relying on its red border.
+
+**Known and deferred:** the UI never calls `configure_logging()`, so `logger.info` lines — including
+this layer's `ui_batch_cancelled` and `pipeline.py`'s `pipeline_start` — are invisible under uvicorn,
+whose root logger sits at WARNING. Pre-existing and not this layer's to fix, so the cancel stop was
+verified behaviourally instead. `investigate.js` remains untested by construction (four more pure
+functions crossed the `lib.js` boundary), which is again how the `claim_start` bug surfaced. Layer 41
+continues the phase — and note that Layer 39's deviation defers the run picker and `?run_id=` to it
+while Layer 41's own bullets say nothing about a picker; that disagreement should be settled before
+Layer 41 is planned, or the deferral quietly becomes a drop.
+
+---
+
+## Previous — not a layer: frontend modularization (after Layer 39)
 
 `ui/static/app.js` had reached **1230 lines and 53 functions**, and it was the one file in the repo
 reachable by **no gate at all**: `pytest` can't see it, `node --test` only reached `lib.js`, and

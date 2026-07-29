@@ -67,6 +67,7 @@ was gated on sign-off — it is the only layer that edits the agent prompts):
 | 38 | Working the volume — bulk accept (accept-only), keyboard path, pinned decision bar, save-and-next | ✅ Done |
 | 39 | Explainability — agent reasoning, described reviewer checks, timeline intervals, run history (`/runs`, `/trace`) | ✅ Done |
 | — | Frontend modularization — `app.js` 1230 lines → 18 layered modules, enforced by `tests/js/architecture.test.mjs` | ✅ Done |
+| 40 | Run transparency — per-claim `claim_error` so one failure can't end the lot, measured-spend confirm, progress counter, Cancel, failure list | ✅ Done |
 | — | Layer-end verification tooling (`scripts/check.sh`, `/layer-done`, `tests/test_invariants.py`) | ✅ Done |
 
 ## Setup
@@ -178,9 +179,21 @@ API (data comes from the relational store — there is no "scenario"):
   and counted with the same predicates the filter tabs use so the arithmetic closes.
 - `GET /api/batches/{batch_id}?offset=&limit=&status_filter=&sort=&q=` → a page of the lot's claims
   (each with `priority`, `status`, and any disposition); 404 for an unknown batch.
+- `GET /api/batches/{batch_id}/run-estimate` → `{claims, median_tokens_per_claim, runs_measured}` —
+  what a lot run is about to cost, **measured** from the `usage` in each archived run's `verdict.json`.
+  With no runs on disk the median is `null` and the UI says there is nothing to estimate from, for the
+  same reason there is no ETA: a number nobody measured is worse than an admitted unknown when the
+  analyst is about to spend against it. `claims` comes from the same query the run uses.
 - `POST /api/batches/{batch_id}/investigate?cap=` (SSE) → run over the lot's unresolved claims
-  (the whole lot by default; `cap` limits it): per-claim `tool_call` + `claim_done`, then a
-  `batch_done` summary.
+  (the whole lot by default; `cap` limits it). Frames: `batch_start {total}`, then per claim
+  `claim_start {claim_id}` → `tool_call`* → `claim_done` **or** `claim_error {claim_id, error}`, then
+  `batch_done {investigated, VALID, INVALID, ESCALATE, failed, stopped_reason}`.
+  **One claim failing does not end the lot** — it is reported and the run continues, matching
+  `cli/process_lot.py`. After **3 consecutive** failures the run stops with
+  `stopped_reason: "consecutive_failures"`, so a dead API key costs 3 round-trips rather than 50.
+  Closing the stream (the UI's Cancel) stops the lot **at the next claim boundary**: the claim already
+  running finishes and is persisted, because it is paid for either way and killing it would leave a run
+  directory with no `verdict.json`.
 - `GET /api/claims/{claim_id}/documents` → the claim's source-document graph from the DB.
 - `GET /api/claims/{claim_id}/casefile` → the full CaseFile + ReviewerOutput from the latest run;
   404 if the claim hasn't been investigated.

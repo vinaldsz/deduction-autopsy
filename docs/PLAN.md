@@ -795,6 +795,39 @@ at the running app. One commit each.
   Cancel button, and a failure list.
 - **Verify:** stubbed SSE tests asserting the stream continues past a failure (a live run costs
   money); no ETA — no timing history exists and a fabricated one is a new lie.
+- **Five additions beyond the above, approved in planning.**
+  1. **`batch_start {total}`** — a progress counter needs a denominator, and only the server knows the
+     worklist. `unresolved_claim_ids` is *not* `/api/dashboard`'s `not_investigated_count` (that one
+     excludes decided-but-never-investigated claims), so the client cannot derive it.
+  2. **`GET /api/batches/{id}/run-estimate`** — "the real token spend" has to be measured, and usage
+     lives only in each run's `verdict.json`; this phase forbids a schema change, so the route walks
+     the run dirs on demand and returns `claims` + a **median** + `runs_measured`. No history means
+     `null` and the confirm says so, the same rule as the absent ETA.
+  3. **A 3-consecutive-failure circuit breaker.** Per-claim recovery alone converts one systemic fault
+     (dead `OPENROUTER_API_KEY`, OpenRouter down) into one *paid* failure per claim; `batch_done` then
+     carries `stopped_reason: "consecutive_failures"` and the summary says what to check. A success
+     resets the counter, so scattered failures across a long lot still run to the end.
+  4. **Token spend accumulated client-side** from `claim_done.usage` rather than reported in
+     `batch_done`, because a **cancelled** run never reaches `batch_done` and it still spent every
+     token it spent.
+  5. **`ui/static/run-bar.js`, a new layer-1 renderer**, declared in `tests/js/architecture.test.mjs`.
+- **Cancel stops at the next claim boundary.** The client aborts the fetch; the generator's `finally`
+  sets an `asyncio.Event` the loop checks between claims and — critically — does **not** `await` the
+  task, because that runs inside `aclose()` and would hold response teardown for the ~40s the
+  in-flight claim needs. That claim finishes and is persisted: it is paid for either way, and killing
+  it mid-run would leave a run dir with no `verdict.json` that `/runs` would list as unrebuildable.
+  The task is parked in a module-level set, since asyncio holds only a weak reference to it.
+- **Also inherited and done here** (assigned by Layer 39's notes): the two SSE error paths no longer
+  hand a raw `str(exc)` to the banner. The exception goes to `console.error`; the analyst gets a
+  sentence naming what failed and what state it leaves the work in.
+- **The bug only the running app showed.** The progress line inferred the current claim from the first
+  `tool_call`, so a claim that failed at its first LLM call never announced itself — the line went on
+  reading `Investigating CLM-001 · 3 of 3` while CLM-001 had long finished and CLM-003 was running.
+  Fixed with an explicit `claim_start` event: "which claim is being worked" is a fact the server
+  should state, not something the client infers from a side effect that may never happen.
+- **Cut after seeing it run:** a "Cancelling — finishing CLM-007…" transitional line and a
+  self-disabling Cancel button. Aborting rejects the pending read within a tick, so both states were
+  unreachable in practice, and `cancelBatch`'s `live` guard already makes a second click a no-op.
 
 ### 41. Export, print, light mode, density
 

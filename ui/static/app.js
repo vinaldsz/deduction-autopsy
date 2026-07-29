@@ -15,7 +15,7 @@ import { loadDashboard } from "./dashboard.js";
 import { syncOverrideButton } from "./decision-pane.js";
 import { postDisposition } from "./disposition.js";
 import { $ } from "./dom.js";
-import { investigateClaim, runBatch } from "./investigate.js";
+import { cancelBatch, investigateClaim, runBatch } from "./investigate.js";
 import { commit, loadFilterOptions, loadQueue, setFilter } from "./queue.js";
 import { clearPicked, renderQueueBar } from "./queue-view.js";
 import { bulkAccept } from "./selection.js";
@@ -28,6 +28,7 @@ import { maybeLoadTrace, restoreSelection } from "./workspace.js";
 // --- wiring --------------------------------------------------------------------------------------
 
 $("run").addEventListener("click", runBatch);
+$("run-cancel").addEventListener("click", cancelBatch);
 
 $("banner-dismiss").addEventListener("click", hideBanner);
 

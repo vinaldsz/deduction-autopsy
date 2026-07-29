@@ -27,7 +27,7 @@ const DIR = "ui/static";
 const LAYER = {
   "lib.js": 0, "dom.js": 0, "state.js": 0, "stream.js": 0, "api.js": 0,
   "banner.js": 1, "controls.js": 1, "queue-view.js": 1, "documents.js": 1, "evidence.js": 1,
-  "decision-pane.js": 1,
+  "decision-pane.js": 1, "run-bar.js": 1,
   "dashboard.js": 2, "workspace.js": 2, "queue.js": 2, "selection.js": 2, "investigate.js": 2,
   "disposition.js": 2, "keyboard.js": 2,
   "app.js": 3,

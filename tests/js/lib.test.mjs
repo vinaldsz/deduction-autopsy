@@ -9,6 +9,7 @@ import {
   overrideGuard, pageStatus, parseFrame, pickedOnPage, queryParams, reviewChecks, runHistoryLine,
   safeClass, selectAllState, sentenceCase, sortIndicator, splitFrames, statusParts, timelineGaps,
   todoSplit, usageLine, verdictLabel,
+  batchSummaryLine, runConfirmMessage, runProgressLine, usageTokens,
 } from "../../ui/static/lib.js";
 
 /** The /api/dashboard shape, as ui/queries.py::dashboard_metrics returns it. */
@@ -1002,5 +1003,123 @@ describe("parseFrame", () => {
 
   it("ignores a comment or an unknown field", () => {
     assert.deepEqual(parseFrame(": keep-alive\nid: 7\nevent: x\ndata: 1"), { event: "x", data: "1" });
+  });
+});
+
+// --- Layer 40: running the lot ---------------------------------------------------------------------
+
+describe("usageTokens", () => {
+  it("adds up both agents", () => {
+    assert.equal(usageTokens({
+      investigator: { prompt_tokens: 1000, completion_tokens: 200 },
+      reviewer: { prompt_tokens: 3000, completion_tokens: 400 },
+    }), 4600);
+  });
+
+  it("survives a run that recorded usage for only one agent", () => {
+    // The exact shape that broke usageLine before it was guarded: real, on disk, and it used to
+    // throw four levels deep inside a catch that swallowed it.
+    assert.equal(usageTokens({ investigator: { prompt_tokens: 40, completion_tokens: 10 } }), 50);
+    assert.equal(usageTokens({ reviewer: null, investigator: { prompt_tokens: 7 } }), 7);
+  });
+
+  it("returns 0 rather than throwing on nothing at all", () => {
+    for (const bad of [null, undefined, {}, "nope", 5, { investigator: "x" }]) {
+      assert.equal(usageTokens(bad), 0);
+    }
+  });
+
+  it("ignores a non-numeric token count instead of coercing it", () => {
+    assert.equal(usageTokens({ investigator: { prompt_tokens: "1000", completion_tokens: 5 } }), 5);
+  });
+});
+
+describe("runConfirmMessage", () => {
+  const EST = { claims: 12, median_tokens_per_claim: 46213, runs_measured: 57 };
+
+  it("names the claim count and the measured spend, per claim and in total", () => {
+    const msg = runConfirmMessage(EST);
+    assert.match(msg, /Investigate 12 claims\?/);
+    assert.match(msg, /about 46k tokens per claim \(median of 57 past runs\)/);
+    assert.match(msg, /roughly 555k tokens/);  // 12 × 46,213 = 554,556
+  });
+
+  it("says there is no measurement rather than inventing one", () => {
+    // The same rule that keeps a fabricated ETA off this screen. A number nobody measured is worse
+    // than an admitted unknown here, because the analyst spends against it.
+    const msg = runConfirmMessage({ claims: 12, median_tokens_per_claim: null, runs_measured: 0 });
+    assert.match(msg, /Investigate 12 claims\?/);
+    assert.match(msg, /no past runs on disk to estimate the token spend from/);
+    assert.ok(!/tokens per claim/.test(msg));
+  });
+
+  it("returns null when there is nothing to run, so the caller does not confirm an empty run", () => {
+    assert.equal(runConfirmMessage({ claims: 0, median_tokens_per_claim: 1000, runs_measured: 3 }), null);
+    assert.equal(runConfirmMessage({}), null);
+    assert.equal(runConfirmMessage(), null);
+  });
+
+  it("counts in the singular where it should", () => {
+    const msg = runConfirmMessage({ claims: 1, median_tokens_per_claim: 2000, runs_measured: 1 });
+    assert.match(msg, /Investigate 1 claim\?/);
+    assert.match(msg, /median of 1 past run\)/);
+  });
+});
+
+describe("runProgressLine", () => {
+  it("counts the claim in flight against the lot total", () => {
+    assert.equal(runProgressLine({ total: 50, completed: 6, failed: 0, current: "CLM-007" }),
+      "Investigating CLM-007 · 7 of 50");
+  });
+
+  it("counts failures towards the position, so the counter cannot fall behind the lot", () => {
+    // A counter that skipped failures would read "48 of 50" at the end of a lot where two claims
+    // failed — a progress bar that never arrives.
+    assert.equal(runProgressLine({ total: 50, completed: 5, failed: 1, current: "CLM-007" }),
+      "Investigating CLM-007 · 7 of 50 · 1 failed");
+  });
+
+  it("has something to say before the first claim reports", () => {
+    assert.equal(runProgressLine({ total: 50 }), "Starting — 0 of 50");
+    assert.equal(runProgressLine({}), "Starting…");
+  });
+
+  it("never counts past the total", () => {
+    assert.equal(runProgressLine({ total: 2, completed: 2, failed: 3, current: "CLM-9" }),
+      "Investigating CLM-9 · 2 of 2 · 3 failed");
+  });
+});
+
+describe("batchSummaryLine", () => {
+  it("reports a clean run", () => {
+    assert.equal(
+      batchSummaryLine({ ending: "done", investigated: 48, escalated: 6, tokens: 2_200_000 }),
+      "Done: 48 investigated · 6 need your call · 2.2M tokens");
+  });
+
+  it("omits every zero rather than printing it", () => {
+    assert.equal(batchSummaryLine({ investigated: 3 }), "Done: 3 investigated");
+  });
+
+  it("does not call a cancelled run done", () => {
+    // The lot was not processed; saying "Done" would report work that was never attempted.
+    // Naming the in-flight claim matters: cancel stops at the next claim BOUNDARY, so one claim is
+    // still running and will be saved. "Cancelled: 4 investigated" alone reads as "nothing more
+    // happened" to an analyst whose queue gains a fifth row half a minute later.
+    assert.equal(
+      batchSummaryLine({ ending: "cancelled", investigated: 4, tokens: 187_000 }),
+      "Cancelled: 4 investigated · 187k tokens. Any claim already running will finish and be "
+      + "saved; the rest of the lot was not run.");
+  });
+
+  it("says a circuit-broken run stopped, and what to do about it", () => {
+    const line = batchSummaryLine({ ending: "consecutive_failures", investigated: 0, failed: 3 });
+    assert.match(line, /^Stopped after 3 failures in a row: 0 investigated · 3 failed\./);
+    assert.match(line, /Check the API key or the connection/);
+  });
+
+  it("still reports the spend of a run that failed, because it was still spent", () => {
+    assert.match(batchSummaryLine({ ending: "cancelled", investigated: 2, failed: 1, tokens: 90_000 }),
+      /2 investigated · 1 failed · 90k tokens/);
   });
 });

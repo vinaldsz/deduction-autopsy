@@ -595,6 +595,98 @@ export function usageLine(usage) {
   return parts.length ? `tokens — ${parts.join(" · ")}` : "";
 }
 
+// --- running the lot -------------------------------------------------------------------------------
+//
+// One click here starts a live agent run per unresolved claim, which is the only thing in this app
+// that spends money. Everything it reports — what it will cost, how far it has got, what failed and
+// what that leaves — is built here, where `node --test` can read it.
+
+/** A raw token count -> "46k" / "1.2M". Token counts are five to seven digits and nobody reads them
+    to the unit; the exact figure has never been the decision. */
+function compactTokens(n) {
+  const value = Math.round(Number(n) || 0);
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
+  return String(value);
+}
+
+/** One run's total token spend, from a `claim_done` payload's `usage`, or 0.
+
+    Guarded per agent for the same reason `usageLine` is: a run that recorded usage for only one of
+    the two is a real shape, and reading it unguarded threw inside a caller that swallowed it. The
+    client adds these up itself rather than reading a server total, because a CANCELLED run never
+    reaches `batch_done` and it still spent every token it spent. */
+export function usageTokens(usage) {
+  if (!usage || typeof usage !== "object") return 0;
+  let total = 0;
+  for (const agent of ["investigator", "reviewer"]) {
+    const side = usage[agent];
+    if (!side || typeof side !== "object") continue;
+    for (const key of ["prompt_tokens", "completion_tokens"]) {
+      if (typeof side[key] === "number") total += side[key];
+    }
+  }
+  return total;
+}
+
+/** The sentence in the "process lot" confirm, or null when there is nothing to run.
+
+    The estimate is measured from the runs on disk or it is not given at all — the same rule that
+    keeps an ETA off this screen. A plausible-looking number nobody measured is worse than an
+    admitted unknown, because the analyst would spend against it. */
+export function runConfirmMessage({ claims, median_tokens_per_claim, runs_measured } = {}) {
+  const n = Number(claims) || 0;
+  if (n <= 0) return null;
+  const head = `Investigate ${n} ${n === 1 ? "claim" : "claims"}? `
+    + `Each one is a live run of both agents.`;
+  if (!median_tokens_per_claim || !runs_measured) {
+    return `${head}\n\nThere are no past runs on disk to estimate the token spend from.`;
+  }
+  const each = compactTokens(median_tokens_per_claim);
+  const all = compactTokens(median_tokens_per_claim * n);
+  const runs = `${runs_measured} past ${runs_measured === 1 ? "run" : "runs"}`;
+  return `${head}\n\nPast runs cost about ${each} tokens per claim (median of ${runs}), `
+    + `so expect roughly ${all} tokens of real spend.`;
+}
+
+/** The live progress line. `completed` counts successes and `failed` counts failures, so the claim
+    in flight is number completed+failed+1 — a counter that skipped failures would report "48 of 50"
+    on a lot where two claims were never done.
+
+    There is no "cancelling…" state, deliberately: aborting the fetch rejects the pending read within
+    a tick, so the cancelled summary is already on screen before a transitional line could be read. */
+export function runProgressLine({ total = 0, completed = 0, failed = 0, current = null } = {}) {
+  if (!current) return total ? `Starting — 0 of ${total}` : "Starting…";
+  const position = Math.min(completed + failed + 1, total || completed + failed + 1);
+  const suffix = failed ? ` · ${failed} failed` : "";
+  return `Investigating ${current} · ${position} of ${total}${suffix}`;
+}
+
+/** How a lot run ended. `ending` is "done" | "cancelled" | "consecutive_failures" — three different
+    facts about the money and the work left, and collapsing them into one "Done:" would say the lot
+    was processed when most of it was not. */
+export function batchSummaryLine({ ending = "done", investigated = 0, failed = 0, escalated = 0,
+                                   tokens = 0 } = {}) {
+  const parts = [`${investigated} investigated`];
+  if (escalated) parts.push(`${escalated} need your call`);
+  if (failed) parts.push(`${failed} failed`);
+  if (tokens) parts.push(`${compactTokens(tokens)} tokens`);
+  const body = parts.join(" · ");
+  if (ending === "cancelled") {
+    // Names the in-flight claim explicitly. Cancel stops the lot at the next claim boundary, so at
+    // the moment this line is written the server is still finishing one claim, which will be saved
+    // and is NOT in these counts — "Cancelled: 0 investigated" alone would be read as "nothing
+    // happened" by an analyst whose queue gains a row thirty seconds later.
+    return `Cancelled: ${body}. Any claim already running will finish and be saved; `
+      + `the rest of the lot was not run.`;
+  }
+  if (ending === "consecutive_failures") {
+    return `Stopped after ${failed} failures in a row: ${body}. `
+      + `Check the API key or the connection, then run again.`;
+  }
+  return `Done: ${body}`;
+}
+
 /** Does the caret own this keystroke? Split from app.js's `inField` so the one untested input to the
     otherwise-tested `keyAction` can be checked against a plain object — every shortcut is a bare
     letter, so getting this wrong makes the search box unusable rather than merely surprising. */

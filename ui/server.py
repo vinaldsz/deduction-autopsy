@@ -14,6 +14,7 @@ import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import median
 from typing import Literal
 
 from dotenv import load_dotenv
@@ -41,6 +42,15 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # Where the pipeline archives per-run artifacts (matches run_pipeline's default output_dir).
 OUTPUT_DIR = Path("outputs")
+
+# How many claims may fail back-to-back before the lot run gives up. Per-claim recovery on its own
+# turns one systemic fault (a dead OPENROUTER_API_KEY, OpenRouter down) into one paid failure per
+# claim; a run of failures this long is a fault in the setup, not in the claims.
+_MAX_CONSECUTIVE_FAILURES = 3
+
+# asyncio keeps only a weak reference to a task, so a batch left running after the client
+# disconnected could be garbage-collected mid-claim. Held until it finishes on its own.
+_background_tasks: set[asyncio.Task] = set()
 
 app = FastAPI(title="Deduction Autopsy")
 
@@ -98,6 +108,38 @@ def _sse(event: str, data: dict) -> str:
 # OUTPUT_DIR is read inside these helpers rather than captured at import: the tests monkeypatch
 # `server.OUTPUT_DIR`, and a default argument or module-level join would silently read the real
 # outputs/ tree instead.
+
+
+def _all_run_dirs() -> list[Path]:
+    """Every archived run directory, across every claim — the sample the spend estimate is drawn
+    from. Unordered; the estimate takes a median, which does not care."""
+    if not OUTPUT_DIR.is_dir():
+        return []
+    return [run_dir for claim_dir in OUTPUT_DIR.iterdir() if claim_dir.is_dir()
+            for run_dir in _run_dirs(claim_dir.name)]
+
+
+def _run_tokens(usage: dict | None) -> int | None:
+    """One run's total token spend, or None when it recorded none.
+
+    Guarded per agent for the reason `usageLine` in lib.js is: a run with usage for only one of the
+    two is a real shape on disk, and reading four levels deep unguarded threw inside a caller that
+    swallowed it.
+    """
+    if not isinstance(usage, dict):
+        return None
+    total = 0
+    found = False
+    for agent in ("investigator", "reviewer"):
+        side = usage.get(agent)
+        if not isinstance(side, dict):
+            continue
+        for key in ("prompt_tokens", "completion_tokens"):
+            value = side.get(key)
+            if isinstance(value, int):
+                total += value
+                found = True
+    return total if found else None
 
 
 def _run_dirs(claim_id: str) -> list[Path]:
@@ -390,7 +432,12 @@ async def filter_options(batch_id: str):
 @app.post("/api/batches/{batch_id}/investigate")
 async def investigate_batch(batch_id: str, cap: int | None = None):
     """Process the whole lot: run the pipeline over every unresolved claim, streaming progress.
-    `cap` optionally limits it (defaults to the entire lot — the ingestion "process lot" step)."""
+    `cap` optionally limits it (defaults to the entire lot — the ingestion "process lot" step).
+
+    One claim failing does not end the lot. `cli/process_lot.py` has always caught per claim and
+    carried on; this endpoint used to wrap the entire loop in one `try`, so a failure on claim 7 of
+    50 abandoned claims 8-50, threw away the tally and reported nothing but a raw exception string.
+    """
     if not queries.batch_exists(batch_id):
         return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
 
@@ -398,6 +445,7 @@ async def investigate_batch(batch_id: str, cap: int | None = None):
 
     async def event_generator():
         queue: asyncio.Queue = asyncio.Queue()
+        cancelled = asyncio.Event()
 
         def make_hook(agent: str, claim_id: str):
             def hook(record: ToolCallRecord) -> None:
@@ -408,35 +456,96 @@ async def investigate_batch(batch_id: str, cap: int | None = None):
             return hook
 
         async def run() -> None:
-            tally = {"investigated": 0, "VALID": 0, "INVALID": 0, "ESCALATE": 0}
+            tally = {"investigated": 0, "VALID": 0, "INVALID": 0, "ESCALATE": 0,
+                     "failed": 0, "stopped_reason": None}
+            consecutive = 0
             try:
+                queue.put_nowait(_sse("batch_start", {"total": len(claim_ids)}))
                 for claim_id in claim_ids:
-                    result = await run_pipeline(
-                        claim_id=claim_id,
-                        on_investigator_tool_call=make_hook("investigator", claim_id),
-                        on_reviewer_tool_call=make_hook("reviewer", claim_id),
-                    )
+                    # Checked between claims, never mid-claim: the in-flight run is already paid for
+                    # and its run dir is half-written, and killing it would leave a run with no
+                    # verdict.json that /runs would then list as unrebuildable.
+                    if cancelled.is_set():
+                        logger.info("ui_batch_cancelled batch_id=%s investigated=%s failed=%s",
+                                    batch_id, tally["investigated"], tally["failed"])
+                        return
+                    # Which claim is being worked, said outright. The progress counter used to infer
+                    # this from the first `tool_call`, so a claim that failed before reaching one
+                    # never announced itself and the line went on naming the *previous* claim while
+                    # the counter advanced past it.
+                    queue.put_nowait(_sse("claim_start", {"claim_id": claim_id}))
+                    try:
+                        result = await run_pipeline(
+                            claim_id=claim_id,
+                            on_investigator_tool_call=make_hook("investigator", claim_id),
+                            on_reviewer_tool_call=make_hook("reviewer", claim_id),
+                        )
+                    except Exception as exc:
+                        # Broad on purpose, unlike the CLI's (PipelineError, AgentRunnerError): an
+                        # unexpected TypeError on one claim must not cost the other 49.
+                        logger.exception("ui_claim_failed batch_id=%s claim_id=%s", batch_id, claim_id)
+                        tally["failed"] += 1
+                        consecutive += 1
+                        queue.put_nowait(_sse("claim_error", {"claim_id": claim_id, "error": str(exc)}))
+                        if consecutive >= _MAX_CONSECUTIVE_FAILURES:
+                            # A dead API key fails identically on every claim. Without this, per-claim
+                            # resilience turns one systemic fault into 50 paid round-trips.
+                            tally["stopped_reason"] = "consecutive_failures"
+                            break
+                        continue
+                    consecutive = 0
                     tally["investigated"] += 1
                     tally[result.final_verdict] = tally.get(result.final_verdict, 0) + 1
                     queue.put_nowait(_sse("claim_done", _result_payload(result)))
                 queue.put_nowait(_sse("batch_done", tally))
-            except Exception as exc:  # surface any failure in-band instead of crashing the stream
+            except Exception as exc:  # backstop for a failure OUTSIDE the per-claim try
                 logger.warning("ui_batch_failed batch_id=%s error=%s", batch_id, exc)
                 queue.put_nowait(_sse("error", {"error": str(exc)}))
             finally:
                 queue.put_nowait(None)
 
         task = asyncio.create_task(run())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        completed = False
         try:
             while True:
                 chunk = await queue.get()
                 if chunk is None:
+                    completed = True
                     break
                 yield chunk
         finally:
-            await task
+            if completed:
+                await task  # as before: surface a failure in the runner itself
+            else:
+                # The client went away (Cancel, or a closed tab). Signal and do NOT await: this runs
+                # inside the generator's aclose(), and the in-flight claim can take ~40s.
+                cancelled.set()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/api/batches/{batch_id}/run-estimate")
+async def run_estimate(batch_id: str):
+    """What a "process lot" click is about to cost, measured rather than guessed.
+
+    The claim count comes from the same query the run itself uses — deliberately not
+    /api/dashboard's `not_investigated_count`, which excludes decided-but-never-investigated claims
+    and would under-report the spend. The token figure is the median over the runs actually on disk;
+    with no history it is None and the client says so, for the same reason there is no ETA.
+    """
+    if not queries.batch_exists(batch_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
+
+    per_run = [tokens for tokens in
+               (_run_tokens(_run_entry(run_dir).get("usage")) for run_dir in _all_run_dirs())
+               if tokens is not None]
+    return {
+        "claims": len(queries.unresolved_claim_ids(batch_id, None)),
+        "median_tokens_per_claim": int(median(per_run)) if per_run else None,
+        "runs_measured": len(per_run),
+    }
 
 
 @app.post("/api/claims/{claim_id}/investigate")
