@@ -1,6 +1,6 @@
 // Recording the analyst's decision, and advancing to the next claim.
 
-import { nextClaimId } from "./lib.js";
+import { dispositionLabel, nextClaimId } from "./lib.js";
 import { loadDashboard } from "./dashboard.js";
 import { renderDecision, syncOverrideButton } from "./decision-pane.js";
 import { $ } from "./dom.js";

@@ -41,14 +41,63 @@ const source = Object.fromEntries(files.map((f) => [f, readFileSync(join(DIR, f)
  *
  *  Spread is normalised to whitespace. `...DEFAULT_STATE` otherwise looks like a property access to the
  *  `(?<![\w$.])` guard below, which is how `state.js` shipped using an import it never declared — the
- *  app failed to boot at all, and this test could not see it. */
+ *  app failed to boot at all, and this test could not see it.
+ *
+ *  ONE LEFT-TO-RIGHT SCAN, not four independent regex passes. The passes could not see each other, so
+ *  each quote style was matched against text the others had already rearranged: `disposition.js` has an
+ *  apostrophe inside a *template literal* (which this function deliberately keeps), the single-quote
+ *  pass read it as an opening quote, ran on to the next `'` several lines later, and the double-quote
+ *  pass then desynced on the wreckage. Eleven lines of real code vanished — including a call to an
+ *  import that had never been declared, which is precisely the defect the next test exists to catch.
+ *  A scanner cannot desync that way: whichever delimiter opens first consumes to its own close.
+ *
+ *  Two behaviours are kept deliberately. Only a WHOLE-LINE `//` is a comment (a trailing one still
+ *  counts as a reference, so an import kept alive only by a trailing comment stays "used" — changing
+ *  that is a different test's business). And an unterminated quote is treated as an ordinary character
+ *  rather than swallowing the rest of the file, so the worst case is a false positive instead of a
+ *  silent blind spot. Regex literals are not parsed; none in `ui/static/` contains a quote character. */
+function closingQuote(s, start, quote) {
+  for (let i = start + 1; i < s.length; i++) {
+    if (s[i] === "\\") { i++; continue; }
+    if (s[i] === quote) return i;
+    if (quote !== "`" && s[i] === "\n") return -1;  // a plain string never spans a line
+  }
+  return -1;
+}
+
 function codeOnly(text) {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "")
-    .replace(/'(?:\\.|[^'\\])*'/g, "''")
-    .replace(/"(?:\\.|[^"\\])*"/g, '""')
-    .replace(/\.\.\./g, " ");
+  const s = String(text);
+  let out = "";
+  let i = 0;
+  let blank = true;  // only spaces/tabs since the last newline of the INPUT
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "\n") { out += c; blank = true; i++; continue; }
+    if (c === "/" && s[i + 1] === "*") {
+      const end = s.indexOf("*/", i + 2);
+      i = end === -1 ? s.length : end + 2;
+      continue;
+    }
+    if (c === "/" && s[i + 1] === "/" && blank) {
+      const nl = s.indexOf("\n", i);
+      i = nl === -1 ? s.length : nl;  // leave the newline for the branch above
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      const end = closingQuote(s, i, c);
+      if (end !== -1) {
+        // A plain string is blanked; a template literal is copied through, `${...}` and all.
+        out += c === "`" ? s.slice(i, end + 1) : c + c;
+        i = end + 1;
+        blank = false;
+        continue;
+      }
+    }
+    out += c;
+    if (c !== " " && c !== "\t") blank = false;
+    i++;
+  }
+  return out.replace(/\.\.\./g, " ");
 }
 
 const IMPORT = /import\s*\{([\s\S]*?)\}\s*from\s*"\.\/([\w.-]+)";/g;
@@ -79,6 +128,29 @@ const references = (f, name) => {
   return pattern.test(code);
 };
 
+/** Names the file binds for itself: a local `const`/`let`/`var`, or a plain function parameter.
+ *
+ *  A binding of its own is not a reference to somebody else's export. `lib.js` has three functions
+ *  taking a parameter called `state` — `queryParams(state, overrides)`, `buildHash(state)`,
+ *  `isFiltered(state)` — and reading those as uses of `state.js` would demand an import that the layer
+ *  rule forbids and that would put a browser-global module inside the one file guaranteed pure. This
+ *  was invisible until codeOnly stopped desyncing; it is a false positive, not a finding.
+ *
+ *  Deliberately narrow: it cannot hide the failure this test exists for, because a module that merely
+ *  *calls* an import (`syncHash()`, `dispositionLabel(...)`) binds nothing by that name. */
+const localsOf = (f) => {
+  const code = codeOnly(source[f]);
+  const names = new Set();
+  for (const m of code.matchAll(/(?:const|let|var)\s+([\w$]+)/g)) names.add(m[1]);
+  for (const m of code.matchAll(/\(([^()]*)\)\s*(?:=>|\{)/g)) {
+    for (const part of m[1].split(",")) {
+      const n = part.trim().replace(/\s*=[\s\S]*$/, "");
+      if (/^[\w$]+$/.test(n)) names.add(n);
+    }
+  }
+  return names;
+};
+
 describe("the module graph", () => {
   it("resolves every import to a real export", () => {
     for (const f of files) {
@@ -102,8 +174,9 @@ describe("the module graph", () => {
     for (const f of files) {
       const imported = new Set(importsOf(f).flatMap((i) => i.names));
       const own = exportsOf(f);
+      const local = localsOf(f);
       for (const [name, home] of owner) {
-        if (home === f || own.has(name) || imported.has(name)) continue;
+        if (home === f || own.has(name) || imported.has(name) || local.has(name)) continue;
         assert.ok(!references(f, name),
           `${f} uses ${name} (exported by ${home}) without importing it`);
       }
@@ -160,9 +233,20 @@ describe("the module graph", () => {
   it("keeps lib.js pure — no DOM, no fetch", () => {
     // The boundary the whole test suite depends on: lib.js is the only frontend file `node --test` can
     // load, and it can only stay loadable if it never touches a browser global.
+    //
+    // Matched on identifier boundaries, not as a substring. `includes("document")` also matches the
+    // word "documents", which lib.js says in a template literal the analyst reads — this check was
+    // passing only because the old codeOnly happened to have deleted that line while desyncing.
     const code = codeOnly(source["lib.js"]);
-    for (const forbidden of ["document", "window", "fetch(", "localStorage", "EventSource"]) {
-      assert.ok(!code.includes(forbidden), `lib.js must not reference ${forbidden}`);
+    const forbidden = {
+      document: /(?<![\w$.])document(?![\w$])/,
+      window: /(?<![\w$.])window(?![\w$])/,
+      "fetch()": /(?<![\w$.])fetch\s*\(/,
+      localStorage: /(?<![\w$.])localStorage(?![\w$])/,
+      EventSource: /(?<![\w$.])EventSource(?![\w$])/,
+    };
+    for (const [name, pattern] of Object.entries(forbidden)) {
+      assert.ok(!pattern.test(code), `lib.js must not reference ${name}`);
     }
   });
 
