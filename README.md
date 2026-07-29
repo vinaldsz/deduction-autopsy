@@ -66,6 +66,7 @@ was gated on sign-off — it is the only layer that edits the agent prompts):
 | 37b | A grid you can work — PO/Age columns, sort indicators, filtered total, page size, URL-hash routing | ✅ Done |
 | 38 | Working the volume — bulk accept (accept-only), keyboard path, pinned decision bar, save-and-next | ✅ Done |
 | 39 | Explainability — agent reasoning, described reviewer checks, timeline intervals, run history (`/runs`, `/trace`) | ✅ Done |
+| — | Frontend modularization — `app.js` 1230 lines → 18 layered modules, enforced by `tests/js/architecture.test.mjs` | ✅ Done |
 | — | Layer-end verification tooling (`scripts/check.sh`, `/layer-done`, `tests/test_invariants.py`) | ✅ Done |
 
 ## Setup
@@ -235,19 +236,24 @@ pytest tests/test_pipeline_scenarios.py -m integration -v
 # Static type check (same gate CI runs; config in pyproject.toml [tool.pyright])
 pyright
 
-# Frontend: Node's built-in test runner over the pure helpers in ui/static/lib.js. No
-# package.json, no node_modules, no build step. The glob matters — `node --test tests/js/`
-# module-resolves the bare directory and fails. Note the syntax check reads the file on
-# stdin: plain `node --check <file>` silently passes on these two (they use `export`) —
-# see check_js_syntax in scripts/check.sh.
-node --input-type=module --check < ui/static/app.js
-node --input-type=module --check < ui/static/lib.js
+# Frontend: Node's built-in test runner. No package.json, no node_modules, no build step.
+# The glob matters — `node --test tests/js/` module-resolves the bare directory and fails.
+# Note the syntax check reads each file on stdin: plain `node --check <file>` silently
+# passes on these (they use `export`) — see check_js_syntax in scripts/check.sh.
+for f in ui/static/*.js; do node --input-type=module --check < "$f"; done
 node --test "tests/js/**/*.test.mjs"
 ```
 
-`ui/static/app.js` is deliberately DOM + fetch only; anything that is real logic (money
-formatting, verdict labels, the keymap, URL-hash state) lives in `ui/static/lib.js` so it can
-be tested. CI runs all three gates — `pytest`, `pyright`, and the `js` job.
+The frontend is ~18 ES modules in `ui/static/`, layered so that nothing imports upward:
+
+    dom / state / stream / api   ->   renderers   ->   actions   ->   app.js (wiring + boot)
+
+Anything that is real logic (money formatting, verdict labels, the keymap, URL-hash state, the
+SSE frame parser, the worklist query string) lives in `ui/static/lib.js`, which is pure and
+fully tested. The DOM+fetch modules are not reachable by any test, so `tests/js/architecture.test.mjs`
+checks what static analysis can: the graph is acyclic, no module imports from a higher layer,
+every name used is imported, every module is reachable from `app.js`, and `lib.js` touches no
+browser global. CI runs all three gates — `pytest`, `pyright`, and the `js` job.
 
 Unit tests mock OpenRouter responses (`tests/agent_stubs.py`) but always exercise the real
 MCP server in-process — no test hits OpenRouter or spawns a subprocess except the

@@ -52,9 +52,11 @@ run_gate() {
 # still passed `node --check`, while `node --test` failed. Feeding the file on stdin with
 # --input-type=module parses it as the ES module it actually is, and does fail.
 # Errors are reported against `[stdin]`, so name the file ourselves.
+# Globbed rather than a fixed list: the frontend is ~18 modules now, and a new one that nobody
+# remembered to add here would be checked by nothing at all.
 check_js_syntax() {
   syntax_status=0
-  for f in ui/static/app.js ui/static/lib.js; do
+  for f in ui/static/*.js; do
     if ! node --input-type=module --check <"$f"; then
       printf '  ^ syntax error in %s (reported above as [stdin])\n' "$f" >&2
       syntax_status=1

@@ -152,9 +152,20 @@ current state before starting any session.
 
 **Two standing rules the UX phase added:** no agent/prompt/verdict-logic changes and no fixture
 edits anywhere in Layers 33–41 — the 8 ground-truth verdicts stay untouched; and pure frontend
-logic goes in `ui/static/lib.js` (tested by `node --test`) while `ui/static/app.js` stays DOM+fetch.
-`app.js` and the stylesheet are unreachable by every gate, which is why each of these layers ends by
-driving the running app: five of them found bugs that way, three in Layer 38 alone.
+logic goes in `ui/static/lib.js` (tested by `node --test`) while the DOM+fetch modules stay free of it.
+Those modules and the stylesheet are unreachable by every gate, which is why each of these layers ends
+by driving the running app: five of them found bugs that way, three in Layer 38 alone.
+
+**Frontend module layering (added by the post-Layer-39 refactor).** `app.js` was one 1230-line file;
+it is now ~18 modules in `ui/static/`, in four layers, and **a module may import only from a lower
+layer or its own**:
+
+    dom / state / stream / api   ->   renderers   ->   actions   ->   app.js (wiring + boot)
+
+`tests/js/architecture.test.mjs` enforces it — acyclic graph, no upward imports, every used name
+imported, every module reachable from `app.js`, and `lib.js` free of DOM. That test is the reason the
+split is durable: without it, "renderers never import actions" is a comment, and the monolith returns
+one convenient import at a time. Adding a module means declaring its layer in that test.
 
 ---
 

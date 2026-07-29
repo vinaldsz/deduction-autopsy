@@ -5,7 +5,10 @@ import { describe, it } from "node:test";
 import {
   ageLabel, buildHash, bulkOutcomeSummary, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars,
   dollarsCompact, keyAction, lotSubtitle, nextClaimId, parseHash, priorityLegend, queueFooter,
-  reviewChecks, sentenceCase, sortIndicator, timelineGaps, todoSplit, verdictLabel,
+  bulkConfirmMessage, currentRun, decisionSummary, dispositionLabel, isFieldNode, isFiltered,
+  overrideGuard, pageStatus, parseFrame, pickedOnPage, queryParams, reviewChecks, runHistoryLine,
+  safeClass, selectAllState, sentenceCase, sortIndicator, splitFrames, statusParts, timelineGaps,
+  todoSplit, usageLine, verdictLabel,
 } from "../../ui/static/lib.js";
 
 /** The /api/dashboard shape, as ui/queries.py::dashboard_metrics returns it. */
@@ -622,5 +625,382 @@ describe("timelineGaps", () => {
   it("survives being called with nothing", () => {
     assert.deepEqual(timelineGaps(null), []);
     assert.deepEqual(timelineGaps([]), []);
+  });
+});
+
+// --- extracted from app.js by the modularization refactor --------------------------------------------
+//
+// None of the logic below had any test before it moved out of app.js. Where a test pins a rule that
+// used to be implemented twice, or wrong, the comment says so.
+
+describe("isFiltered", () => {
+  it("calls the default tab filtered, because it is", () => {
+    // `filter` defaults to "todo", not "all" — the landing view really is a narrowed one.
+    assert.equal(isFiltered({ filter: "todo" }), true);
+    assert.equal(isFiltered({ filter: "all" }), false);
+  });
+
+  it("notices a narrowing filter even on the all tab", () => {
+    for (const key of ["q", "retailer", "reason", "date_from", "date_to"]) {
+      assert.equal(isFiltered({ filter: "all", [key]: "x" }), true, key);
+    }
+  });
+
+  it("ignores an empty narrowing value", () => {
+    assert.equal(isFiltered({ filter: "all", q: "", retailer: null, date_from: undefined }), false);
+  });
+});
+
+describe("safeClass", () => {
+  it("makes N/A a usable class name", () => {
+    assert.equal(safeClass("N/A"), "NA");
+    assert.equal(safeClass("PASS"), "PASS");
+    assert.equal(safeClass("FAIL"), "FAIL");
+  });
+});
+
+describe("queryParams", () => {
+  const base = { page: 1, size: 25, filter: "todo", sort: "priority", direction: null,
+                 q: "", retailer: null, reason: null, date_from: null, date_to: null };
+  const parse = (state, overrides) => Object.fromEntries(queryParams(state, overrides));
+
+  it("translates page/size into the offset the server speaks", () => {
+    // The one expression in the client that is only ever wrong by one.
+    assert.equal(parse({ ...base, page: 1 }).offset, "0");
+    assert.equal(parse({ ...base, page: 2 }).offset, "25");
+    assert.equal(parse({ ...base, page: 3, size: 100 }).offset, "200");
+  });
+
+  it("omits direction rather than guessing one", () => {
+    // The server owns each column's useful first click; sending a default here would override it.
+    assert.equal("direction" in parse(base), false);
+    assert.equal(parse({ ...base, direction: "asc" }).direction, "asc");
+  });
+
+  it("omits a narrowing filter that is empty instead of sending a blank", () => {
+    assert.deepEqual(parse(base), { offset: "0", limit: "25", status_filter: "todo", sort: "priority" });
+    const full = parse({ ...base, q: "walmart", retailer: "kroger", reason: "shortage",
+                         date_from: "2024-01-01", date_to: "2024-06-30" });
+    assert.equal(full.q, "walmart");
+    assert.equal(full.retailer, "kroger");
+    assert.equal(full.date_to, "2024-06-30");
+  });
+
+  it("lets an override win, which is how a single claim is looked up", () => {
+    // fetchClaimRow's mode: widen to every filter and one big page to find a claim off the current one.
+    const one = parse(base, { filter: "all", page: 1, size: 100, q: "CLM-042", retailer: null });
+    assert.equal(one.status_filter, "all");
+    assert.equal(one.limit, "100");
+    assert.equal(one.q, "CLM-042");
+  });
+});
+
+describe("pageStatus", () => {
+  it("counts the rows it actually got, not a full page", () => {
+    // The last page is short; deriving the upper bound from `size` would claim rows that aren't there.
+    assert.equal(pageStatus(6, 25, 137, 12).label, "126–137 of 137");
+    assert.equal(pageStatus(1, 25, 137, 25).label, "1–25 of 137");
+  });
+
+  it("says 0 rather than 1–0 on an empty page", () => {
+    assert.equal(pageStatus(1, 25, 0, 0).label, "0 of 0");
+  });
+
+  it("spends the arrows at the ends", () => {
+    assert.deepEqual(pageStatus(1, 25, 137, 25), { label: "1–25 of 137", prevDisabled: true, nextDisabled: false });
+    assert.equal(pageStatus(6, 25, 137, 12).nextDisabled, true);
+    assert.equal(pageStatus(2, 25, 137, 25).prevDisabled, false);
+  });
+
+  it("disables next when the page exactly fills the total", () => {
+    assert.equal(pageStatus(2, 25, 50, 25).nextDisabled, true);
+  });
+});
+
+describe("pickedOnPage / selectAllState", () => {
+  const ids = ["CLM-1", "CLM-2", "CLM-3"];
+
+  it("counts only the selection that is on this page", () => {
+    // The counter and the bulk POST used to compute this separately; they must mean the same thing.
+    assert.deepEqual(pickedOnPage(ids, new Set(["CLM-2", "CLM-99"])), ["CLM-2"]);
+  });
+
+  it("shows 3-of-25 as indeterminate, not as all", () => {
+    const s = selectAllState(ids, new Set(["CLM-1"]));
+    assert.equal(s.checked, false);
+    assert.equal(s.indeterminate, true);
+  });
+
+  it("checks the box only when the whole page is selected", () => {
+    const s = selectAllState(ids, new Set(ids));
+    assert.equal(s.checked, true);
+    assert.equal(s.indeterminate, false);
+  });
+
+  it("does not call an empty page fully selected", () => {
+    const s = selectAllState([], new Set());
+    assert.equal(s.checked, false);
+    assert.equal(s.indeterminate, false);
+  });
+
+  it("counts the whole selection, which may exceed this page", () => {
+    // `picked` is page-scoped by policy, but the label must report what it holds.
+    const s = selectAllState(ids, new Set(["CLM-1", "CLM-2"]));
+    assert.equal(s.countLabel, "2 selected");
+    assert.equal(s.acceptLabel, "Accept 2 verdicts");
+  });
+
+  it("uses the singular for one verdict", () => {
+    assert.equal(selectAllState(ids, new Set(["CLM-1"])).acceptLabel, "Accept 1 verdict");
+  });
+});
+
+describe("bulkConfirmMessage", () => {
+  it("names the count and warns that some will be skipped", () => {
+    assert.match(bulkConfirmMessage(12), /12 claims\?/);
+    assert.match(bulkConfirmMessage(1), /1 claim\?/);
+    assert.match(bulkConfirmMessage(3), /skipped and listed/);
+  });
+});
+
+describe("statusParts", () => {
+  it("keeps the superseded agent verdict visible on an override", () => {
+    // The audit trail: `status` is the analyst's answer, and dropping what the agents said would erase
+    // the separation the two spines exist to keep.
+    const p = statusParts({ status: "VALID", agent_status: "INVALID", disposition: "override" });
+    assert.equal(p.label, "Conceded");
+    assert.equal(p.superseded, "was INVALID");
+    assert.equal(p.badge, "override");
+  });
+
+  it("says nothing was superseded when the analyst agreed", () => {
+    const p = statusParts({ status: "INVALID", agent_status: "INVALID", disposition: "accept" });
+    assert.equal(p.superseded, null);
+    assert.equal(p.badge, "accept");
+  });
+
+  it("survives the partial claim a live run re-renders from", () => {
+    // setRowStatus passes `{status}` alone — no disposition, no agent verdict to compare.
+    const p = statusParts({ status: "INVALID" });
+    assert.equal(p.superseded, null);
+    assert.equal(p.badge, null);
+    assert.equal(p.glyph, "+");
+  });
+
+  it("carries a tone and glyph for a claim with no verdict at all", () => {
+    const p = statusParts({ status: "unresolved" });
+    assert.equal(p.tone, "neutral");
+    assert.equal(p.label, "Not investigated");
+  });
+});
+
+describe("decisionSummary / dispositionLabel", () => {
+  it("returns nothing when no decision has been recorded", () => {
+    assert.equal(decisionSummary({ claim_id: "CLM-1" }), null);
+    assert.equal(decisionSummary(null), null);
+  });
+
+  it("names what the agents said when the analyst disagreed", () => {
+    const s = decisionSummary({ disposition: "override", decided_verdict: "VALID",
+                               agent_status: "INVALID", decided_at: "2026-07-28T06:22:31.101" });
+    assert.equal(s.text, "Your decision: override → VALID (agents said INVALID) on 2026-07-28 06:22");
+  });
+
+  it("shares its sentence with the just-saved confirmation", () => {
+    // The two used to be written independently 60 lines apart.
+    assert.equal(dispositionLabel("accept", "INVALID"), "accept → INVALID");
+    assert.match(decisionSummary({ disposition: "accept", decided_verdict: "INVALID" }).text,
+                 /accept → INVALID/);
+  });
+
+  it("degrades through the pre-snapshot columns rather than reading blank", () => {
+    // Layer 34 added decided_verdict; older override rows only have override_verdict.
+    assert.match(decisionSummary({ disposition: "override", override_verdict: "VALID",
+                                   agent_status: "INVALID" }).text, /override → VALID/);
+    assert.match(decisionSummary({ disposition: "accept", agent_status: "INVALID" }).text,
+                 /accept → INVALID/);
+  });
+
+  it("reports staleness and the note without formatting them in", () => {
+    const s = decisionSummary({ disposition: "accept", decided_verdict: "VALID",
+                               decision_stale: 1, note: "carrier signed" });
+    assert.equal(s.stale, true);
+    assert.equal(s.note, "carrier signed");
+    assert.equal(decisionSummary({ disposition: "accept", decided_verdict: "VALID" }).note, null);
+  });
+
+  it("omits the timestamp when there isn't one", () => {
+    assert.equal(decisionSummary({ disposition: "accept", decided_verdict: "VALID" }).text,
+                 "Your decision: accept → VALID");
+  });
+});
+
+describe("overrideGuard", () => {
+  it("refuses an override to the agents' own verdict — that is an accept", () => {
+    // Recording agreement as a disagreement would be false, and the server 422s it too.
+    const g = overrideGuard({ chosen: "INVALID", reason: "because", agentVerdict: "INVALID" });
+    assert.equal(g.disabled, true);
+    assert.match(g.title, /already said INVALID/);
+  });
+
+  it("needs both a verdict and a stated reason", () => {
+    assert.equal(overrideGuard({ chosen: "", reason: "", agentVerdict: "INVALID" }).disabled, true);
+    assert.equal(overrideGuard({ chosen: "VALID", reason: "", agentVerdict: "INVALID" }).disabled, true);
+    assert.equal(overrideGuard({ chosen: "", reason: "why", agentVerdict: "INVALID" }).disabled, true);
+  });
+
+  it("treats whitespace as no reason at all", () => {
+    assert.equal(overrideGuard({ chosen: "VALID", reason: "   ", agentVerdict: "INVALID" }).disabled, true);
+  });
+
+  it("names the missing half, so the analyst isn't left guessing", () => {
+    assert.match(overrideGuard({ chosen: "", reason: "why" }).title, /Choose the verdict/);
+    assert.match(overrideGuard({ chosen: "VALID", reason: "" }).title, /needs a stated reason/);
+  });
+
+  it("enables and says nothing once the override is legitimate", () => {
+    assert.deepEqual(overrideGuard({ chosen: "VALID", reason: "the BOL shows otherwise",
+                                     agentVerdict: "INVALID" }), { disabled: false, title: "" });
+  });
+
+  it("survives being called with nothing", () => {
+    assert.equal(overrideGuard().disabled, true);
+    assert.equal(overrideGuard({}).disabled, true);
+  });
+});
+
+describe("runHistoryLine / currentRun", () => {
+  const runs = [
+    { run_id: "20260728T062104Z", timestamp: "2026-07-28T06:21:50Z", final_verdict: "INVALID" },
+    { run_id: "20260727T012241Z", timestamp: "2026-07-27T01:23:17Z", final_verdict: "VALID" },
+  ];
+
+  it("says nothing at all for a single run", () => {
+    // 46 of 50 claims on the real lot have exactly one; "1 run" would be noise on 92% of them.
+    assert.equal(runHistoryLine([runs[0]], runs[0].run_id), null);
+    assert.equal(runHistoryLine([], null), null);
+    assert.equal(runHistoryLine(null, null), null);
+  });
+
+  it("names the count, marks the current run, and reads newest-first", () => {
+    assert.equal(runHistoryLine(runs, "20260728T062104Z"),
+      "2 runs · 07-28 Disputable (current) ← 07-27 Conceded");
+  });
+
+  it("uses MM-DD, because the line lives in a sticky header", () => {
+    // Full ISO dates wrapped the header to two lines on the real six-run claim, costing 65px of
+    // evidence pane permanently. Measured, not guessed.
+    assert.match(runHistoryLine(runs, runs[0].run_id), /^2 runs · 07-28/);
+  });
+
+  it("falls back to the run id when a crashed run wrote no timestamp", () => {
+    const crashed = [{ run_id: "20260729T000000Z", final_verdict: null }, runs[0]];
+    assert.match(runHistoryLine(crashed, runs[0].run_id), /Not investigated/);
+  });
+
+  it("finds the run latest points at, not merely the first", () => {
+    assert.equal(currentRun(runs, "20260727T012241Z").final_verdict, "VALID");
+    assert.equal(currentRun(runs, "gone").run_id, runs[0].run_id, "falls back to newest");
+    assert.equal(currentRun([], "x"), null);
+  });
+});
+
+describe("usageLine", () => {
+  it("reports both agents' spend", () => {
+    assert.equal(
+      usageLine({ investigator: { prompt_tokens: 12536, completion_tokens: 1653 },
+                  reviewer: { prompt_tokens: 14515, completion_tokens: 1613 } }),
+      "tokens — investigator: 12536 in / 1653 out · reviewer: 14515 in / 1613 out");
+  });
+
+  it("survives a run that recorded only one agent", () => {
+    // The old inline version read four levels deep with no guard and threw inside a catch that
+    // swallowed it — taking the whole run-history line down with it.
+    assert.equal(usageLine({ investigator: { prompt_tokens: 1, completion_tokens: 2 } }),
+                 "tokens — investigator: 1 in / 2 out");
+  });
+
+  it("says nothing when there is no usage at all", () => {
+    assert.equal(usageLine(null), "");
+    assert.equal(usageLine({}), "");
+  });
+});
+
+describe("isFieldNode", () => {
+  it("recognises the nodes that own a keystroke", () => {
+    // The one untested input to the already-tested keymap: every shortcut is a bare letter, so getting
+    // this wrong makes the search box unusable.
+    for (const tagName of ["INPUT", "TEXTAREA", "SELECT"]) {
+      assert.equal(isFieldNode({ tagName }), true, tagName);
+    }
+    assert.equal(isFieldNode({ tagName: "DIV", isContentEditable: true }), true);
+  });
+
+  it("leaves ordinary nodes to the shortcuts", () => {
+    assert.equal(isFieldNode({ tagName: "BODY" }), false);
+    assert.equal(isFieldNode({ tagName: "BUTTON" }), false);
+    assert.equal(isFieldNode({ tagName: "TD" }), false);
+  });
+
+  it("survives no active element", () => {
+    assert.equal(isFieldNode(null), false);
+    assert.equal(isFieldNode(undefined), false);
+  });
+});
+
+describe("splitFrames", () => {
+  it("returns complete frames and keeps the incomplete tail", () => {
+    // A chunk boundary lands mid-frame constantly; returning the tail as a frame truncates JSON.
+    const { frames, rest } = splitFrames("event: a\ndata: 1\n\nevent: b\ndata: 2\n\nevent: c\ndata:");
+    assert.deepEqual(frames, ["event: a\ndata: 1", "event: b\ndata: 2"]);
+    assert.equal(rest, "event: c\ndata:");
+  });
+
+  it("has no frames yet when nothing is terminated", () => {
+    assert.deepEqual(splitFrames("event: a\ndata: {\"partial\""), { frames: [], rest: 'event: a\ndata: {"partial"' });
+  });
+
+  it("leaves an empty tail once the buffer ends on a boundary", () => {
+    assert.deepEqual(splitFrames("event: a\ndata: 1\n\n"), { frames: ["event: a\ndata: 1"], rest: "" });
+  });
+
+  it("survives an empty buffer", () => {
+    assert.deepEqual(splitFrames(""), { frames: [], rest: "" });
+    assert.deepEqual(splitFrames(null), { frames: [], rest: "" });
+  });
+});
+
+describe("parseFrame", () => {
+  it("reads the event name and its payload", () => {
+    assert.deepEqual(parseFrame('event: claim_done\ndata: {"claim_id": "CLM-002"}'),
+                     { event: "claim_done", data: '{"claim_id": "CLM-002"}' });
+  });
+
+  it("joins multiple data lines instead of keeping only the last", () => {
+    // THE bug this extraction found: the inline version assigned rather than accumulated, so any
+    // payload containing a newline was silently truncated to its final line.
+    assert.equal(parseFrame("event: x\ndata: {\ndata:   \"a\": 1\ndata: }").data, '{\n  "a": 1\n}');
+  });
+
+  it("is not defeated by CRLF framing", () => {
+    assert.deepEqual(parseFrame("event: done\r\ndata: {}\r"), { event: "done", data: "{}" });
+  });
+
+  it("strips exactly one space after the colon, per the wire format", () => {
+    assert.equal(parseFrame("event: x\ndata:  leading").data, " leading");
+    assert.equal(parseFrame("event: x\ndata:no space").data, "no space");
+  });
+
+  it("reports a frame with no data, rather than inventing some", () => {
+    assert.deepEqual(parseFrame("event: batch_done"), { event: "batch_done", data: null });
+  });
+
+  it("reports a nameless frame honestly and lets the caller decide", () => {
+    assert.deepEqual(parseFrame("data: 1"), { event: null, data: "1" });
+    assert.deepEqual(parseFrame(""), { event: null, data: null });
+  });
+
+  it("ignores a comment or an unknown field", () => {
+    assert.deepEqual(parseFrame(": keep-alive\nid: 7\nevent: x\ndata: 1"), { event: "x", data: "1" });
   });
 });

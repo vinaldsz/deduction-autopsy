@@ -1,6 +1,101 @@
 # Progress
 
-## Current layer
+## Not a layer — frontend modularization (after Layer 39)
+
+`ui/static/app.js` had reached **1230 lines and 53 functions**, and it was the one file in the repo
+reachable by **no gate at all**: `pytest` can't see it, `node --test` only reached `lib.js`, and
+`node --check` proves only that it parses. Both Layer 39 bugs were in it. Not a numbered layer —
+Layers 40 and 41 are still next — so this lands as its own commit, like `c59b1dc` and `65be4f0`.
+
+A pure file split would have made untested code prettier without making it safer, so this did both.
+
+**Step 1, pure logic into `lib.js` (+251 lines, 19 new exports, gate-verifiable on the spot).**
+`fromCasefile`/`fromDone` — an adapter pair that must agree and had nothing asserting it;
+`queryParams(state, overrides)`, holding the `(page - 1) * size` offset arithmetic and the client half
+of the API contract; `pageStatus`, `selectAllState`/`pickedOnPage` (which was written twice),
+`statusParts`, `decisionSummary`/`dispositionLabel` (**the same sentence implemented twice, 60 lines
+apart**), `overrideGuard`, `runHistoryLine`/`currentRun`, `usageLine`, `isFiltered`, `safeClass`,
+`isFieldNode`, `bulkConfirmMessage`, and `splitFrames`/`parseFrame` — an **SSE protocol parser with
+zero tests**, whose extraction immediately exposed that multiple `data:` lines were *assigned* rather
+than accumulated, so any payload containing a newline would have been silently truncated to its last
+line. Fixed, along with CRLF framing. `usageLine` also stopped reading four levels deep unguarded: a
+run with usage for only one agent threw inside a `catch` that swallowed it, taking the run-history line
+down with it.
+
+**Step 2, the split: one 1230-line file became 18 modules in four layers**, where a module may import
+only from a lower layer or its own:
+
+    dom / state / stream / api  ->  renderers  ->  actions  ->  app.js (wiring + boot)
+
+`app.js` is now **139 lines** of imports, listeners and the boot sequence. Three findings shaped it:
+
+1. **The old section banners misattributed ownership.** The queue's data layer sat under "selection +
+   bulk accept" and the workspace core under "source documents". Filing that code correctly — plus
+   separating the decision *pane* (a leaf three modules drive) from `postDisposition` (the only
+   cycle-forming member) — **deleted four of the seven dependency cycles for free**, with no callbacks.
+   The graph is now fully acyclic at the cost of exactly **one injected callback**: `renderRow` takes
+   an `onOpen` instead of importing `selectClaim`.
+2. **`let source` could not survive the split.** It was reassigned from two modules, and an imported
+   ESM binding cannot be assigned by the importer. It became `stream.js` — a holder plus
+   `closeStream()`, so "close it and forget it" cannot be half-done. What it protects is real: without
+   ending the previous claim's stream, one claim's `tool_call` events append into another's drawer.
+3. **ESM cycles are safe only for hoisted `function` declarations.** Verified directly — a `const` read
+   across a cycle mid-evaluation throws `ReferenceError: Cannot access 'X' before initialization`.
+   Since `state`, `$` and `stream` are all `const`, they had to be leaves, which the layering gives
+   anyway. Cycles are then forbidden outright rather than audited per-binding.
+
+**Step 3, the layering is a gate, not an agreement.** New `tests/js/architecture.test.mjs` (10 tests)
+reads the module graph and asserts: every import resolves to a real export; **every name used is
+imported**; nothing imported is unused; no module imports upward; the graph is acyclic; every module is
+reachable from `app.js`; `lib.js` touches no browser global; no `innerHTML` anywhere; and every file
+has a declared layer. Without it "renderers never import actions" is a comment and the monolith comes
+back one convenient import at a time. Also new: `tests/js/stream.test.mjs` (`stream.js` is DOM-free, so
+it can simply be imported and tested), a pytest walking `ui/static/*.js` and asserting each is served
+(index.html loads only `/app.js`, so one 404 in the graph is a blank page), and `check.sh`'s syntax
+gate switched from a two-file list to a glob.
+
+**The gate earned its place three times during the build, on bugs it was written to catch.**
+
+1. **`queue.js` called `syncHash()` with the import removed** — a ReferenceError the browser would
+   only have reported when someone clicked a filter.
+2. **`keyboard.js` was imported by nothing.** It exports nothing anybody calls; its keydown listener is
+   a module-scope side effect, so the entire keyboard path silently did not exist. Now a deliberate
+   `import "./keyboard.js";`, and a test asserts every module is reachable from the entry point.
+3. **`state.js` used `DEFAULT_STATE` without importing it, and the app failed to boot at all** — the
+   spread in `...DEFAULT_STATE` looked like a property access to the `(?<![\w$.])` guard in both the
+   generator *and* the gate. Fixing the gate (normalise `...` to whitespace) found it immediately, and
+   it was the only instance.
+
+**Verification — a refactor's whole claim is "behaviour is identical", so it was proved, not asserted.**
+A 51-probe × 81-field CDP snapshot of the running app (KPIs, all six filter tabs, all six sort columns
+both directions, paging, page size, search, the three narrowing filters, a stale bookmark, four claim
+shapes, the audit drawer, same-document row clicks, back/forward, `j`/`k`/`x`/`/`/`Esc` including the
+in-field inertness rule, tri-state selection, all five override-guard states, and the 1100px stacked
+layout) was captured **before** any edit and diffed after. Final result: **identical, with 0 console
+errors**, and deterministic across three runs.
+
+`scripts/check.sh` — `pytest` **436 passed, 10 deselected** (was 435, +1 served-modules test);
+`pyright` 0 errors; `node --test` **153 passing** (was 81). Fidelity oracle re-run: 59 passed. Real
+`data/deductions.db` confirmed afterwards at 52 resolutions / 6 dispositions.
+
+**A real Layer 39 bug fell out of the baseline work, and it is the reason the snapshot is worth having.**
+Diffing two runs of *identical* code showed `runsHidden` flipping: `loadRuns` is dispatched without
+being awaited, so it raced `hideAgentEvidence()` on the else branch of the `/casefile` fetch. On a claim
+whose latest run has no `case_file.json`, **whether a multi-run claim showed its run history was a coin
+flip** — CLM-001 (2 runs) and CLM-003 (3 runs) were both affected. `w-runs` is now reset at selection,
+with `loadRuns` its only revealer. That is a behaviour change and the only intended one; verified
+against the run counts actually on disk.
+
+**Known and deferred:** the live single-claim SSE path (`investigateClaim`) was **not** exercised — it
+costs a real OpenRouter run — so its `source` → `stream.current` rewrite was verified by a line-by-line
+diff against the original (every difference is the rename or the `export` keyword) plus five unit tests
+on the holder. `lib.js` is now 677 lines (from 426); it stays one file because it is fully tested, has no internal
+coupling, and is served at `/lib.js` with a test asserting so — splitting it behind a barrel would add
+indirection for no correctness gain. Layers 40–41 continue the phase.
+
+---
+
+## Previous layer
 **Layer 39 — Explainability: reasoning, runs, checks, timeline complete**
 
 Seventh of the Layers 33–41 UX-remediation phase. Layers 33–38 made the worklist correct, then

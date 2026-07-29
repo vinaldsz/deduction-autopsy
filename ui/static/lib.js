@@ -424,3 +424,254 @@ export function lotSubtitle(metrics) {
   if (metrics.batch.status && metrics.batch.status !== "complete") parts.push(metrics.batch.status);
   return parts.join(" · ");
 }
+
+// --- extracted from app.js (the refactor) ----------------------------------------------------------
+//
+// Everything below was DOM-adjacent logic living in app.js, which no gate can reach. It is pure, so it
+// lives here and is tested. The rule that put it here is the same one at the top of this file: if it
+// can be decided without a document, it does not belong in a render function.
+
+/** Is the analyst looking at a narrowed view? Decides whether the footer says "filtered", so it is the
+    untested input to an otherwise-tested `queueFooter`. */
+export function isFiltered(state) {
+  return Boolean(state.q || state.retailer || state.reason || state.date_from || state.date_to) ||
+    state.filter !== "all";
+}
+
+/** "N/A" is not a valid CSS class. Lives beside `reviewChecks`, which produces the values it takes. */
+export function safeClass(v) {
+  return v === "N/A" ? "NA" : v;
+}
+
+/** The worklist query string: the client half of the API contract in ui/queries.py.
+ *
+ *  Takes `state` rather than closing over it so the offset arithmetic is testable — the server speaks
+ *  offset/limit and the UI speaks page/size, and `(page - 1) * size` is the kind of expression that is
+ *  only ever wrong by one. `direction: null` is omitted rather than sent, which is what lets the server
+ *  choose each column's useful first click (see DEFAULT_STATE); the five narrowing keys are omitted
+ *  when falsy so a cleared filter disappears from the URL instead of being sent as "". */
+export function queryParams(state, overrides = {}) {
+  const s = { ...state, ...overrides };
+  const params = new URLSearchParams({
+    offset: (s.page - 1) * s.size, limit: s.size, status_filter: s.filter, sort: s.sort,
+  });
+  if (s.direction) params.set("direction", s.direction);
+  for (const [key, value] of [["q", s.q], ["retailer", s.retailer], ["reason", s.reason],
+                              ["date_from", s.date_from], ["date_to", s.date_to]]) {
+    if (value) params.set(key, value);
+  }
+  return params;
+}
+
+/** The pager: "26–50 of 137" plus whether each arrow is spent.
+ *
+ *  `rowCount` is the rows actually returned, not `size` — the last page is short, and computing the
+ *  upper bound from `size` would claim rows that aren't there. An empty page reads "0", not "1–0". */
+export function pageStatus(page, size, total, rowCount) {
+  const offset = (page - 1) * size;
+  const shown = rowCount ? `${offset + 1}–${offset + rowCount}` : "0";
+  return {
+    label: `${shown} of ${total}`,
+    prevDisabled: page === 1,
+    nextDisabled: offset + size >= total,
+  };
+}
+
+/** The claims on this page that are checked. Was written twice — once for the counter, once for the
+    bulk POST — and the two must never disagree about what "selected" means. */
+export function pickedOnPage(pageIds, picked) {
+  return (pageIds || []).filter((id) => picked && picked.has(id));
+}
+
+/** The bulk bar: the counter, the button's own label, and the header checkbox's tri-state.
+ *
+ *  `checked` requires a non-empty page: an empty queue with an empty selection is not "all selected".
+ *  `indeterminate` is what stops 3-of-25 from looking like all of them. */
+export function selectAllState(pageIds, picked) {
+  const onPage = (pageIds || []).length;
+  const chosen = pickedOnPage(pageIds, picked).length;
+  const n = picked ? picked.size : 0;
+  return {
+    count: n,
+    countLabel: `${n} selected`,
+    acceptLabel: n === 1 ? "Accept 1 verdict" : `Accept ${n} verdicts`,
+    checked: onPage > 0 && chosen === onPage,
+    indeterminate: chosen > 0 && chosen < onPage,
+  };
+}
+
+/** The confirm before the one action in the UI that writes more than one decision. Names the count. */
+export function bulkConfirmMessage(count) {
+  return `Accept the agents' verdict on ${count} claim${count === 1 ? "" : "s"}?\n\n` +
+    "This records your sign-off on each one. Claims that were never investigated, that the agents " +
+    "escalated, or that you have already decided will be skipped and listed.";
+}
+
+/** The queue row's status cell, as parts rather than DOM.
+ *
+ *  `superseded` carries the audit trail: `status` is the *effective* verdict, so an override shows the
+ *  analyst's answer as the claim's answer, and dropping the agents' original would erase the very
+ *  separation the two spines exist to keep. Tolerates a partial claim — a live run re-renders this cell
+ *  from `{status}` alone, with no disposition and no agent verdict to compare. */
+export function statusParts(claim) {
+  const v = verdictLabel(claim.status);
+  const overridden = claim.disposition === "override" && claim.agent_status !== claim.status;
+  return {
+    tone: v.tone,
+    glyph: v.glyph,
+    label: v.label,
+    superseded: overridden ? `was ${claim.agent_status}` : null,
+    badge: claim.disposition || null,
+  };
+}
+
+/** "override → VALID" / "accept → INVALID". Two call sites wrote this sentence independently, 60 lines
+    apart — the recorded-decision line and the just-saved confirmation — and they must agree. */
+export function dispositionLabel(disposition, verdict) {
+  return `${disposition} → ${verdict}`;
+}
+
+/** The recorded-decision line, or null when there is no decision to describe.
+ *
+ *  The verdict falls back through `decided_verdict` → `override_verdict` → `agent_status` because
+ *  pre-Layer-34 rows have no snapshot and degrade rather than reading blank. The override branch also
+ *  names what the agents said, which is the point of recording a disagreement at all. */
+export function decisionSummary(claim) {
+  if (!claim || !claim.disposition) return null;
+  const verdict = claim.decided_verdict || claim.override_verdict || claim.agent_status;
+  const when = claim.decided_at ? ` on ${claim.decided_at.slice(0, 16).replace("T", " ")}` : "";
+  const what = claim.disposition === "override"
+    ? `${dispositionLabel("override", verdict)} (agents said ${claim.agent_status})`
+    : dispositionLabel(claim.disposition, verdict);
+  return { text: `Your decision: ${what}${when}`, stale: Boolean(claim.decision_stale), note: claim.note || null };
+}
+
+/** Why the Override button is disabled, and what to say about it.
+ *
+ *  The server enforces the same three rules with 422; this exists so the analyst can see which one is
+ *  biting rather than discovering it on submit. Overriding to the agents' own verdict is refused
+ *  because that is an accept, and recording it as a disagreement would be false. */
+export function overrideGuard({ chosen, reason, agentVerdict } = {}) {
+  const verdict = chosen || "";
+  const stated = (reason || "").trim();
+  const sameAsAgents = Boolean(verdict) && verdict === agentVerdict;
+  const title = !verdict ? "Choose the verdict you're overriding to"
+    : sameAsAgents ? `The agents already said ${verdict} — accept it instead`
+    : !stated ? "An override needs a stated reason"
+    : "";
+  return { disabled: Boolean(!verdict || !stated || sameAsAgents), title };
+}
+
+/** The run-history line, or null when there is nothing worth saying.
+ *
+ *  Hidden at one run because 46 of 50 claims have exactly one and "1 run" is noise. Dates are MM-DD:
+ *  the year is identical across runs and this line sits in the *sticky* header, where a second line is
+ *  permanently subtracted from the evidence pane. Falls back to the run id when a crashed run wrote no
+ *  timestamp, so the row still identifies itself. */
+export function runHistoryLine(runs, latestRunId) {
+  const list = runs || [];
+  if (list.length <= 1) return null;
+  const parts = list.map((r) => {
+    const when = String(r.timestamp || r.run_id || "").slice(5, 10);
+    const label = verdictLabel(r.final_verdict).label;
+    return `${when} ${label}${r.run_id === latestRunId ? " (current)" : ""}`;
+  });
+  return `${list.length} runs · ${parts.join(" ← ")}`;
+}
+
+/** The run `latest` points at, falling back to the newest listed. */
+export function currentRun(runs, latestRunId) {
+  const list = runs || [];
+  return list.find((r) => r.run_id === latestRunId) || list[0] || null;
+}
+
+/** The token-spend line. Guarded per agent: a run that recorded usage for only one of them used to
+    throw four levels deep inside a `catch` that swallowed it, so the whole history line vanished. */
+export function usageLine(usage) {
+  if (!usage) return "";
+  const side = (name, u) =>
+    u ? `${name}: ${u.prompt_tokens ?? "?"} in / ${u.completion_tokens ?? "?"} out` : null;
+  const parts = [side("investigator", usage.investigator), side("reviewer", usage.reviewer)].filter(Boolean);
+  return parts.length ? `tokens — ${parts.join(" · ")}` : "";
+}
+
+/** Does the caret own this keystroke? Split from app.js's `inField` so the one untested input to the
+    otherwise-tested `keyAction` can be checked against a plain object — every shortcut is a bare
+    letter, so getting this wrong makes the search box unusable rather than merely surprising. */
+const TEXT_INPUTS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+export function isFieldNode(node) {
+  return Boolean(node && (TEXT_INPUTS.has(node.tagName) || node.isContentEditable));
+}
+
+// --- the SSE wire format --------------------------------------------------------------------------
+//
+// A protocol parser that lived inline in a fetch loop and was reachable by no test at all. Split out
+// so the framing rules are checkable without a server: the batch run's whole progress report goes
+// through here, and a parser that drops a frame loses a claim silently.
+
+/** Split a decode buffer into complete frames, returning the incomplete tail separately.
+ *
+ *  Frames end at a blank line. The tail matters as much as the frames: a chunk boundary lands
+ *  mid-frame constantly, and returning it as if it were complete would truncate JSON. */
+export function splitFrames(buf) {
+  const frames = [];
+  let rest = String(buf ?? "");
+  let i;
+  while ((i = rest.indexOf("\n\n")) >= 0) {
+    frames.push(rest.slice(0, i));
+    rest = rest.slice(i + 2);
+  }
+  return { frames, rest };
+}
+
+/** One frame -> `{event, data}`, with `data` still a string.
+ *
+ *  Multiple `data:` lines join with a newline, per the spec — the old inline version kept only the last
+ *  one, so a payload that ever contained a newline would have been silently truncated to its tail. A
+ *  trailing `\r` is stripped so CRLF framing doesn't defeat the prefix tests. Parsing the JSON is the
+ *  caller's job: this reports the wire format and nothing more. */
+export function parseFrame(block) {
+  let event = null;
+  const data = [];
+  for (const raw of String(block ?? "").split("\n")) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+  }
+  return { event, data: data.length ? data.join("\n") : null };
+}
+
+// --- the two shapes the review pane is built from --------------------------------------------------
+//
+// An adapter pair that must agree: the pane reads one shape, and it arrives either from the on-disk
+// case file (a reload) or from the live run's `done` payload. They lived 15 lines apart in app.js with
+// nothing asserting that they produce the same keys, so a field renamed on one side would have gone to
+// `undefined` on the other in silence.
+
+/** `GET /api/claims/{id}/casefile` -> the review pane's evidence shape.
+ *
+ *  `final_verdict` comes from the ROW's status, not from `reviewer_output.final_verdict`: the row
+ *  carries the effective verdict, so an overridden claim shows the analyst's answer. `usage` is null
+ *  because the artifact doesn't carry it — the token spend comes from /runs instead. */
+export function fromCasefile(json, rowStatus) {
+  const cf = json.case_file, ro = json.reviewer_output;
+  return {
+    investigator_verdict: cf.proposed_verdict, reviewer_verdict: ro.final_verdict,
+    final_verdict: rowStatus, confidence: ro.confidence, dispute_grounds: ro.dispute_grounds,
+    usage: null, po_summary: cf.po_summary, timeline: cf.timeline,
+    uom_conversions_applied: cf.uom_conversions_applied, prior_claims: cf.prior_claims,
+    trade_agreement_found: cf.trade_agreement_found, discrepancy_qty: cf.discrepancy_qty,
+    discrepancy_amount_cents: cf.discrepancy_amount_cents, review_findings: ro.review_findings,
+    // Both have been in this response since Layer 32 and were read by nothing. Mapped to the same two
+    // names the live payload uses, so renderEvidence reads one shape from either path.
+    investigator_reasoning: cf.reasoning, reviewer_reasoning: ro.reasoning,
+  };
+}
+
+/** The live run's `done` / `claim_done` payload -> the same shape. The spread is what picks up the
+    server's case-file summary, including the two reasoning fields it now carries. */
+export function fromDone(p) {
+  return { ...p.case_file, investigator_verdict: p.investigator_verdict,
+    reviewer_verdict: p.reviewer_verdict, final_verdict: p.final_verdict,
+    confidence: p.confidence, dispute_grounds: p.dispute_grounds, usage: p.usage };
+}

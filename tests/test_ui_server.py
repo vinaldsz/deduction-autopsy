@@ -650,3 +650,15 @@ def test_lib_module_is_served():
     resp = client.get("/lib.js")
     assert resp.status_code == 200
     assert "export function dollars" in resp.text
+
+
+def test_every_frontend_module_is_served():
+    """index.html loads only /app.js and the rest arrive through the import graph, so a single 404
+    anywhere in it is a blank page with one console error. Globbed rather than listed: the point is to
+    cover a module nobody remembered to add here."""
+    modules = sorted(p.name for p in (server.STATIC_DIR).glob("*.js"))
+    assert len(modules) > 10, f"expected the split frontend, found {modules}"
+    for name in modules:
+        resp = client.get(f"/{name}")
+        assert resp.status_code == 200, f"/{name} is not served"
+        assert resp.headers["content-type"].startswith("text/javascript"), name
