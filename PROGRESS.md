@@ -2036,6 +2036,13 @@ run above (s04 is the known-flaky exception, see "Known issues").
 Updated `README.md`'s layer-status table (Layer 10 done), CLI section ("all 8 scenarios"),
 and "The seven scenarios" → "The eight scenarios" with an s08 row explaining the pivot.
 
+> **Corrected at Layer 38:** the last clause of that sentence was not true. The s08 row landed, but
+> `git log -S"The seven scenarios are ground truth" -- README.md` returns only the original README
+> commit — the non-negotiable line itself was never edited, and `CLAUDE.md` said "Seven scenarios"
+> for another 28 layers. Recorded rather than quietly fixed: a PROGRESS entry asserting a doc change
+> that didn't happen is the same class of defect as a KPI that doesn't equal its own rows, and it is
+> why the Layer 38 docs pass verified each claim against the file instead of trusting this log.
+
 ---
 
 ## Previous layer
@@ -2553,7 +2560,7 @@ entry in `data/sku_uom_conversions.json`. Installed `pytest` into `.venv` via
 hadn't been installed yet).
 
 ## Next session
-All layers in `docs/PLAN.md` are complete through 34 (see the README table for the index and
+All layers in `docs/PLAN.md` are complete through **38** (see the README table for the index and
 `## Current layer` at the top of this file for the most recent one). Nothing is known to be
 broken: all four gates are green and CI passes on `main`.
 
@@ -2564,9 +2571,19 @@ PROGRESS.md + commit drafts. The smoke test matters because `tests/conftest.py` 
 in a temp dir, so a green suite says nothing about the real store — which is exactly how Layer
 34's `init_db` bug got through.
 
-No layer is currently queued. Revisit "Explicit out of scope" in `CLAUDE.md` (parallel
-orchestration, SKU-to-product-name mapping, API-facing deployment concerns) only if the user asks
-to expand scope.
+**Queued: Layers 39, 40 and 41**, the rest of the Layers 33–41 UX-remediation phase — explainability
+(reasoning / runs / checks / timeline), run transparency (a batch stream that survives one claim
+failing), then export / print / light mode / density. Their two standing rules: no
+agent/prompt/verdict-logic changes and no fixture edits, and pure frontend logic goes in
+`ui/static/lib.js` where `node --test` can reach it.
+
+**Read this before starting 39:** `ui/static/app.js` and the stylesheet are unreachable by every
+gate, and that is now a measured pattern rather than a caveat — Layers 33, 35, 36, 37b and 38 each
+found bugs only by driving the running app, three of them in Layer 38 alone (two CSS, one selector
+scope). Budget for a live pass; don't treat a green `scripts/check.sh` as the end of a UI layer.
+
+Beyond 41, revisit "Explicit out of scope" in `CLAUDE.md` (parallel orchestration,
+SKU-to-product-name mapping, API-facing deployment concerns) only if the user asks to expand scope.
 
 ## Layer status
 
@@ -2579,12 +2596,15 @@ broke, and what was corrected mid-build. Start at `## Current layer` at the top.
 Run `scripts/check.sh` — it is the single definition of all four gates (pytest, pyright,
 frontend syntax, frontend unit tests) and reports every failure in one pass. Exact counts are
 deliberately **not** tracked inline here: the previous count sat at "146 passed" for twenty-odd
-layers. As of the layer-end-verification tooling commit: 385 passed, 10 deselected, 0 type
-errors, 8 frontend tests.
+layers. As of **Layer 38**: 421 passed, 10 deselected, 0 type errors, 62 frontend tests. (This one
+line is the only count in the file, and each layer's own entry above records its own delta — that is
+where to look, not here.)
 
 The 10 deselected are the paid integration tests, excluded by `addopts = "-m 'not integration'"`
 in `pyproject.toml` — `test_pipeline_scenarios.py`'s 8 parametrized ground-truth scenarios plus
 `test_reviewer_overturns_a_missed_duplicate`, and the live half of `test_prompt_injection.py`.
+(Verified by collection at Layer 38: `pytest --collect-only -m integration` reports exactly those
+10 of 431.)
 Opt in explicitly, and only when a change touches prompts, the pipeline, or the tools:
 
 ```bash
@@ -2605,8 +2625,8 @@ above, which is why this is a map rather than a per-test enumeration):
 | Architectural controls | `test_invariants.py` (nothing under `agents/` may reach data except through injected tool callables), `test_prompt_injection.py` |
 
 ## Known issues / decisions pending
-- **Resolved (this session, see "Current layer" above)**: `agents/reviewer.py`'s prompt had
-  a regression affecting s04, one of the 7 frozen scenarios, found (unrelated) during Layer
+- **Resolved (Layer 10 — see that layer's entry above)**: `agents/reviewer.py`'s prompt had
+  a regression affecting s04, one of the 8 frozen scenarios, found (unrelated) during Layer
   10. Live-tested 3 times that session: failed 2/3 (`reviewer_verdict: OVERTURN` instead of
   expected `CONFIRM`), passed once. Root cause per the trace: the Layer 9 follow-up's s01 fix
   added "don't re-litigate liability... a shortage that every document consistently confirms
@@ -2618,17 +2638,17 @@ above, which is why this is a map rather than a per-test enumeration):
   instruction at all (unlike the Investigator's own explicit step 3). Fixed with an explicit
   timeline-verification bullet plus a carve-out sentence scoping the liability language away
   from the timeline check. Live-confirmed 6/6 after the fix (5 solo runs + 1 full-suite run).
-- **Resolved (follow-up session, see above)**: s04's Investigator was calling
+- **Resolved (the Layer 9 follow-up — see that layer's entry above)**: s04's Investigator was calling
   `get_po`/`get_asns_for_po`/`get_invoice`/`get_receiving_record` with `po_id="CLM-004"` (the
   claim ID) instead of the actual PO ID (`PO-004`). Fixed by making `INVESTIGATOR_SYSTEM_PROMPT`
   state explicitly that these tools take the PO ID from `get_deduction_claim`'s response, not
   the claim ID. The identical bug was then found in the Reviewer too (not previously noticed)
   and fixed the same way. Confirmed live, 7/7.
-- **Resolved (follow-up session, see above)**: s04's Investigator also identified its own
+- **Resolved (the Layer 9 follow-up — see that layer's entry above)**: s04's Investigator also identified its own
   timeline violation finding but didn't act on it (proposed `VALID` despite noting the invoice
   predates the shipment). Fixed by stating explicitly that a sequence violation is grounds for
   `INVALID` regardless of otherwise-clean quantities.
-- **Resolved (follow-up session, see above)**: s01's Reviewer returned `OVERTURN` instead of
+- **Resolved (the Layer 9 follow-up — see that layer's entry above)**: s01's Reviewer returned `OVERTURN` instead of
   `CONFIRM` for the scenario where every document genuinely agrees — not a manufactured
   disagreement but real, out-of-scope analysis (a carrier-liability argument outside the six
   defined review checks). Fixed by scoping the Reviewer's prompt to exactly its six checks and
@@ -2636,7 +2656,7 @@ above, which is why this is a map rather than a per-test enumeration):
   a valid outcome, don't overturn just to justify the check") was insufficient by itself — this
   was only caught by reading the actual reasoning trace from a second live full-suite run, not
   by assuming the first fix worked.
-- **Resolved (follow-up session, see above)**: found while diagnosing the s01 issue — the
+- **Resolved (the Layer 9 follow-up — see that layer's entry above)**: found while diagnosing the s01 issue — the
   Investigator's `discrepancy_amount_cents` was 100x too large (300000 instead of 3000) because
   it treated `unit_price` (already cents-per-unit per `docs/SPEC.md`) as dollars and converted
   to cents again. Fixed by stating explicitly in the prompt that `unit_price`/amounts are

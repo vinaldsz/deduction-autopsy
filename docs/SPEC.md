@@ -157,10 +157,16 @@ force another Investigator turn.
 
 ---
 
-## Seven Scenarios — Ground Truth
+## Eight Scenarios — Ground Truth
 
 **These expected verdicts are fixed. Do not change fixture data to make a failing test
 pass — fix the agent prompts or tool logic instead.**
+
+Seven are tabled below; the eighth (`s08_reviewer_overturn` / `CLM-008`, expected
+**INVALID / CONFIRM**) arrived in Layer 10 and is documented under "Eighth Scenario" further down,
+along with why its expected verdicts are not the `VALID`/`OVERTURN` it was originally designed for.
+All eight live in `orchestrator/ground_truth.py`, which `cli/run_all.py` and
+`tests/test_fixtures.py` both import so the table and the code cannot drift.
 
 | # | Scenario dir | Claim ID | Investigator expected | Final expected | The trap |
 |---|---|---|---|---|---|
@@ -361,7 +367,13 @@ subprocess path cannot be patched).
 
 ---
 
-## UI API Contract (planned, Layers 19-21)
+## UI API Contract v1 (Layers 19-21) — SUPERSEDED
+
+> **Historical.** The `?scenario=` parameter below is retired: runtime is claim-id-driven as of
+> Layers 29/30, and `GET /api/scenarios` is gone. Read **"UI API Contract v2"** near the end of this
+> file for the current surface, plus the Layer 37a query-surface and Layer 38 bulk-accept sections
+> after it. Kept because the `verdict.json`-shaped response and the SSE event names below are still
+> what v2 builds on.
 
 Additive interface over `orchestrator/pipeline.run_pipeline` — see `CLAUDE.md`'s "UI is
 additive, not a replacement" note. `127.0.0.1`-only, no auth, no rate limiting.
@@ -425,7 +437,7 @@ design decision. Runtime is **claim-id-driven — `scenario` is retired from the
 - **"MCP Tools"** — same tool names/signatures the agents see, but implemented against the DB and
   keyed by `po_id`/`claim_id` (no active-scenario assumption). `normalize_uom` is unchanged (still
   reads `data/sku_uom_conversions.json`, which stays a reference file).
-- **"Seven Scenarios — Ground Truth"** — the claim_id → verdict table stays authoritative; the
+- **"Eight Scenarios — Ground Truth"** — the claim_id → verdict table stays authoritative; the
   "Scenario dir" column becomes a test label, not a runtime selector.
 - **"Required Tool Calls Per Scenario"** — re-keyed **by claim_id** (Layer 29): `CLM-002`→
   `normalize_uom`, `CLM-003`→`get_asns_for_po` (≥2), `CLM-006`→`get_trade_agreement`,

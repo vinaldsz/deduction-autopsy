@@ -269,15 +269,17 @@ detail.
 - **Two agents, always.** Never collapsed into one agent.
 - **MCP server is the only data access path.** Agents never see fixture files directly —
   every document access is a traceable tool call.
-- **The seven scenarios are ground truth.** Fixture data doesn't change to make a test
-  pass; agent prompts and tool logic do.
+- **The eight scenarios are ground truth.** Fixture data doesn't change to make a test
+  pass; agent prompts and tool logic do. (Seven at first; `s08_reviewer_overturn` arrived in
+  Layer 10 — see the table above.)
 
 ## Explicit non-goals
 
 - Real EDI X12 parsing (fixtures resemble real documents, not valid EDI)
 - Third-party integrations (NetSuite, Shopify, Amazon, etc.)
-- A frontend/UI — CLI output and markdown evidence packets only
-- Production concerns: auth, multi-tenancy, persistence beyond local files
+- Production concerns: auth, multi-tenancy, persistence beyond local files. The web UI does not
+  change this: it binds to `127.0.0.1`, carries no auth, and is single-user — the CLI's trust
+  model, not a deployment.
 
 ## Future work
 

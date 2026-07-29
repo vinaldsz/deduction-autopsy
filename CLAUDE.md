@@ -27,7 +27,8 @@ tool-call trace meaningful as an audit trail. (As of the Layer 23–31 phase the
 read a relational SQLite DB instead of per-scenario JSON — the abstraction is unchanged;
 agents still see only tools, never the backing store. See "Semantic/DB layer" below.)
 
-**Seven scenarios are ground truth.** The expected verdicts in `docs/SPEC.md` are fixed.
+**Eight scenarios are ground truth.** (Seven at first; `s08_reviewer_overturn` arrived in Layer
+10.) The expected verdicts in `docs/SPEC.md` are fixed.
 Do not change fixture data to make a failing scenario pass — change the agent prompts or
 tool logic instead. Changing expected verdicts requires explicit user sign-off.
 
@@ -60,7 +61,8 @@ data-quality report, lineage + load audit. Full roadmap: Layers 23–31 in `docs
   dispute packets), do not build
 - ~~Heterogeneous mock data sources~~ **Reversed 2026-07-25 — now IN scope (Layers 23–31,
   `docs/PLAN.md`).** The original gate ("worth pursuing once the in-scope build, layers 1-9, is
-  complete") is satisfied (build is complete through Layer 22). A real ETL now ingests
+  complete") was satisfied at the time of the reversal (the build was then complete through Layer
+  22; it now runs through Layer 38 — see PROGRESS.md). A real ETL now ingests
   heterogeneous source systems (ERP CSV, carrier EDI-ish flat text, WMS/portal/TPM JSON) into a
   relational SQLite DB the MCP reads — see "Semantic/DB layer" under design decisions above.
   Data model + ETL contract live in `docs/SPEC.md`; the SKU→UOM conversion table stays a JSON
@@ -99,8 +101,13 @@ data-quality report, lineage + load audit. Full roadmap: Layers 23–31 in `docs
 
 ## Build order — do not skip ahead
 
+This section is the **historical** order the build was done in, kept because "do not skip ahead"
+still applies to whatever layer is current. For where the project actually stands, read
+PROGRESS.md's `## Current layer`; for the index, the table in README.md.
+
 1. `mcp_server/models.py` + `data/sku_uom_conversions.json`
-2. All 7 scenario fixture JSON files (verified against Pydantic models)
+2. The scenario fixture JSON files (verified against Pydantic models) — 7 at this point; s08
+   arrived in Layer 10, so there are 8 on disk today
 3. `mcp_server/fixtures.py` + `mcp_server/tools/` + unit tests passing
 4. `mcp_server/server.py` (wire FastMCP)
 5. `agents/base.py` (shared tool loop)
@@ -122,10 +129,32 @@ usage tracking, CLI batch, hooks, prompt-injection test, and the Web UI phase (1
 28. DB-backed `FixtureLoader` + document tools (scenario-less, keyed by po_id/claim_id)
 29. Scenario-less pipeline + CLI + `claim_resolutions` persistence
 30. Dashboard + daily-lot worklist UI (replaces the scenario dropdown)
-31. (deferred, needs sign-off) Universal completeness check + ESCALATE on missing source data
+31. Universal completeness check + ESCALATE on missing source data — **built** (signed off; built
+    out of order, after Layer 32, because it is the only layer that edits the agent prompts)
+
+**Analyst-workspace phase — Layer 32, then the UX remediation in Layers 33–41** (approved
+2026-07-28; the 33–41 block acts on a 40-finding UI/UX review of the Layer 30/32 dashboard taken
+from a deductions analyst's seat). Full detail in `docs/PLAN.md`:
+
+32. Analyst review workspace — evidence-first UI + human decisions (`claim_dispositions`)
+33. JS test harness (`ui/static/lib.js` + `node --test`) + render hygiene
+34. Decision integrity — `accept` recorded as a snapshot, not a pointer (**the only schema gate**)
+35. KPIs that add up — the to-do/decided partition
+36. Verdict semantics that match the money — tone keyed to money direction, not verdict name
+37. A grid you can work — split 37a (query surface) / 37b (the grid itself)
+38. Working the volume — bulk accept, keyboard path, pinned decision bar, save-and-next
+39. Explainability — reasoning, runs, checks, timeline
+40. Run transparency — a batch stream that survives one claim failing
+41. Export, print, light mode, density
 
 **Rule:** Do not start layer N+1 until layer N has passing tests. Check PROGRESS.md for
 current state before starting any session.
+
+**Two standing rules the UX phase added:** no agent/prompt/verdict-logic changes and no fixture
+edits anywhere in Layers 33–41 — the 8 ground-truth verdicts stay untouched; and pure frontend
+logic goes in `ui/static/lib.js` (tested by `node --test`) while `ui/static/app.js` stays DOM+fetch.
+`app.js` and the stylesheet are unreachable by every gate, which is why each of these layers ends by
+driving the running app: five of them found bugs that way, three in Layer 38 alone.
 
 ---
 
