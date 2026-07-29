@@ -64,6 +64,7 @@ was gated on sign-off — it is the only layer that edits the agent prompts):
 | 36 | Verdict semantics that match the money — tone keyed to money direction, not verdict name | ✅ Done |
 | 37a | Query surface for a workable grid — total sort order, filters, filtered totals, 422 on bad input | ✅ Done |
 | 37b | A grid you can work — PO/Age columns, sort indicators, filtered total, page size, URL-hash routing | ✅ Done |
+| 38 | Working the volume — bulk accept (accept-only), keyboard path, pinned decision bar, save-and-next | ✅ Done |
 | — | Layer-end verification tooling (`scripts/check.sh`, `/layer-done`, `tests/test_invariants.py`) | ✅ Done |
 
 ## Setup
@@ -145,8 +146,10 @@ evidence → decide**):
   oldest open claim sit beside them as read-only figures, visually distinct because they aren't
   filters.
 - **Left: triage queue** — the lot's claims with search, status filter tabs
-  (to-do / not-investigated / awaiting-my-call / disputable / decided), sortable priority/amount,
-  keyboard navigation, and disposition badges.
+  (to-do / not-investigated / awaiting-my-call / disputable / decided), retailer / reason / date
+  narrowing, sortable columns (claim / PO / retailer / amount / age / priority), a total over the
+  filtered set, and disposition badges. Selecting rows with the checkbox column reveals a
+  **bulk-accept** bar; it is accept-only, and it reports per claim what it did and did not record.
 - **Right: review pane** — the verdict header with the Investigator→Reviewer provenance chain and
   a confidence meter; the **retailer's claim** (reason + notes); a **source documents** panel
   (PO / ASNs / invoice / receiving / trade agreement / prior claims), which is read straight from
@@ -154,9 +157,13 @@ evidence → decide**):
   investigated, the agent reconciliation, six check chips, dispute grounds, and a dispute-packet
   download. The raw tool-call trace and token usage are developer telemetry and sit in a collapsed
   audit drawer.
-- **Decision bar** — accept / override / send-to-human, persisted to `claim_dispositions` (a
-  separate table from `claim_resolutions`, so re-investigating a claim never clobbers the human
-  decision).
+- **Decision bar** — accept or override (with a required reason), persisted to `claim_dispositions`
+  (a separate table from `claim_resolutions`, so re-investigating a claim never clobbers the human
+  decision). It stays pinned to the bottom of the review pane, which scrolls its evidence
+  independently of the queue, and saving advances to the next claim.
+- **Keyboard** — `j`/`k` move, `a` accept, `o` focus the override picker, `x` select the row, `/`
+  search, `Esc` leave a field. There is deliberately no key that *records* an override: that needs a
+  verdict and a stated reason.
 
 **Process lot (investigate + review all)** runs the pipeline over every unresolved claim in the lot,
 so the analyst opens to fully-evidenced cases. Dependency-free static client (`ui/static/`, no
@@ -179,6 +186,11 @@ API (data comes from the relational store — there is no "scenario"):
   run (download).
 - `POST /api/claims/{claim_id}/disposition` → record the analyst's decision
   `{disposition: accept|override|escalate, override_verdict?, note?}`.
+- `POST /api/batches/{batch_id}/dispositions` → **accept only**, over a selection:
+  `{claim_ids: [...]}` → `{recorded, decided_at, results: {claim_id: outcome}}` where an outcome is
+  `recorded | unknown_claim | not_investigated | unresolved_verdict | already_decided`. One
+  transaction, one timestamp; ineligible claims are reported, not written. There is no bulk override —
+  approving many claims at once is only defensible when you are agreeing with a verdict that exists.
 - `GET /api/claims/{claim_id}/stream` (SSE) / `POST /api/claims/{claim_id}/investigate` → single-claim
   drill-in / run; 404 for an unknown claim, 502 on an upstream agent failure.
 

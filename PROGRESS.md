@@ -1,6 +1,130 @@
 # Progress
 
 ## Current layer
+**Layer 38 — Working the volume complete**
+
+Sixth of the Layers 33–41 UX-remediation phase. Layers 33–37b made the worklist *correct*; it still
+wasn't **workable** — 50 claims meant 50 mouse-trips, each one scrolling past a long evidence pane to
+reach a decision bar at the bottom of the page. No agent/prompt/verdict-logic changes, no fixture
+edits, **no schema change** (`claim_dispositions` already had every column); the 8 ground-truth
+verdicts are untouched and the fidelity oracle was re-run explicitly.
+
+**One writer, two callers.** `write_claim_disposition`'s body became `_write(conn, …)` returning a
+per-claim **outcome string** instead of a bool, and `write_claim_dispositions` (accept-only, one
+connection, one transaction, one `decided_at`) is the second caller. The singular function keeps its
+exact signature and bool return, so all nine existing `tests/test_dispositions.py` tests pass
+**unmodified** — which is the tell that the single-claim path didn't move. Outcomes are a stable
+vocabulary because they reach the client: `recorded` / `unknown_claim` / `not_investigated` /
+`unresolved_verdict` / `already_decided`.
+
+**Three policy decisions, all deviations from `docs/PLAN.md` and recorded there.**
+
+1. **The keymap drops `s`.** PLAN.md said `a`/`o`/`s`, but "send to human" was removed in Layer 32 —
+   the analyst *is* the human it would have sent to — so `s` had no target. `j`/`k` move, `a` accept,
+   `o` focus the override picker, `x` toggle the checkbox, `/` search, `Esc` leave the field. **No key
+   submits an override:** it needs a verdict *and* a note, so a one-key override is impossible by
+   construction rather than by discipline. `a` goes through the button, not `postDisposition`, so the
+   keyboard cannot reach a decision the mouse is forbidden from making.
+2. **Bulk accept refuses an ESCALATE verdict.** Accepting "the agents couldn't resolve this" would
+   record the claim as *decided* with verdict ESCALATE — settled, while nothing was settled, and the
+   awaiting-my-call queue exists precisely because those need reading. The **single-claim** path is
+   deliberately unchanged: tightening a shipped endpoint's semantics is its own layer, and the live run
+   below shows it still accepting an ESCALATE by design.
+3. **Bulk accept never rewrites an existing decision.** Overwriting one claim deliberately is what the
+   single-claim endpoint is for; doing it to a multi-row selection would restamp `decided_at` and drop
+   an existing override's note on rows already worked. The two bulk-only policies live in
+   `write_claim_dispositions`, **not** behind flags in `_write` — a shared writer whose behaviour
+   depends on a boolean is how the single-claim path would have changed by accident.
+
+**Accept-only is enforced by the shape of the request, not by a check.** `BulkAcceptBody` has no
+`disposition` field at all, plus `extra="forbid"` so a client posting `{"disposition": "override"}`
+gets a 422 instead of being silently bulk-*accepted* — told yes to a request the server never honoured.
+404 for an unknown batch (matching every other `/api/batches/*` route), 422 for an empty selection.
+`batch_id` reaches the writer and scopes the claim lookup, or it would be decorative in its own URL.
+
+**Selection is page-scoped and short-lived.** `state.picked` is cleared by every `loadQueue()`, so it
+cannot survive a filter, sort, page or search change; the header checkbox covers **this page only**
+(there is no "select all N filtered" control anywhere) and reads `indeterminate` at 3-of-25 rather than
+looking like "all". It is deliberately **not** in the URL hash: a shared link that arrives with twelve
+rows pre-checked is a trap, and the hash describes a *view*.
+
+**Save-and-next.** The next claim is resolved from `state.pageIds` **before** the write, because
+deciding a claim usually removes it from the current filter — afterwards there is no row left to ask
+what came next. `nextClaimId` does not wrap: after the last row, `null` means stay put, since jumping
+silently back to row 1 is indistinguishable from a reload bug. The advance reuses `restoreSelection`,
+which already handles a claim whose row isn't on this page.
+
+**The confirmation had to move out of the review pane.** `selectClaim` clears `w-disp-status`, so
+auto-advancing would have wiped the "Saved" line at the moment it became true. The queue bar above the
+table now carries two independent things — the live selection's controls, and a line saying what was
+last recorded (`CLM-006: accept → INVALID`, or `2 accepted · 1 already decided · 1 still escalated`).
+The in-pane message is still set and still needed: on the last row nothing advances.
+
+**Verification.** `scripts/check.sh` — `pytest` **421 passed, 10 deselected** (was 409); `pyright` 0
+errors; `node --test` **62 passing** (was 48). Explicit `pytest tests/test_etl.py tests/test_db.py` —
+59 passed, so the fidelity oracle is untouched (confirmed, not assumed, as in Layers 34/35/37a).
+
+**Live.** Real `uvicorn` + headless Chrome over CDP, against a **copy** of `data/deductions.db`
+doctored into every state — this layer writes, so it must not scribble on the real lot (Layers 34/35
+precedent). 25 browser assertions, all passing, and the real DB confirmed afterwards at its original
+6 dispositions / 52 resolutions / 0 ESCALATEs.
+
+- **Keyboard:** `/` focused search and then `j`,`k`,`a` typed as the literal text `jka` with the pane
+  untouched — the inertness rule, live, not just unit-tested. `Esc` returned focus to the body; `j`/`k`
+  walked CLM-001 → CLM-002 → CLM-001 with the row highlight and the URL following.
+- **Three claims, keyboard-only:** CLM-006 → CLM-007b → CLM-008, each `a` writing a real disposition,
+  naming it in the queue bar, and advancing to the next row with the hash following.
+- **The other advance path:** in the To-do tab the worked row *leaves* the filter — accepted
+  CLM-SYN-0010, the queue went 5 rows → 4 without it, and the pane still advanced to the right next
+  claim, which is the pre-resolved-`advanceTo` design working on real data.
+- **`a` on a never-investigated claim did nothing** (CLM-SYN-0011): no write, no advance.
+- **Bulk accept** on a deliberately mixed four-claim selection returned all four outcomes distinctly —
+  `2 accepted · 1 already decided · 1 still escalated — decide these yourself` — the confirm named the
+  count, and the outcome line survived the selection being cleared by its own refresh. A `diff` of
+  `claim_dispositions` before and after proved the point: **six new rows, and all six pre-existing rows
+  byte-identical**, including CLM-001's override note. The two bulk-accepted claims share one
+  `decided_at` to the microsecond — the single transaction, visible in the data.
+- **API directly:** 404 unknown batch, 422 empty selection, 422 smuggled `disposition`, and a
+  cross-lot claim id reported `unknown_claim` rather than being written.
+- **Layout, measured not guessed:** 9 columns, table 882px inside an 884px pane, zero horizontal
+  overflow, uniform 37px rows; the queue's column headers stay pinned while its rows scroll; the review
+  pane scrolls its own evidence with the claim header pinned flush to the top and the decision bar
+  flush to the bottom; at 1100px it collapses to one column with no nested scrollers and no stickies.
+
+**Two bugs only the running app could show, both CSS.**
+
+1. **The stacked-layout media query lost on source order.** Written next to `.pane` — where it belongs
+   by topic — its plain-class selectors tied with `.ws-body`, `thead th`, `.ws-head` and `.decision`
+   further down the file, and later-same-specificity wins. So at ≤1360px only `.pane`'s two properties
+   (which have no later rule) took effect: the nested scrollers stayed and three stickies floated over
+   a page-scrolled layout. Moved to the very end of the stylesheet with a comment saying why it can't
+   live where it reads better. Same family as the Layer 33 banner bug, and equally untestable here.
+2. **A sticky `top: 0` resolves against the scrollport's *padding* edge, not its border edge.**
+   `#ws-body`'s 16px padding therefore left a 16px strip above the pinned claim header for the evidence
+   to slide through, and floated the decision bar 16px off the bottom (measured: 360 vs 344, 1259 vs
+   1275). The vertical padding moved onto the sticky children themselves.
+3. **`thead th` was too broad, caught while starting the server on the real lot.** It also matched the
+   ASN / invoice / receiving tables in the review pane, so *their* header rows became sticky inside the
+   evidence scroller — and at `z-index: 1` against `.ws-head`'s `2`, one would slide **under** the
+   pinned claim header and sit there half-visible. Now `.queue-scroll thead th`, in both the base rule
+   and the stacked-layout reset. Surfaced by an assertion counting 21 columns where the queue has 9 —
+   i.e. by a *wrong* number in a harness, not by anything looking wrong on screen.
+
+**Also corrected: two false failures in my own harness**, worth recording because both would have been
+read as product bugs. Asserting `scrollTop === 400` after setting it failed because the scroller's max
+was 285 — the header *was* pinned. And measuring the review pane before scrolling the window measured
+the un-pinned page: the panes are `position: sticky`, so they only pin (and only fill the viewport)
+once the KPI strip has scrolled away. The Layer 37b `about:blank` bounce was carried over and needed
+from the first navigation onward.
+
+**Known and deferred:** `app.js` remains untested by construction (this layer moved three more pure
+functions across the `lib.js` boundary), so DOM wiring and static CSS are still verified only by
+driving the running app — which is exactly how both CSS bugs above surfaced. Bulk *override* stays
+unbuilt on purpose. Layers 39–41 continue the phase.
+
+---
+
+## Previous layer
 **Layer 37b — A grid you can work complete**
 
 The frontend half of the Layer 37 split. Consumes everything 37a started serving and nothing else:

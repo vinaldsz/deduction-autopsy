@@ -704,6 +704,31 @@ at the running app. One commit each.
   and save-and-next auto-advance.
 - `ui/static/lib.js`: `keyAction` (pure — the reason the keymap is testable).
 - **Verify:** `pytest -q`, `node --test`; work three claims keyboard-only.
+- **Four decisions taken in planning, all deviations from the text above.**
+  1. **The keymap drops `s`.** "Send to human" was removed in Layer 32 — the analyst *is* the human it
+     would have sent to — so `s` has no target. Final map: `j`/`k` move, `a` accept, `o` focus the
+     override picker, `x` toggle the row's checkbox, `/` search, `Esc` leave the field. **No key
+     submits an override**: it needs a verdict *and* a note, so a one-key override is impossible by
+     construction rather than by discipline.
+  2. **Bulk accept refuses an ESCALATE verdict** (`unresolved_verdict`). Accepting "the agents
+     couldn't resolve this" would record the claim as *decided* with verdict ESCALATE — settled, while
+     nothing was settled. The single-claim path is deliberately left as-is: tightening a shipped
+     endpoint's semantics is its own layer.
+  3. **Bulk accept never rewrites an existing decision** (`already_decided`) — it would restamp
+     `decided_at` and drop an existing override's note on rows the analyst already worked.
+  4. **Auto-advance is always on, on success only.** The next claim is resolved *before* the write,
+     from the page as it stands: deciding a claim usually removes it from the filter, so afterwards
+     there is no row left to ask what came next.
+- **Two things only the running app showed.**
+  1. **The stacked-layout media query lost on source order.** Written next to `.pane` (where it
+     belongs by topic), its plain-class selectors tied with `.ws-body`, `thead th`, `.ws-head` and
+     `.decision` further down the file and lost — so at ≤1360px only the two properties with no later
+     rule took effect, leaving nested scrollers and stickies floating over a page-scrolled layout.
+     Moved to the end of the stylesheet. Same family as the Layer 33 banner bug.
+  2. **A sticky `top: 0` resolves against the scrollport's *padding* edge**, so `#ws-body`'s 16px
+     padding left a 16px strip above the pinned claim header for the evidence to slide through and
+     floated the decision bar 16px off the bottom. The vertical padding moved onto the sticky children
+     themselves. Both measured over CDP, not guessed.
 
 ### 39. Explainability — reasoning, runs, checks, timeline
 

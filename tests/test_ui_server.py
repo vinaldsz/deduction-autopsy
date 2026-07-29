@@ -350,6 +350,59 @@ def test_override_on_an_uninvestigated_claim_is_allowed(monkeypatch):
     assert resp.json()["decided_verdict"] == "INVALID"
 
 
+# --- bulk accept (Layer 38) -----------------------------------------------------------------------
+
+def test_bulk_dispositions_returns_the_per_claim_outcome_map(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(server, "write_claim_dispositions",
+                        lambda **kw: seen.update(kw) or {"CLM-1": "recorded", "CLM-2": "recorded",
+                                                         "CLM-3": "already_decided"})
+
+    resp = client.post("/api/batches/LOT-2024-09-15/dispositions",
+                       json={"claim_ids": ["CLM-1", "CLM-2", "CLM-3"]})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"] == {"CLM-1": "recorded", "CLM-2": "recorded", "CLM-3": "already_decided"}
+    # `recorded` counts only what was actually written — the skipped claims are reported, not counted.
+    assert body["recorded"] == 2
+    assert body["batch_id"] == "LOT-2024-09-15" and body["decided_at"] == seen["decided_at"]
+    # Batch-scoped: the writer must be told which lot, or the batch_id in the URL is decorative.
+    assert seen["batch_id"] == "LOT-2024-09-15"
+    assert seen["claim_ids"] == ["CLM-1", "CLM-2", "CLM-3"]
+
+
+def test_bulk_dispositions_unknown_batch_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "batch_exists", lambda b: False)
+    resp = client.post("/api/batches/LOT-NOPE/dispositions", json={"claim_ids": ["CLM-1"]})
+    assert resp.status_code == 404
+
+
+def test_bulk_dispositions_of_nothing_is_422(monkeypatch):
+    """Distinct from a 200 with an empty map: an empty selection is a client bug, not a result."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    called = []
+    monkeypatch.setattr(server, "write_claim_dispositions", lambda **kw: called.append(kw) or {})
+    resp = client.post("/api/batches/LOT-2024-09-15/dispositions", json={"claim_ids": []})
+    assert resp.status_code == 422
+    assert called == [], "nothing should reach the writer"
+
+
+def test_bulk_dispositions_refuses_a_smuggled_disposition(monkeypatch):
+    """Accept-only is enforced by the absence of the field *plus* extra="forbid". Without the latter,
+    a client posting {"disposition": "override"} would be silently bulk-*accepted* instead — told yes
+    to a request the server never honoured."""
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    called = []
+    monkeypatch.setattr(server, "write_claim_dispositions", lambda **kw: called.append(kw) or {})
+    resp = client.post("/api/batches/LOT-2024-09-15/dispositions",
+                       json={"claim_ids": ["CLM-1"], "disposition": "override",
+                             "override_verdict": "VALID"})
+    assert resp.status_code == 422
+    assert called == []
+
+
 # --- static mount ---------------------------------------------------------------------------------
 
 def test_index_served_and_api_not_shadowed(monkeypatch):

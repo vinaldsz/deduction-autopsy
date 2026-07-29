@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  ageLabel, buildHash, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars, dollarsCompact,
-  lotSubtitle, parseHash, priorityLegend, queueFooter, sentenceCase, sortIndicator, todoSplit,
-  verdictLabel,
+  ageLabel, buildHash, bulkOutcomeSummary, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars,
+  dollarsCompact, keyAction, lotSubtitle, nextClaimId, parseHash, priorityLegend, queueFooter,
+  sentenceCase, sortIndicator, todoSplit, verdictLabel,
 } from "../../ui/static/lib.js";
 
 /** The /api/dashboard shape, as ui/queries.py::dashboard_metrics returns it. */
@@ -370,5 +370,110 @@ describe("queueFooter", () => {
   it("agrees with itself on one claim", () => {
     assert.equal(queueFooter(1, 3000, false).label, "1 claim");
     assert.equal(queueFooter(0, 0, true).label, "0 claims, filtered");
+  });
+});
+
+// --- Layer 38: working the volume ------------------------------------------------------------------
+
+describe("keyAction", () => {
+  const press = (key, extra = {}) => keyAction({ key, ...extra });
+
+  it("maps the queue keymap", () => {
+    assert.equal(press("j"), "next");
+    assert.equal(press("k"), "prev");
+    assert.equal(press("a"), "accept");
+    assert.equal(press("o"), "override");
+    assert.equal(press("x"), "toggle-select");
+    assert.equal(press("/"), "search");
+  });
+
+  it("claims nothing it hasn't been given", () => {
+    assert.equal(press("s"), null, "`s` (send to human) has no target — Layer 32 removed the control");
+    assert.equal(press("z"), null);
+    assert.equal(press("Enter"), null, "row activation is the row's own handler");
+    assert.equal(press("A"), null, "shift+a is not accept");
+  });
+
+  it("is silent while the caret is in a field — the load-bearing case", () => {
+    // Every binding is a bare letter, so without this typing "jab" into the search box would walk the
+    // queue and record a decision on whatever it landed on.
+    for (const key of ["j", "k", "a", "o", "x", "/"]) {
+      assert.equal(press(key, { inField: true }), null, `${key} must be inert in a field`);
+    }
+  });
+
+  it("gives Escape a way out of a field, and does nothing with it outside one", () => {
+    assert.equal(press("Escape", { inField: true }), "blur");
+    assert.equal(press("Escape"), null);
+  });
+
+  it("leaves modified keys to the browser", () => {
+    // Cmd+A is select-all, Ctrl+A is start-of-line. Stealing either is worse than no shortcut.
+    assert.equal(press("a", { metaKey: true }), null);
+    assert.equal(press("a", { ctrlKey: true }), null);
+    assert.equal(press("j", { altKey: true }), null);
+    assert.equal(press("x", { shiftKey: true }), null);
+  });
+
+  it("survives being called with nothing", () => {
+    assert.equal(keyAction(), null);
+    assert.equal(keyAction({}), null);
+  });
+});
+
+describe("nextClaimId", () => {
+  const ids = ["CLM-1", "CLM-2", "CLM-3"];
+
+  it("walks forwards and backwards", () => {
+    assert.equal(nextClaimId(ids, "CLM-1", 1), "CLM-2");
+    assert.equal(nextClaimId(ids, "CLM-2", -1), "CLM-1");
+    assert.equal(nextClaimId(ids, "CLM-2"), "CLM-3", "delta defaults to forwards");
+  });
+
+  it("does not wrap", () => {
+    // Jumping silently back to row 1 after deciding the last claim is indistinguishable from a
+    // reload bug, and it would re-open a claim the analyst has already worked.
+    assert.equal(nextClaimId(ids, "CLM-3", 1), null);
+    assert.equal(nextClaimId(ids, "CLM-1", -1), null);
+  });
+
+  it("starts from the top when the current claim has left the page", () => {
+    // The normal outcome of deciding a claim: its row drops out of the filter. Forwards still lands
+    // on work; backwards has nothing to reason from and says so.
+    assert.equal(nextClaimId(ids, "CLM-GONE", 1), "CLM-1");
+    assert.equal(nextClaimId(ids, "CLM-GONE", -1), null);
+    assert.equal(nextClaimId(ids, null, 1), "CLM-1");
+  });
+
+  it("has nothing to offer on an empty page", () => {
+    assert.equal(nextClaimId([], "CLM-1", 1), null);
+    assert.equal(nextClaimId(null, "CLM-1", 1), null);
+  });
+});
+
+describe("bulkOutcomeSummary", () => {
+  it("counts the outcomes and leads with what was recorded", () => {
+    const summary = bulkOutcomeSummary({
+      "CLM-1": "recorded", "CLM-2": "recorded", "CLM-3": "not_investigated",
+      "CLM-4": "already_decided",
+    });
+    assert.equal(summary, "2 accepted · 1 not investigated · 1 already decided");
+  });
+
+  it("omits the buckets that are empty", () => {
+    assert.equal(bulkOutcomeSummary({ "CLM-1": "recorded" }), "1 accepted");
+    assert.equal(bulkOutcomeSummary({}), "");
+    assert.equal(bulkOutcomeSummary(null), "");
+  });
+
+  it("explains an escalated claim rather than just naming the code", () => {
+    assert.match(bulkOutcomeSummary({ "CLM-1": "unresolved_verdict" }), /still escalated/);
+  });
+
+  it("still counts an outcome it doesn't recognise", () => {
+    // The counts have to add up to the selection. A claim dropped from the summary because the server
+    // grew a new outcome is a lie about what happened to it; an ugly word is not.
+    const summary = bulkOutcomeSummary({ "CLM-1": "recorded", "CLM-2": "spontaneously_combusted" });
+    assert.equal(summary, "1 accepted · 1 spontaneously_combusted");
   });
 });

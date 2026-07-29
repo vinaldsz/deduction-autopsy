@@ -19,10 +19,15 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from agents.base import AgentRunnerError, ToolCallRecord
-from orchestrator.dispositions import derive_decided_verdict, write_claim_disposition
+from orchestrator.dispositions import (
+    RECORDED,
+    derive_decided_verdict,
+    write_claim_disposition,
+    write_claim_dispositions,
+)
 from orchestrator.pipeline import PipelineError, PipelineResult, run_pipeline
 from ui import queries
 
@@ -200,6 +205,37 @@ async def batch(
         # nothing on screen saying so is worse than an error. Distinct from the 404 above, which
         # is about the batch rather than the query.
         return JSONResponse(status_code=422, content={"error": str(exc)})
+
+
+class BulkAcceptBody(BaseModel):
+    # extra="forbid" is the enforcement, not decoration: a client posting
+    # {"claim_ids": [...], "disposition": "override"} must be told no, not quietly bulk-accepted.
+    model_config = ConfigDict(extra="forbid")
+
+    claim_ids: list[str]
+
+
+@app.post("/api/batches/{batch_id}/dispositions")
+async def bulk_dispositions(batch_id: str, body: BulkAcceptBody):
+    """Accept the agents' verdict on a selection of this lot's claims.
+
+    **Accept only** — the body has no `disposition` field at all, because a bulk *override* is the
+    same "approved something they never saw" failure this phase exists to remove. Always 200 (bar a
+    bad batch or an empty selection) with a per-claim outcome map: some claims in a selection are
+    legitimately ineligible (never investigated, agents said ESCALATE, already decided), and that is
+    a result to report, not a request-level error. See orchestrator/dispositions.py for the rules.
+    """
+    if not queries.batch_exists(batch_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
+    if not body.claim_ids:
+        return JSONResponse(status_code=422, content={"error": "claim_ids must not be empty"})
+
+    decided_at = datetime.now(UTC).isoformat()
+    results = write_claim_dispositions(
+        claim_ids=body.claim_ids, decided_at=decided_at, batch_id=batch_id)
+    return {"batch_id": batch_id, "decided_at": decided_at,
+            "recorded": sum(1 for outcome in results.values() if outcome == RECORDED),
+            "results": results}
 
 
 @app.get("/api/batches/{batch_id}/filter-options")

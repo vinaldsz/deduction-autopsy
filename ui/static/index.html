@@ -66,20 +66,30 @@
     #banner-msg { flex: 1; }
     #banner button { color: var(--bad); border-color: var(--bad); }
 
-    /* Two-pane layout. 850px is the eight columns' measured natural width (829px) plus margin —
-       Layer 37b widened it from 540px for PO and Age, measured over CDP rather than guessed, the
-       same way Layer 36 arrived at 540. But the width is no longer the only thing standing between a
-       new column and a silently clipped one: `.pane { overflow: hidden }` gives the pane its rounded
-       corners and, from Layer 32 to Layer 36, quietly cut the rightmost column off mid-word. The
-       table now sits in its own `.queue-scroll`, so the next column added overflows into a visible
-       scrollbar instead of disappearing. */
-    .workspace { display: grid; grid-template-columns: 850px 1fr; gap: 16px; padding: 0 24px 48px; align-items: start; }
-    @media (max-width: 1360px) { .workspace { grid-template-columns: 1fr; } }
-    .pane { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-    .pane > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    /* Two-pane layout. 884px is the nine columns' measured natural width plus margin — Layer 37b
+       measured 829px for eight and set 850px; Layer 38's checkbox column added to it, measured over
+       CDP rather than guessed, the same way Layer 36 arrived at 540. But the width is no longer the
+       only thing standing between a new column and a silently clipped one: `.pane { overflow:
+       hidden }` gives the pane its rounded corners and, from Layer 32 to Layer 36, quietly cut the
+       rightmost column off mid-word. The table now sits in its own `.queue-scroll`, so the next
+       column added overflows into a visible scrollbar instead of disappearing. */
+    .workspace { display: grid; grid-template-columns: 884px 1fr; gap: 16px; padding: 0 24px 48px; align-items: start; }
+    /* Each pane scrolls its own content (Layer 38): working a queue means reading a long evidence
+       pane on the right while the row you are on stays put on the left, and one page scrollbar
+       moving both is what made 50 claims a scroll-hunt. `position: sticky` rather than a
+       `calc(100vh - 250px)` guess at the header's height — the panes simply pin once the KPI strip
+       has scrolled away, so nothing has to be re-measured when the header changes. */
+    .pane {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      overflow: hidden; position: sticky; top: 12px; max-height: calc(100vh - 24px);
+      display: flex; flex-direction: column;
+    }
+    .pane > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border); flex: none; }
+    /* The stacked-layout overrides live at the END of this stylesheet, not here — see the note there.
+       Putting them next to the rules they override reads better and does not work. */
 
     /* Queue */
-    .queue-controls { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    .queue-controls { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; }
     #search { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; padding: 7px 10px; }
     .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
     .tab { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; background: transparent; }
@@ -95,13 +105,42 @@
     /* The banding rules, stated rather than left to be inferred from a coloured pill. Text comes
        from the server's own thresholds (lib.js::priorityLegend). */
     .legend { font-size: 11px; color: var(--muted); }
-    /* Scrolls rather than clips. See the .workspace note above — this is the guard; the 850px there
-       is just the width that makes scrolling unnecessary in the common case. */
-    .queue-scroll { overflow-x: auto; }
+    /* The keymap, stated. Same treatment as the priority legend and for the same reason (Layer 36):
+       a shortcut nobody can discover is a shortcut nobody has. */
+    .legend kbd {
+      font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
+    }
+    /* Appears with a selection, or to report what was just recorded. Bulk is accept-only: there is no
+       override button here, because overriding rows in bulk is approving evidence you haven't read. */
+    .queue-bar {
+      display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+      border-bottom: 1px solid var(--border); background: rgba(91,155,255,.08); flex: none;
+    }
+    .bulk-controls { display: flex; align-items: center; gap: 10px; }
+    .queue-bar .count { font-size: 13px; font-weight: 600; }
+    .queue-bar .note { font-size: 12px; color: var(--muted); margin-left: auto; }
+    /* Scrolls rather than clips. See the .workspace note above — this is the guard; the 884px there
+       is just the width that makes horizontal scrolling unnecessary in the common case. */
+    .queue-scroll { overflow: auto; flex: 1; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
     /* `cursor: pointer` used to be on every th, including the four that do nothing when clicked. */
     th { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); user-select: none; white-space: nowrap; }
+    /* The column labels survive the scroll, now that the rows scroll inside the pane rather than with
+       the page. `box-shadow`, not `border-bottom`: under `border-collapse: collapse` the border
+       belongs to the table and stays behind while the cell travels.
+       Scoped to `.queue-scroll`: a bare `thead th` also matched the ASN / invoice / receiving tables
+       in the review pane, so their header rows became sticky inside the evidence scroller — and at
+       z-index 1 against `.ws-head`'s 2, one would slide *under* the pinned claim header and sit there
+       half-visible. Found by driving the real lot. */
+    .queue-scroll thead th {
+      position: sticky; top: 0; z-index: 1; background: var(--panel);
+      box-shadow: inset 0 -1px 0 var(--border);
+    }
+    /* A 34px gutter, sized to the control rather than to the (absent) label. */
+    th.pick, td.pick { width: 34px; padding-right: 0; }
+    td.pick input, th.pick input { cursor: pointer; margin: 0; vertical-align: middle; }
     th.sortable { cursor: pointer; }
     th.sortable:hover { color: var(--text); }
     th .sort-ind { margin-left: 4px; font-size: 9px; }
@@ -135,7 +174,7 @@
     .v-code { color: var(--muted); font-size: 10px; letter-spacing: .04em; margin-left: 6px; }
     .row-spin { color: var(--accent); }
     .disp-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
-    .pager { display: flex; gap: 12px; align-items: center; padding: 10px 14px; }
+    .pager { display: flex; gap: 12px; align-items: center; padding: 10px 14px; flex: none; border-top: 1px solid var(--border); }
     #page-size {
       margin-left: auto; background: var(--panel2); border: 1px solid var(--border);
       border-radius: 8px; color: var(--text); font: inherit; font-size: 12px; padding: 4px 8px;
@@ -146,8 +185,19 @@
 
     /* Workspace */
     #ws-empty { padding: 48px 24px; color: var(--muted); text-align: center; }
-    .ws-body { padding: 16px; display: flex; flex-direction: column; gap: 18px; }
-    .ws-head { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start; }
+    /* The evidence scrolls; the claim's identity and the decision bar do not. Before this, deciding a
+       claim meant scrolling past the whole source-document set to reach the buttons and then losing
+       sight of which claim you were deciding. */
+    /* The vertical padding belongs to the sticky children, not to the scroller: a sticky `top: 0`
+       resolves against the scrollport's padding edge, so 16px of padding here left a 16px strip above
+       the pinned header for the evidence to slide through, and floated the decision bar 16px off the
+       bottom. Measured, not guessed. */
+    .ws-body { padding: 0 16px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; flex: 1; }
+    .ws-head {
+      display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start;
+      position: sticky; top: 0; z-index: 2; background: var(--panel);
+      padding: 16px 0 12px; border-bottom: 1px solid var(--border);
+    }
     .ws-head .id { font-size: 18px; font-weight: 700; }
     .ws-head .meta { color: var(--muted); font-size: 13px; }
     /* Verdict colour is keyed to the MONEY DIRECTION, not to the verdict name. "INVALID" means the
@@ -232,8 +282,13 @@
     .tool-args { color: var(--muted); }
     .usage { color: var(--muted); font-size: 12px; font-family: ui-monospace, Menlo, monospace; padding: 0 12px 10px; }
 
-    /* Decision bar */
-    .decision { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+    /* Decision bar. Sticky to the BOTTOM of the evidence scroller: it is the last child, so it pins
+       for exactly as long as the evidence above it overflows and then settles into place. */
+    .decision {
+      border-top: 1px solid var(--border); padding-top: 14px; display: flex;
+      flex-direction: column; gap: 10px;
+      position: sticky; bottom: 0; z-index: 2; background: var(--panel); padding-bottom: 16px;
+    }
     .decision .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .decision select, .decision input {
       background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; padding: 7px 10px;
@@ -256,6 +311,23 @@
     .disp-status.err { color: var(--bad); }
     .status-sup { color: var(--muted); font-size: 11px; margin-left: 6px; }
     .hidden { display: none; }
+
+    /* Stacked single column (Layer 38): no pane scrollers at all. Two nested scrollers one above the
+       other in one column is worse than neither — the outer one swallows the inner's wheel events and
+       the analyst can't tell which they are in. The stickies go with them: a header pinned inside a
+       box that no longer scrolls just floats over its own content.
+       LAST in the file on purpose. Every selector below is a plain class, tying with the base rule it
+       overrides, so source order is the only thing that decides — written next to `.pane` above (where
+       it belongs by topic) it silently lost to `.ws-body`, `thead th`, `.ws-head` and `.decision`
+       further down, and only the two properties with no later rule took effect. Same family as the
+       Layer 33 banner bug: a stylesheet assertion nothing can test. */
+    @media (max-width: 1360px) {
+      .workspace { grid-template-columns: 1fr; }
+      .pane { position: static; max-height: none; display: block; }
+      .queue-scroll { overflow: visible; overflow-x: auto; }
+      .ws-body { overflow: visible; padding: 16px; }
+      .queue-scroll thead th, .ws-head, .decision { position: static; }
+    }
   </style>
 </head>
 <body>
@@ -320,10 +392,29 @@
           <button class="ghost sm hidden" id="f-clear">Clear filters</button>
         </div>
         <div class="legend" id="priority-legend"></div>
+        <!-- Discoverability, not decoration: these are the whole point of the layer. -->
+        <div class="legend">
+          <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>a</kbd> accept · <kbd>o</kbd> override ·
+          <kbd>x</kbd> select · <kbd>/</kbd> search · <kbd>Esc</kbd> leave a field
+        </div>
+      </div>
+      <!-- Two things, one bar: the selection's controls (accept-only — there is no bulk override) and
+           a line saying what was last recorded. The note has to outlive the selection and the open
+           claim, because save-and-next moves the review pane on immediately. -->
+      <div class="queue-bar hidden" id="queue-bar">
+        <div class="bulk-controls hidden" id="bulk-controls">
+          <span class="count" id="bulk-count"></span>
+          <button class="ghost sm" id="bulk-accept">Accept selected verdicts</button>
+          <button class="ghost sm" id="bulk-clear">Clear selection</button>
+        </div>
+        <span class="note" id="queue-note"></span>
       </div>
       <div class="queue-scroll">
         <table>
           <thead><tr>
+            <!-- Selects THIS PAGE only. A control that silently checks 50 rows the analyst never
+                 scrolled to is the exact failure bulk accept has to avoid. -->
+            <th class="pick"><input type="checkbox" id="pick-all" aria-label="Select the claims on this page" /></th>
             <th class="sortable" data-sort="claim_id">Claim</th>
             <th class="sortable" data-sort="po_id">PO</th>
             <th class="sortable" data-sort="retailer">Retailer</th>
@@ -336,7 +427,7 @@
           <tbody id="rows"></tbody>
           <!-- Totals the filtered set, not the page: paging must not change the number. -->
           <tfoot id="queue-foot" class="hidden"><tr>
-            <td colspan="4" id="foot-label"></td>
+            <td colspan="5" id="foot-label"></td>
             <td class="num" id="foot-amount"></td>
             <td colspan="3"></td>
           </tr></tfoot>

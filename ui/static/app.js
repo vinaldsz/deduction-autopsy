@@ -2,9 +2,9 @@
 // `node --test` can reach it (tests/js/). No framework, no build step.
 
 import {
-  ageLabel, buildHash, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars, dollarsCompact,
-  lotSubtitle, parseHash, priorityLegend, queueFooter, sentenceCase, sortIndicator, todoSplit,
-  verdictLabel,
+  ageLabel, buildHash, bulkOutcomeSummary, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars,
+  dollarsCompact, keyAction, lotSubtitle, nextClaimId, parseHash, priorityLegend, queueFooter,
+  sentenceCase, sortIndicator, todoSplit, verdictLabel,
 } from "./lib.js";
 
 // Everything in DEFAULT_STATE is mirrored in the URL hash and sanitized by parseHash. The rest is
@@ -17,6 +17,10 @@ const state = {
   // `renderedClaim` is what the review pane is actually DISPLAYING. They are not the same question,
   // and conflating them put one claim's evidence under another claim's header — see restoreSelection.
   selectedClaim: null, renderedClaim: null,
+  // The checked claims, and the page's row order (which is what j/k and save-and-next walk).
+  // Neither is in the hash: a shared link that arrives with rows pre-checked is a trap, and the hash
+  // describes a *view*. `picked` is cleared on every queue load — see loadQueue.
+  picked: new Set(), pageIds: [], actionNote: "",
 };
 
 const isFiltered = () =>
@@ -113,6 +117,17 @@ function renderRow(claim) {
   const tr = document.createElement("tr");
   tr.dataset.claimId = claim.claim_id;
   tr.tabIndex = 0;
+  const pick = el("td", "pick");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = state.picked.has(claim.claim_id);
+  box.setAttribute("aria-label", `Select ${claim.claim_id}`);
+  // Stop the click reaching the row: checking a box is not opening the claim, and having it do both
+  // means every bulk selection also loads an evidence pane nobody asked for.
+  box.addEventListener("click", (e) => e.stopPropagation());
+  box.addEventListener("change", () => setPicked(claim.claim_id, box.checked));
+  pick.appendChild(box);
+  tr.appendChild(pick);
   tr.appendChild(el("td", null, claim.claim_id));
   // po_id was returned and searchable from Layer 30b and never rendered, so a search that matched on
   // it showed rows with no visible reason for matching.
@@ -158,6 +173,84 @@ function renderSortIndicators() {
   });
 }
 
+// --- selection + bulk accept ----------------------------------------------------------------------
+//
+// The selection is page-scoped and deliberately short-lived: it is cleared by every queue load, so it
+// cannot survive a filter, sort, page or search change. A selection that outlives the rows it was made
+// on is how an analyst accepts claims they can no longer see.
+
+function setPicked(claimId, on) {
+  if (on) state.picked.add(claimId); else state.picked.delete(claimId);
+  // Any change to the selection retires the last recorded-action line: left in place it would read as
+  // a report on the rows now checked, which it says nothing about.
+  state.actionNote = "";
+  renderQueueBar();
+}
+
+function clearPicked() {
+  state.picked.clear();
+  document.querySelectorAll("#rows .pick input").forEach((box) => { box.checked = false; });
+  renderQueueBar();
+}
+
+/** The bar above the table carries two independent things: the live selection's controls, and a line
+    saying what was last recorded — one claim or fifty.
+ *
+ *  The note lives out here rather than in the review pane because it has to survive the pane moving
+ *  on: save-and-next re-renders the pane for the *next* claim, and a confirmation that dies with the
+ *  claim it describes leaves a saved decision looking like nothing happened. */
+function renderQueueBar() {
+  const n = state.picked.size;
+  $("queue-bar").classList.toggle("hidden", n === 0 && !state.actionNote);
+  $("bulk-controls").classList.toggle("hidden", n === 0);
+  $("queue-note").textContent = state.actionNote;
+  $("bulk-count").textContent = `${n} selected`;
+  $("bulk-accept").textContent = n === 1 ? "Accept 1 verdict" : `Accept ${n} verdicts`;
+  // The select-all box reflects the page rather than driving it: with 3 of 25 checked it must not
+  // read as "all selected".
+  const onPage = state.pageIds.length;
+  const pickedOnPage = state.pageIds.filter((id) => state.picked.has(id)).length;
+  const all = $("pick-all");
+  all.checked = onPage > 0 && pickedOnPage === onPage;
+  all.indeterminate = pickedOnPage > 0 && pickedOnPage < onPage;
+}
+
+function setActionNote(text) {
+  state.actionNote = text;
+  renderQueueBar();
+}
+
+async function bulkAccept() {
+  const claimIds = state.pageIds.filter((id) => state.picked.has(id));
+  if (!claimIds.length) return;
+  // Names the count, because this is the one action in the UI that writes more than one decision.
+  const ok = window.confirm(
+    `Accept the agents' verdict on ${claimIds.length} claim${claimIds.length === 1 ? "" : "s"}?\n\n` +
+    "This records your sign-off on each one. Claims that were never investigated, that the agents " +
+    "escalated, or that you have already decided will be skipped and listed.");
+  if (!ok) return;
+  $("bulk-accept").disabled = true;
+  setActionNote("Saving…");
+  try {
+    const saved = await fetchJSON(
+      `/api/batches/${encodeURIComponent(state.batchId)}/dispositions`,
+      { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ claim_ids: claimIds }) });
+    // Set after the reload: loadQueue clears the selection and the note, so a summary written before
+    // it would be wiped by its own refresh.
+    await Promise.all([loadDashboard(), loadQueue()]);
+    setActionNote(bulkOutcomeSummary(saved.results));
+  } catch (err) {
+    console.error("bulkAccept", err);
+    setActionNote("");
+    // "Nothing was saved" is a claim about the server, and it is true: the writer runs every claim in
+    // one transaction, so a failure rolls all of them back.
+    showBanner("Couldn't record the bulk decision — nothing was saved.");
+  } finally {
+    $("bulk-accept").disabled = false;
+  }
+}
+
 function queryParams(overrides = {}) {
   const s = { ...state, ...overrides };
   const params = new URLSearchParams({
@@ -172,10 +265,17 @@ function queryParams(overrides = {}) {
 }
 
 async function loadQueue() {
+  // Every reload starts from an empty selection and no stale action note. The rows are about to be
+  // replaced, and a checked id that survives them is a decision waiting to be made on a row the
+  // analyst can no longer see. (bulkAccept sets its summary *after* awaiting this, deliberately.)
+  state.picked.clear();
+  state.actionNote = "";
   if (!state.batchId) {
     $("rows").replaceChildren();
     $("page-info").textContent = "";
     $("queue-foot").classList.add("hidden");
+    state.pageIds = [];
+    renderQueueBar();
     setQueueMessage("No lot loaded. Run the ETL (python -m semantic_layer.etl), then reload.");
     return;
   }
@@ -189,6 +289,11 @@ async function loadQueue() {
     const rows = $("rows");
     rows.replaceChildren();
     for (const claim of data.claims) rows.appendChild(renderRow(claim));
+    // The page's row order, which is what j/k and save-and-next walk. Captured here because after a
+    // decision the row is usually gone from the filter, and "the next claim" has to be answered from
+    // the list as it stood when the analyst was looking at it.
+    state.pageIds = data.claims.map((c) => c.claim_id);
+    renderQueueBar();
     if (state.claim) markSelectedRow(state.claim);
     // Re-point the open claim at the freshly-loaded row. Without this `state.selectedClaim` keeps
     // whatever it was selected with, so the decision line, the stale badge and the re-investigate
@@ -790,6 +895,11 @@ function syncOverrideButton() {
 
 async function postDisposition(disposition) {
   if (!state.claim) return;
+  // Resolved BEFORE the write, from the page as it stands: deciding a claim usually removes it from
+  // the current filter — that is the point of working a queue — so after the reload there is no row
+  // left to ask "what came after this one".
+  const advanceTo = nextClaimId(state.pageIds, state.claim, 1);
+  const decided = state.claim;
   const body = { disposition, note: $("w-note").value.trim() || null };
   if (disposition === "override") body.override_verdict = $("w-override-verdict").value;
   const resp = await fetch(`/api/claims/${encodeURIComponent(state.claim)}/disposition`, {
@@ -808,6 +918,8 @@ async function postDisposition(disposition) {
   const label = disposition === "override"
     ? `override → ${saved.decided_verdict}` : `${disposition} → ${saved.decided_verdict}`;
   status.classList.remove("err");
+  // Still set, and not redundant with the queue-bar note below: on the last row of a page there is no
+  // next claim, the pane stays on this one, and this is the confirmation the analyst is looking at.
   status.textContent = `Saved — decision recorded: ${label}.`;
   $("w-note").value = "";
   $("w-override-verdict").value = "";
@@ -828,6 +940,15 @@ async function postDisposition(disposition) {
   // the row's status/filter membership are now stale. Previously only the dashboard was reloaded
   // (and no KPI read dispositions anyway), so a saved decision left the screen looking unchanged.
   await Promise.all([loadDashboard(), loadQueue()]);
+  // Only on success — the early return above leaves the pane where it is, with the failure visible
+  // next to the button that produced it. The note goes to the queue bar rather than the pane, because
+  // the pane is about to belong to a different claim.
+  setActionNote(`${decided}: ${label}`);
+  if (advanceTo) {
+    state.claim = advanceTo;
+    // restoreSelection already knows how to open a claim whether or not its row is on this page.
+    await restoreSelection();
+  }
 }
 
 // --- wiring --------------------------------------------------------------------------------------
@@ -895,9 +1016,79 @@ for (const [id, key] of [["f-retailer", "retailer"], ["f-reason", "reason"],
     commit();
   });
 }
+$("bulk-accept").addEventListener("click", bulkAccept);
+$("bulk-clear").addEventListener("click", clearPicked);
+// This page only. There is no "select all N filtered" control anywhere, on purpose.
+$("pick-all").addEventListener("change", (e) => {
+  for (const claimId of state.pageIds) {
+    if (e.target.checked) state.picked.add(claimId); else state.picked.delete(claimId);
+  }
+  document.querySelectorAll("#rows .pick input").forEach((box) => { box.checked = e.target.checked; });
+  state.actionNote = "";
+  renderQueueBar();
+});
+
 $("f-clear").addEventListener("click", () => {
   Object.assign(state, { retailer: null, reason: null, date_from: null, date_to: null, page: 1 });
   commit();
+});
+
+// --- keyboard ------------------------------------------------------------------------------------
+//
+// The keymap itself is `lib.js::keyAction`, which is pure and therefore tested. Everything here is the
+// DOM half: what "inField" means, and what each action does. `docs/PLAN.md`'s `s` (send to human) has
+// no binding — Layer 32 removed that control because the analyst is the human it would have sent to.
+
+const TEXT_INPUTS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+
+/** Is the caret somewhere that owns the keystroke? Every shortcut is a bare letter, so getting this
+    wrong makes the search box unusable rather than merely adding a surprise. */
+function inField() {
+  const node = document.activeElement;
+  return Boolean(node && (TEXT_INPUTS.has(node.tagName) || node.isContentEditable));
+}
+
+function moveSelection(delta) {
+  const target = nextClaimId(state.pageIds, state.claim, delta);
+  if (!target) return;
+  const tr = document.querySelector(`tr[data-claim-id="${CSS.escape(target)}"]`);
+  if (tr) tr.click();
+}
+
+document.addEventListener("keydown", (e) => {
+  const action = keyAction({
+    key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey,
+    inField: inField(),
+  });
+  if (!action) return;
+  e.preventDefault();
+  switch (action) {
+    case "next": moveSelection(1); break;
+    case "prev": moveSelection(-1); break;
+    case "accept": {
+      // Via the button, not postDisposition directly, so the keyboard cannot reach a decision the
+      // mouse is forbidden from making — `disabled` covers the un-investigated claim.
+      const accept = document.querySelector('.decision [data-disp="accept"]');
+      if (accept && !accept.disabled && !$("w-decision-actions").classList.contains("hidden")) {
+        accept.click();
+      }
+      break;
+    }
+    // Focus, never submit: an override needs a verdict *and* a stated reason, so there is deliberately
+    // no keystroke that records one.
+    case "override": if (state.claim) $("w-override-verdict").focus(); break;
+    case "toggle-select": {
+      if (!state.claim) break;
+      const box = document.querySelector(
+        `tr[data-claim-id="${CSS.escape(state.claim)}"] .pick input`);
+      if (box) { box.checked = !box.checked; setPicked(state.claim, box.checked); }
+      break;
+    }
+    case "search": $("search").focus(); break;
+    case "blur":
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      break;
+  }
 });
 
 let searchTimer = null;

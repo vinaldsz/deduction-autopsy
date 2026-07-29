@@ -703,6 +703,34 @@ worklist the analyst eyeballs (ESCALATE = human attention).
 - `GET /api/batches/{batch_id}/filter-options` → `{retailers, reasons}`, the distinct values present
   in that lot. 404 on an unknown batch.
 
+### Bulk accept — Layer 38
+
+`POST /api/batches/{batch_id}/dispositions` → body `{claim_ids: [...]}`, response
+`{batch_id, decided_at, recorded, results: {claim_id: outcome}}`.
+
+**Accept only, enforced by the shape of the body:** there is no `disposition` field, and the model is
+`extra="forbid"`, so a client posting `{"disposition": "override"}` gets a 422 rather than being
+silently bulk-*accepted*. A bulk override is the same "approved something they never saw" failure the
+Layers 33–41 phase exists to remove.
+
+Outcomes (`orchestrator/dispositions.py` owns the vocabulary; `ui/static/lib.js::bulkOutcomeSummary`
+turns it into the analyst's sentence):
+
+| outcome | meaning |
+|---|---|
+| `recorded` | the snapshot was written |
+| `unknown_claim` | not in the store, or not in **this** batch (the writer scopes on `batch_id`, or it would be decorative in its own URL) |
+| `not_investigated` | no agent verdict to accept |
+| `unresolved_verdict` | the agents said ESCALATE — accepting it would record the claim as *decided* while nothing was settled |
+| `already_decided` | a decision exists; bulk never rewrites one, which would restamp `decided_at` and drop an override's note |
+
+The last two are **bulk-only** policies and live in the bulk function, not in the shared `_write`: the
+single-claim `POST /api/claims/{id}/disposition` is unchanged and still allows both (overwriting one
+claim deliberately is what it is for). One connection, one transaction, one `decided_at` for the whole
+action. Ineligible claims are reported rather than written; a real DB error rolls the whole batch back,
+because a partially-applied bulk decision reported as success is the worst available outcome. 404 for
+an unknown batch, 422 for an empty `claim_ids`.
+
 ### UI URL state — Layer 37b
 
 The worklist's view is described entirely by the **location hash**, so a view is shareable and a

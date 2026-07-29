@@ -240,6 +240,79 @@ export function queueFooter(total, cents, filtered) {
   return { label: `${total} ${noun}${filtered ? ", filtered" : ""}`, amount: dollars(cents) };
 }
 
+// --- working the volume: keyboard, advance, bulk ---------------------------------------------------
+
+/** A keystroke -> the action it means, or null for "not ours".
+ *
+ *  Pure so the keymap is testable at all: `app.js` only supplies `{key, modifiers, inField}` from the
+ *  real event. Two rules carry the weight —
+ *
+ *   1. While the caret is in a field NOTHING is a shortcut except Escape. Every binding here is a
+ *      bare letter, so without this typing "jab" into the search box would walk the queue and record
+ *      a decision.
+ *   2. A held modifier means the key belongs to the browser or the OS. Cmd+A is select-all, not
+ *      accept, and stealing it would be worse than having no shortcut at all.
+ *
+ *  There is deliberately no key that *submits* an override: an override needs a verdict and a stated
+ *  reason, so `o` only moves focus to the picker. `docs/PLAN.md`'s `s` (send to human) has no binding
+ *  — Layer 32 removed that control because the analyst is the human it would have sent to. */
+export function keyAction({ key, ctrlKey, metaKey, altKey, shiftKey, inField } = {}) {
+  if (key === "Escape") return inField ? "blur" : null;
+  if (inField) return null;
+  if (ctrlKey || metaKey || altKey || shiftKey) return null;
+  switch (key) {
+    case "j": return "next";
+    case "k": return "prev";
+    case "a": return "accept";
+    case "o": return "override";
+    case "x": return "toggle-select";
+    case "/": return "search";
+    default: return null;
+  }
+}
+
+/** The id `delta` places along `ids` from `current`, or null.
+ *
+ *  Does not wrap, on purpose: after deciding the last claim on a page, jumping silently back to row 1
+ *  is indistinguishable from a reload bug. An unknown `current` (its row just left the filter, which
+ *  is the normal outcome of deciding it) starts from the top for a forward move, so the analyst lands
+ *  on work rather than on nothing. */
+export function nextClaimId(ids, current, delta = 1) {
+  const list = ids || [];
+  const at = list.indexOf(current);
+  if (at === -1) return delta > 0 ? (list[0] ?? null) : null;
+  return list[at + delta] ?? null;
+}
+
+// What each bulk outcome means to the analyst. Lives here rather than in app.js for the same reason
+// VERDICTS does: it is the vocabulary on screen, and a second copy would drift from the writer's.
+// Keys mirror orchestrator/dispositions.py's outcome constants.
+const OUTCOME_PHRASES = {
+  recorded: "accepted",
+  unknown_claim: "not in this lot",
+  not_investigated: "not investigated",
+  unresolved_verdict: "still escalated — decide these yourself",
+  already_decided: "already decided",
+};
+
+/** {claim_id: outcome} -> "12 accepted · 2 not investigated · 1 already decided".
+ *
+ *  Empty buckets are omitted, `recorded` leads (it is the answer to "did my click work"), and an
+ *  outcome this file doesn't recognise is still counted, under its raw key. Dropping it would make
+ *  the sentence disagree with the number of claims the analyst selected — a summary that quietly
+ *  loses a claim is worse than one that shows an ugly word. */
+export function bulkOutcomeSummary(results) {
+  const counts = new Map();
+  for (const outcome of Object.values(results || {})) {
+    counts.set(outcome, (counts.get(outcome) || 0) + 1);
+  }
+  if (!counts.size) return "";
+  const order = [...counts.keys()].sort((a, b) => (a === "recorded" ? -1 : b === "recorded" ? 1 : 0));
+  return order
+    .map((key) => `${counts.get(key)} ${OUTCOME_PHRASES[key] ?? key}`)
+    .join(" · ");
+}
+
 /** The header subtitle: the state of today's lot, not a description of the architecture. */
 export function lotSubtitle(metrics) {
   if (!metrics || !metrics.batch) return "No lot loaded — run the ETL to ingest today's deductions.";
