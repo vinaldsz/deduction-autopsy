@@ -173,18 +173,13 @@ CREATE TABLE IF NOT EXISTS lineage (
     FOREIGN KEY (batch_id) REFERENCES batches (batch_id)
 );
 
--- Per-batch dashboard aggregates (feeds Layer 30 /api/dashboard + run_all summary). Plain view:
--- SQLite has no materialized views and on-read aggregation at this scale is free and always fresh.
-CREATE VIEW IF NOT EXISTS v_batch_summary AS
-SELECT
-    c.batch_id AS batch_id,
-    COUNT(*) AS claims_total,
-    COUNT(r.claim_id) AS claims_resolved,
-    SUM(CASE WHEN r.final_verdict = 'ESCALATE' THEN 1 ELSE 0 END) AS needs_human_review,
-    SUM(CASE WHEN r.claim_id IS NULL THEN c.claimed_amount ELSE 0 END) AS dollars_at_risk_cents
-FROM deduction_claims c
-LEFT JOIN claim_resolutions r ON r.claim_id = c.claim_id
-GROUP BY c.batch_id;
+-- Removed Layer 35: v_batch_summary (per-batch dashboard aggregates) is gone. Nothing read it —
+-- ui/queries.py derives every KPI itself — and because it joined only claim_resolutions its
+-- needs_human_review could not respond to an analyst's decision, i.e. it was wrong by construction.
+-- The DROP lives in the schema script rather than a Python shim because executescript runs on every
+-- init_db and DROP ... IF EXISTS is already idempotent; an un-upgraded DB just carries an unread view
+-- until the next ETL run, so unlike the Layer 34 columns this needs no migration gate.
+DROP VIEW IF EXISTS v_batch_summary;
 
 -- Indexes on FK / lookup columns (PKs are auto-indexed by SQLite, so only non-PK access paths
 -- need these). These document the Layer 28 MCP-tool and Layer 30 dashboard access patterns; at

@@ -597,6 +597,13 @@ Layer 34 is the only schema gate.
 - **Verify:** partition tests, and the existing KPI-equals-tab-rows invariant **extended** to every
   remaining clickable card, never weakened. Response-key renames land as one commit across
   `queries.py`/`server.py`/`index.html`/`app.js`.
+- **Two things the build had to add, both about SQL NULLs and disjointness:** the two arms split on
+  `r.claim_id IS NULL` vs `IS NOT NULL`, not on the effective verdict, because a never-investigated
+  claim with `disposition='escalate'` carries `decided_verdict='ESCALATE'` and would otherwise match
+  both; and the verdict comparison needs `COALESCE(…, '')` because `claim_resolutions.final_verdict`
+  is nullable and `NULL = 'ESCALATE'` is NULL, which would make `todo` NULL, `NOT todo` NULL, and drop
+  the claim out of *both* halves. Unlike Layer 34 this needs **no migration gate**: dropping an unread
+  view cannot break a running UI, confirmed against the un-upgraded real DB before migrating it.
 
 ### 36. Verdict semantics that match the money
 

@@ -62,7 +62,7 @@ def _named_indexes(conn: sqlite3.Connection) -> set[str]:
     return {r[0] for r in rows}
 
 
-def test_init_db_creates_all_tables_and_view(tmp_path):
+def test_init_db_creates_all_tables(tmp_path):
     db_path = tmp_path / "deductions.db"
     db.init_db(db_path)
 
@@ -70,7 +70,7 @@ def test_init_db_creates_all_tables_and_view(tmp_path):
     try:
         assert _tables(conn) == EXPECTED_TABLES
         assert len(EXPECTED_TABLES) == 12
-        assert _views(conn) == {"v_batch_summary"}
+        assert _views(conn) == set()   # v_batch_summary was dropped in Layer 35
         assert _named_indexes(conn) == EXPECTED_INDEXES
     finally:
         conn.close()
@@ -97,7 +97,31 @@ def test_init_db_is_idempotent(tmp_path):
     conn = db.connect(db_path)
     try:
         assert _tables(conn) == EXPECTED_TABLES
+        assert _views(conn) == set()   # v_batch_summary was dropped in Layer 35
+    finally:
+        conn.close()
+
+
+def test_init_db_drops_the_legacy_batch_summary_view(tmp_path):
+    """Layer 35 removes v_batch_summary. A fresh DB never has it, so only an *existing* one proves the
+    DROP in the schema script actually reaches a store built by an earlier version."""
+    db_path = tmp_path / "legacy_view.db"
+    db.init_db(db_path)
+
+    conn = db.connect(db_path)
+    try:
+        conn.execute("CREATE VIEW v_batch_summary AS SELECT batch_id FROM deduction_claims")
+        conn.commit()
         assert _views(conn) == {"v_batch_summary"}
+    finally:
+        conn.close()
+
+    db.init_db(db_path)   # the removal, on a DB that already had the view
+
+    conn = db.connect(db_path)
+    try:
+        assert _views(conn) == set()
+        assert _tables(conn) == EXPECTED_TABLES   # and nothing else went with it
     finally:
         conn.close()
 

@@ -1,11 +1,11 @@
 // Analyst workspace over the Layer 30/32 API. DOM + fetch only — pure logic lives in lib.js where
 // `node --test` can reach it (tests/js/). No framework, no build step.
 
-import { dollars, dollarsCompact } from "./lib.js";
+import { dollars, dollarsCompact, lotSubtitle, todoSplit } from "./lib.js";
 
 const LIMIT = 25;
 const state = {
-  batchId: null, offset: 0, total: 0, filter: "needs_me", sort: "priority", q: "",
+  batchId: null, offset: 0, total: 0, filter: "todo", sort: "priority", q: "",
   selected: null, selectedClaim: null,
 };
 
@@ -49,14 +49,16 @@ async function fetchJSON(url, opts) {
 async function loadDashboard() {
   try {
     const d = await fetchJSON("/api/dashboard");
-    $("m-unresolved").textContent = d.unresolved_count;
-    $("m-resolved").textContent = d.resolved_this_month;
-    $("m-risk").textContent = dollarsCompact(d.dollars_at_risk_cents);
+    $("sub").textContent = lotSubtitle(d);
+    // The two cards partition the lot, so each number is exactly the rows its tab returns.
+    $("m-todo").textContent = d.todo_count;
+    $("m-todo-split").textContent = todoSplit(d);
+    $("m-decided").textContent = d.decided_count;
+    $("m-decided-of").textContent = `of ${d.lot_total} in the lot`;
+    $("m-open").textContent = dollarsCompact(d.open_amount_cents);
     const p = d.priority_breakdown;
     $("m-priority").textContent = `${p.HIGH}/${p.MEDIUM}/${p.LOW}`;
-    $("m-batch").textContent = d.batch ? `${d.batch.batch_id} (${d.batch.status})` : "—";
-    $("m-escalate").textContent = d.needs_human_review ?? "—";
-    $("m-needsme").textContent = d.needs_me_count ?? "—";
+    $("m-oldest").textContent = d.oldest_open_days ? `${d.oldest_open_days}d` : "—";
     state.batchId = d.batch ? d.batch.batch_id : null;
   } catch (err) {
     // Log the real error: the catch also covers render bugs, and without this a
@@ -659,7 +661,9 @@ document.querySelectorAll("#tabs .tab").forEach((t) =>
   t.addEventListener("click", () => setFilter(t.dataset.filter)));
 document.querySelectorAll("#kpis .card[data-filter]").forEach((c) =>
   c.addEventListener("click", () => setFilter(c.dataset.filter)));
-document.querySelectorAll("#kpis .card[data-sort], th.sortable").forEach((el) =>
+// Sorting lives on the column headers only. No KPI card sorts any more — one that looked like the
+// filter cards but reordered the table instead taught that a card's behaviour is unguessable.
+document.querySelectorAll("th.sortable").forEach((el) =>
   el.addEventListener("click", () => { state.sort = el.dataset.sort; state.offset = 0; loadQueue(); }));
 document.querySelectorAll(".decision [data-disp]").forEach((b) =>
   b.addEventListener("click", () => postDisposition(b.dataset.disp)));

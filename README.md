@@ -60,6 +60,7 @@ was gated on sign-off — it is the only layer that edits the agent prompts):
 | 32 | Analyst review workspace — evidence-first UI + human decisions (`claim_dispositions`, `cli/process_lot.py`) | ✅ Done |
 | 33 | JS test harness + render hygiene (`tests/js/`, `ui/static/lib.js`) | ✅ Done |
 | 34 | Decision integrity — accept recorded as a snapshot, not a pointer (`decided_verdict`) | ✅ Done |
+| 35 | KPIs that add up — to-do/decided partition, `v_batch_summary` dropped | ✅ Done |
 | — | Layer-end verification tooling (`scripts/check.sh`, `/layer-done`, `tests/test_invariants.py`) | ✅ Done |
 
 ## Setup
@@ -135,11 +136,14 @@ Build the DB first (`python -m semantic_layer.etl`), then open http://127.0.0.1:
 **analyst workspace** — a two-pane surface shaped around the analyst's loop (**triage → read
 evidence → decide**):
 
-- **KPI strip** — unresolved, needs-human-review, resolved-this-month, $ at risk, priority
-  breakdown, active lot. Each tile is clickable and filters the queue.
+- **KPI strip** — two clickable cards, **To do** and **Decided**, which partition the lot: their
+  counts always add up to it, and each equals the rows you get by clicking it. The To-do card spells
+  out its two halves (not investigated / awaiting your call). `$ open`, the priority mix and the
+  oldest open claim sit beside them as read-only figures, visually distinct because they aren't
+  filters.
 - **Left: triage queue** — the lot's claims with search, status filter tabs
-  (needs-me / unresolved / escalated / disputable / resolved), sortable priority/amount, keyboard
-  navigation, and disposition badges.
+  (to-do / not-investigated / awaiting-my-call / disputable / decided), sortable priority/amount,
+  keyboard navigation, and disposition badges.
 - **Right: review pane** — the verdict header with the Investigator→Reviewer provenance chain and
   a confidence meter; the **retailer's claim** (reason + notes); a **source documents** panel
   (PO / ASNs / invoice / receiving / trade agreement / prior claims), which is read straight from
@@ -157,8 +161,9 @@ build step).
 
 API (data comes from the relational store — there is no "scenario"):
 
-- `GET /api/dashboard` → `{unresolved_count, needs_human_review, resolved_this_month,
-  dollars_at_risk_cents, priority_breakdown, batch}`.
+- `GET /api/dashboard` → `{lot_total, todo_count, not_investigated_count, awaiting_my_call_count,
+  decided_count, open_amount_cents, oldest_open_days, priority_breakdown, batch}` — all lot-scoped,
+  and counted with the same predicates the filter tabs use so the arithmetic closes.
 - `GET /api/batches/{batch_id}?offset=&limit=&status_filter=&sort=&q=` → a page of the lot's claims
   (each with `priority`, `status`, and any disposition); 404 for an unknown batch.
 - `POST /api/batches/{batch_id}/investigate?cap=` (SSE) → run over the lot's unresolved claims

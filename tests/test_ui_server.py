@@ -61,8 +61,9 @@ def _sse_events(text):
 # --- dashboard + batch (read) --------------------------------------------------------------------
 
 def test_dashboard_returns_metrics(monkeypatch):
-    fake = {"unresolved_count": 4, "resolved_this_month": 1, "dollars_at_risk_cents": 30000,
-            "priority_breakdown": {"HIGH": 2, "MEDIUM": 1, "LOW": 1},
+    fake = {"lot_total": 5, "todo_count": 4, "not_investigated_count": 4,
+            "awaiting_my_call_count": 0, "decided_count": 1, "open_amount_cents": 30000,
+            "oldest_open_days": 258, "priority_breakdown": {"HIGH": 2, "MEDIUM": 1, "LOW": 1},
             "batch": {"batch_id": "LOT-2024-09-15", "status": "complete"}}
     monkeypatch.setattr(queries, "dashboard_metrics", lambda: fake)
     assert client.get("/api/dashboard").json() == fake

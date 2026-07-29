@@ -23,3 +23,26 @@ export function dollarsCompact(cents) {
   if (abs >= 1_000) return `${sign}$${(abs / 1_000).toFixed(1)}k`;
   return USD.format(value);
 }
+
+/** "12 not investigated · 3 awaiting your call" — the two halves of the to-do queue, spelled out
+    under the one number that matters. Omits a half that is zero rather than printing "0 …". */
+export function todoSplit(metrics) {
+  const parts = [];
+  if (metrics.not_investigated_count) parts.push(`${metrics.not_investigated_count} not investigated`);
+  if (metrics.awaiting_my_call_count) parts.push(`${metrics.awaiting_my_call_count} awaiting your call`);
+  return parts.join(" · ");
+}
+
+/** The header subtitle: the state of today's lot, not a description of the architecture. */
+export function lotSubtitle(metrics) {
+  if (!metrics || !metrics.batch) return "No lot loaded — run the ETL to ingest today's deductions.";
+  const parts = [
+    metrics.batch.batch_id,
+    `${metrics.lot_total} claims`,
+    metrics.todo_count ? `${metrics.todo_count} to do` : "all decided",
+  ];
+  if (metrics.open_amount_cents) parts.push(`${dollarsCompact(metrics.open_amount_cents)} open`);
+  if (metrics.oldest_open_days) parts.push(`oldest ${metrics.oldest_open_days}d`);
+  if (metrics.batch.status && metrics.batch.status !== "complete") parts.push(metrics.batch.status);
+  return parts.join(" · ");
+}

@@ -457,8 +457,10 @@ navigation, not analytics). 11 tables + 1 view. DB = union of all entities dedup
 5. **Money = INTEGER cents, quantities = INTEGER**; UOM float conversions computed at query time.
 6. **UOM conversions stay a JSON reference file** (`data/sku_uom_conversions.json`), not a table
    (`normalize_uom` unchanged).
-7. **`v_batch_summary` = plain (non-materialized) VIEW** — SQLite has no materialized views, and
-   on-read aggregation at this scale is free and always fresh.
+7. ~~**`v_batch_summary` = plain (non-materialized) VIEW**~~ — **reversed in Layer 35: there is no
+   view.** Aggregation stayed cheap and fresh, but a view could only ever aggregate one verdict spine,
+   so it went stale the moment a *second* one (`claim_dispositions`) existed. `ui/queries.py` derives
+   the KPIs from both spines at read time instead. See the removal note under "View" below.
 
 **Business tables (6)** — column-for-column identical to `mcp_server/models.py` (`batch_id` on
 `deduction_claims` is a DB augmentation, not a model field):
@@ -483,17 +485,17 @@ navigation, not analytics). 11 tables + 1 view. DB = union of all entities dedup
 | `load_audit` | `id` (INTEGER) | `batch_id`→batches | source, rows_read INT, rows_loaded INT, rows_rejected INT, loaded_at |
 | `lineage` | `id` (INTEGER) | `batch_id`→batches | entity_table, entity_pk, source_file, source_row_ref, loaded_at |
 
-**View:**
+**Views: none.**
 
-- `v_batch_summary` — per `batch_id`: `claims_total`, `claims_resolved`, `needs_human_review`
-  (`final_verdict = 'ESCALATE'`), `dollars_at_risk_cents` (sum of unresolved `claimed_amount`).
-  `deduction_claims` LEFT JOIN `claim_resolutions`, `GROUP BY batch_id`. Feeds the Layer 30
-  `/api/dashboard` and the `run_all` CLI summary — dashboard/CLI read aggregates from it rather than
-  re-deriving in Python.
-  > **Amended Layer 34 / scheduled for removal in Layer 35.** The claim above is no longer true:
-  > `ui/queries.py` derives every KPI itself and does not read this view. Because the view joins only
-  > `claim_resolutions`, its `needs_human_review` cannot respond to an analyst's decision — it is
-  > wrong by construction, and unread. Layer 35 drops it.
+> **Removed in Layer 35 — `v_batch_summary`.** It aggregated per `batch_id` (`claims_total`,
+> `claims_resolved`, `needs_human_review`, `dollars_at_risk_cents`) over `deduction_claims` LEFT JOIN
+> `claim_resolutions`, and was documented as feeding `/api/dashboard` and the `run_all` summary. Both
+> claims stopped being true: `ui/queries.py` derives every KPI itself, and nothing read the view.
+> Because it joined only `claim_resolutions` its `needs_human_review` could not respond to an
+> analyst's decision — wrong by construction as soon as `claim_dispositions` became a second verdict
+> spine. `SCHEMA_SQL` carries a `DROP VIEW IF EXISTS` in its place, which needs no Python shim
+> (`executescript` runs on every `init_db` and the DROP is idempotent) and no migration gate (an
+> un-upgraded store just carries an unread view until the next ETL run).
 
 **Amendment — Layer 34 (2026-07-28), to the "FINAL (Layer 23)" schema above.** `claim_dispositions`
 gains `decided_verdict` and `decided_run_id`. `decided_verdict` is the verdict the analyst actually
@@ -625,8 +627,14 @@ worklist the analyst eyeballs (ESCALATE = human attention).
 
 ### UI API Contract v2 (implemented, Layer 30b)
 
-- `GET /api/dashboard` → `{unresolved_count, resolved_this_month, dollars_at_risk_cents,
-  priority_breakdown, batch: {batch_id, status}}` (money as INTEGER cents, per the store's convention).
+- `GET /api/dashboard` → **(rewritten Layer 35)** `{lot_total, todo_count, not_investigated_count,
+  awaiting_my_call_count, decided_count, open_amount_cents, oldest_open_days, priority_breakdown,
+  batch: {batch_id, status}}` (money as INTEGER cents, per the store's convention). All counts are
+  **lot-scoped** and computed with the predicate of the tab its card links to, so
+  `todo_count + decided_count == lot_total` and `not_investigated_count + awaiting_my_call_count ==
+  todo_count`, both by construction. The pre-35 shape (`unresolved_count`, `resolved_this_month`,
+  `dollars_at_risk_cents`, `needs_me_count`, `needs_human_review`) is gone: the counts overlapped, and
+  `resolved_this_month` was cross-lot and month-windowed so no tab could reproduce it.
 - `GET /api/batches/{batch_id}?offset=&limit=` (default limit 25) → a paginated page of the lot's
   claims (`{batch_id, total, offset, limit, claims}`), each with the `DeductionClaim` fields + derived
   `priority` (HIGH ≥ $150 or aged > 45d / MEDIUM ≥ $50 / LOW) + `status` (`final_verdict` if resolved,
@@ -637,8 +645,8 @@ worklist the analyst eyeballs (ESCALATE = human attention).
 - `GET /api/claims/{claim_id}/stream` (SSE) + `POST /api/claims/{claim_id}/investigate` kept for
   single-claim drill-in/re-run — no `scenario` param.
 - `GET /api/scenarios` **removed**. 404 now means an unknown claim/batch (checked against the DB).
-- Reads are served by `ui/queries.py` (over `deduction_claims`/`claim_resolutions`/`claim_dispositions`
-  — **not** `v_batch_summary`; see the amendment on that view above).
+- Reads are served by `ui/queries.py` (over `deduction_claims`/`claim_resolutions`/`claim_dispositions`;
+  there is no aggregate view — see the Layer 35 removal note above).
 
 ### UI API Contract — Layer 32 additions
 

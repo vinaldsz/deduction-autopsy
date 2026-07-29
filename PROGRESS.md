@@ -1,6 +1,99 @@
 # Progress
 
 ## Current layer
+**Layer 35 — KPIs that add up complete**
+
+Third of the Layers 33–41 UX-remediation phase. Closes the "numbers that don't survive scrutiny" class
+of the 40-finding review. **No agent/prompt/verdict-logic changes, no fixture edits**; the 8
+ground-truth verdicts are untouched and the fidelity oracle was re-run explicitly.
+
+**The arithmetic didn't close, and one card was unreproducible.** `unresolved` was `r.claim_id IS NULL`
+and `decided`'s ancestor `resolved` included any decided claim — so a claim with no agent verdict that
+the analyst overrode (legal since Layer 34: `claim_documents()` serves the source documents regardless
+of any agent run) was counted in **both**, and no combination of cards summed to the lot.
+`resolved_this_month` was worse: cross-lot and month-windowed, while the tab its card opened showed
+only today's lot, so that number could never equal its own rows no matter what the analyst did.
+
+**The partition (`ui/queries.py`).** Two disjoint predicates, everything else derived:
+`not_investigated` (`r.claim_id IS NULL AND not decided`) and `awaiting_my_call`
+(`r.claim_id IS NOT NULL AND effective = 'ESCALATE' AND not decided`); `todo` is written as the literal
+union of those two constants so the halves cannot drift from the whole, and `decided` is `NOT todo`,
+which makes `todo + decided == lot_total` an identity rather than a hope.
+
+Two details are load-bearing rather than tidiness, and neither was in the plan:
+
+1. **The arms split on `r.claim_id IS NULL` vs `IS NOT NULL`, not on the verdict.** A
+   never-investigated claim with `disposition='escalate'` has `decided_verdict='ESCALATE'` (per
+   `derive_decided_verdict`), so a verdict-only test would match both arms and double-count it —
+   the same bug in a new place.
+2. **`COALESCE(effective, '')` keeps the predicate NULL-total.** `claim_resolutions.final_verdict` is
+   nullable and `NULL = 'ESCALATE'` is NULL, not false — so `todo` would be NULL, `NOT todo` would also
+   be NULL, and the claim would fall out of **both** halves. Same trap the `_DECIDED` comment already
+   documents; pinned live and by test.
+
+**Metrics.** `dashboard_metrics()` is now entirely lot-scoped: `lot_total`, `todo_count`,
+`not_investigated_count`, `awaiting_my_call_count`, `decided_count`, `open_amount_cents` (was
+`dollars_at_risk_cents`), `oldest_open_days`, `priority_breakdown`. The money, the priority mix and the
+aging figure all come from one pass over the open claims. `oldest_open_days` is server-side because age
+is measured against the lot's `load_date`, which the client doesn't have — the same reason Layer 37
+puts per-claim `age_days` there. `_age_days()` extracted so `priority()` and the aging metric measure
+age identically.
+
+**Schema (`mcp_server/db.py`).** `v_batch_summary` deleted, `DROP VIEW IF EXISTS` in its place.
+`executescript` runs on every `init_db` and the DROP is idempotent, so unlike Layer 34's columns this
+needs **no Python shim** — and no migration gate either: dropping a view nothing reads cannot break a
+running UI. Confirmed in that order — the un-upgraded real DB served `/api/dashboard` correctly *before*
+the ETL was run.
+
+**UI.** 7 look-alike cards → **2** (To do, Decided) plus a borderless read-only `.stats` row ($ open /
+priority H/M/L / oldest open). The To-do card carries its own split inline (`9 not investigated · 3
+awaiting your call`), so the escalation count survives the cull without a third card. `$ at risk` was
+clickable but *sorted* instead of filtering — it can never satisfy the KPI-equals-rows invariant, so it
+moved to the stats row and sorting now lives only on the column headers. "Needs human review" is gone
+as a label; the analyst *is* the human. The subtitle was a description of the architecture and is now
+the state of the day, via new pure `lotSubtitle`/`todoSplit` in `ui/static/lib.js` (hence covered by
+`node --test`).
+
+**Verification.** `scripts/check.sh` — `pytest` **392 passed, 10 deselected** (was 376); `pyright` 0
+errors; `node --test` 14 passing (was 8). Explicit `pytest tests/test_etl.py tests/test_db.py -q` — 59
+passed, so the **fidelity oracle is untouched** by the view drop (it reads the six business tables).
+
+New tests assert the partition as a partition, not just its parts: claim-id **sets** are disjoint and
+cover the lot, the two halves union to `todo`, and every card number equals its tab's `total` —
+including the two inline split numbers. A `_every_edge_shape()` helper adds the states the base fixture
+lacked (never-investigated + override, escalated + accepted, `disposition='escalate'`, and a NULL agent
+verdict); it is deliberately **not** folded into the `db` fixture, whose pagination and total
+assertions are written against its 5 claims and would have been quietly weakened by widening it.
+`test_decided_count_is_lot_scoped` replaces `test_resolved_this_month_counts_human_decisions_too`
+(its metric no longer exists); the old test's real intent — human decisions count as worked — is now
+inside the partition tests, where accepting a claim moves it from `todo` to `decided`.
+`test_init_db_drops_the_legacy_batch_summary_view` creates the view by hand first, because a fresh DB
+never has it and so could not prove the DROP reaches an existing store.
+
+**Live.** Against a **copy** of the real DB doctored into every state (the real lot is fully
+investigated with zero ESCALATEs, so it exercises the partition only trivially): all four card numbers
+equalled their tab totals, `4 + 46 = 50 = lot_total = the all tab`, the two halves summed to `todo`, and
+the three edge claims each landed on exactly one side — the never-investigated override, the NULL agent
+verdict, and the escalated-then-accepted claim. Then the real DB: `python -m semantic_layer.etl` dropped
+the view with all **52 `claim_resolutions` and 5 `claim_dispositions` rows surviving**. No live
+OpenRouter run — this layer touches no agent code.
+
+**Known and deferred:** renaming the filter keys means a stale `?status_filter=needs_me` silently falls
+back to "all". Harmless today (no URL routing exists yet) and Layer 37 owns both the hash routing and
+rejecting unknown filter values, so it is not worth a temporary guard here.
+
+**Committed alongside, deliberately separate (`65be4f0`).** Looking at the running app surfaced a
+Layer 33 bug this layer had nothing to do with: `#banner { display: flex }` (specificity 1-0-0) beats
+`.hidden { display: none }` (0-1-0) whatever the source order, so the error banner shipped *permanently
+visible* — an empty red box on every page load, with a dismiss button that lost the same fight. Fixed
+with an ID-level `#banner.hidden` rule, in its own commit rather than smuggled into this one. Nothing
+tested it and nothing could: `node --test` reaches `lib.js`'s pure functions and the project has no DOM
+harness by design, so static-CSS regressions remain unguarded — a real gap, not an oversight to fix in
+passing.
+
+---
+
+## Previous layer
 **Layer 34 — Decision integrity: accept as a snapshot complete**
 
 The one correctness bug in the 40-finding review that makes the audit trail actively lie, plus the

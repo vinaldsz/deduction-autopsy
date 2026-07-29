@@ -79,7 +79,7 @@ def _sse(event: str, data: dict) -> str:
 
 @app.get("/api/dashboard")
 async def dashboard():
-    """Headline metrics for the active lot (unresolved / resolved-this-month / $ at risk / priority)."""
+    """Headline metrics for the active lot (to-do / decided / $ open / priority mix / aging)."""
     return queries.dashboard_metrics()
 
 

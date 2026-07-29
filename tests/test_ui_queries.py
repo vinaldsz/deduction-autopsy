@@ -60,22 +60,22 @@ def test_batch_claims_paginates_with_priority_and_status(db):
 
 
 def test_batch_claims_filters_by_status(db):
-    # CLM-E is the only resolved claim (INVALID) in the fixture.
-    resolved = queries.batch_claims("LOT-2024-09-15", status_filter="resolved")
-    assert [c["claim_id"] for c in resolved["claims"]] == ["CLM-E"]
-    assert resolved["total"] == 1
+    # CLM-E is the only claim with an agent verdict (INVALID) in the fixture.
+    decided = queries.batch_claims("LOT-2024-09-15", status_filter="decided")
+    assert [c["claim_id"] for c in decided["claims"]] == ["CLM-E"]
+    assert decided["total"] == 1
 
     disputable = queries.batch_claims("LOT-2024-09-15", status_filter="disputable")
     assert [c["claim_id"] for c in disputable["claims"]] == ["CLM-E"]
 
-    unresolved = queries.batch_claims("LOT-2024-09-15", status_filter="unresolved")
-    assert "CLM-E" not in [c["claim_id"] for c in unresolved["claims"]]
-    assert unresolved["total"] == 4
+    not_investigated = queries.batch_claims("LOT-2024-09-15", status_filter="not_investigated")
+    assert "CLM-E" not in [c["claim_id"] for c in not_investigated["claims"]]
+    assert not_investigated["total"] == 4
 
-    # "needs_me" = unresolved OR escalated. CLM-E is resolved INVALID (not escalated) -> excluded.
-    needs_me = queries.batch_claims("LOT-2024-09-15", status_filter="needs_me")
-    assert "CLM-E" not in [c["claim_id"] for c in needs_me["claims"]]
-    assert needs_me["total"] == 4
+    # "todo" = not_investigated OR awaiting_my_call. CLM-E is INVALID (settled) -> excluded.
+    todo = queries.batch_claims("LOT-2024-09-15", status_filter="todo")
+    assert "CLM-E" not in [c["claim_id"] for c in todo["claims"]]
+    assert todo["total"] == 4
 
 
 def test_batch_claims_sorts_by_amount(db):
@@ -115,24 +115,27 @@ def _escalate(db, claim_id="CLM-D"):
 # verdict changed nothing on screen and "Needs human review" could never fall.
 
 
+def _ids(status_filter):
+    return [c["claim_id"] for c in
+            queries.batch_claims("LOT-2024-09-15", status_filter=status_filter)["claims"]]
+
+
 def test_escalated_claim_awaits_a_human_until_decided(db):
     _escalate(db)
-    ids = lambda f: [c["claim_id"] for c in queries.batch_claims("LOT-2024-09-15", status_filter=f)["claims"]]
-    assert "CLM-D" in ids("escalated")
-    assert "CLM-D" in ids("needs_me")
-    assert "CLM-D" not in ids("resolved")
+    assert "CLM-D" in _ids("awaiting_my_call")
+    assert "CLM-D" in _ids("todo")
+    assert "CLM-D" not in _ids("decided")
 
 
 def test_accepting_settles_the_claim_and_drains_the_queue(db):
-    """The analyst's core complaint: accepting a verdict must move the claim to Resolved."""
+    """The analyst's core complaint: accepting a verdict must move the claim out of their queue."""
     from orchestrator.dispositions import write_claim_disposition
 
     _escalate(db)
     write_claim_disposition(claim_id="CLM-D", disposition="accept", decided_at="t", db_path=db)
-    ids = lambda f: [c["claim_id"] for c in queries.batch_claims("LOT-2024-09-15", status_filter=f)["claims"]]
-    assert "CLM-D" in ids("resolved")
-    assert "CLM-D" not in ids("needs_me")
-    assert "CLM-D" not in ids("escalated")
+    assert "CLM-D" in _ids("decided")
+    assert "CLM-D" not in _ids("todo")
+    assert "CLM-D" not in _ids("awaiting_my_call")
 
 
 def test_override_replaces_the_effective_verdict_but_keeps_the_agent_verdict(db):
@@ -144,49 +147,143 @@ def test_override_replaces_the_effective_verdict_but_keeps_the_agent_verdict(db)
     row = next(c for c in queries.batch_claims("LOT-2024-09-15")["claims"] if c["claim_id"] == "CLM-D")
     assert row["status"] == "INVALID"        # effective: what the claim's answer is now
     assert row["agent_status"] == "ESCALATE"  # preserved for the audit trail
-    ids = lambda f: [c["claim_id"] for c in queries.batch_claims("LOT-2024-09-15", status_filter=f)["claims"]]
-    assert "CLM-D" in ids("disputable")
-    assert "CLM-D" not in ids("needs_me")
+    assert "CLM-D" in _ids("disputable")
+    assert "CLM-D" not in _ids("todo")
 
 
 def test_undecided_claims_are_not_dropped_by_the_not_decided_predicate(db):
     """Regression guard for a SQL NULL trap: `NOT (d.disposition IN (...))` is NULL — not true — for
     a claim with no disposition row, which would have silently emptied the analyst's whole queue."""
     _escalate(db)
-    needs_me = queries.batch_claims("LOT-2024-09-15", status_filter="needs_me")
-    assert needs_me["total"] == 4  # 3 un-investigated + the escalated one, none lost to NULL
+    todo = queries.batch_claims("LOT-2024-09-15", status_filter="todo")
+    assert todo["total"] == 4  # 3 un-investigated + the escalated one, none lost to NULL
+
+
+# --- Layer 35: the KPI arithmetic closes ------------------------------------------------------------
+#
+# The old predicates overlapped, so no combination of cards summed to the lot and one card (a
+# cross-lot month window) could not be reproduced by any tab at all. These tests pin the partition
+# itself, not just the individual numbers.
+
+
+def _every_edge_shape(db):
+    """Add the states a real lot contains and the base fixture doesn't, so the partition is exercised
+    against every shape rather than only "investigated" vs "not".
+
+    Kept out of the `db` fixture on purpose: the pagination/total assertions elsewhere are written
+    against its 5 claims, and quietly widening it would weaken them.
+    """
+    from orchestrator.dispositions import write_claim_disposition
+
+    with connect(db) as conn:
+        for cid, verdict in [("CLM-F", "ESCALATE"), ("CLM-G", "ESCALATE"), ("CLM-H", None)]:
+            conn.execute(
+                "INSERT INTO deduction_claims (claim_id, po_id, batch_id, retailer, claimed_reason, "
+                "claimed_amount, claim_date) VALUES (?, 'PO-T', 'LOT-2024-09-15', 'target', "
+                "'shortage', 5000, '2024-09-15')", (cid,))
+            # CLM-H's resolution carries a NULL final_verdict — the column is nullable, and NULL
+            # comparisons are what make a naive predicate non-total.
+            conn.execute(
+                "INSERT INTO claim_resolutions (claim_id, final_verdict, resolved_at) "
+                "VALUES (?, ?, 't')", (cid, verdict))
+    # Never investigated, but overridden by the analyst on the source documents alone (legal since
+    # Layer 34) — the row that used to be counted in BOTH "unresolved" and "resolved".
+    write_claim_disposition(claim_id="CLM-A", disposition="override", override_verdict="INVALID",
+                            note="ASN proves delivery", decided_at="t", db_path=db)
+    # Escalated by the agents and accepted by the analyst -> settled.
+    write_claim_disposition(claim_id="CLM-F", disposition="accept", decided_at="t", db_path=db)
+    # Parked by the analyst for someone else: a disposition, but deliberately not a decision.
+    write_claim_disposition(claim_id="CLM-G", disposition="escalate", decided_at="t", db_path=db)
+
+
+def test_todo_and_decided_partition_the_lot(db):
+    _every_edge_shape(db)
+    m = queries.dashboard_metrics()
+    todo, decided = set(_ids("todo")), set(_ids("decided"))
+    everything = set(_ids("all"))
+
+    assert todo | decided == everything      # total: no claim falls between the two halves
+    assert todo & decided == set()           # disjoint: no claim is counted twice
+    assert m["todo_count"] + m["decided_count"] == m["lot_total"] == len(everything)
+
+
+def test_not_investigated_and_awaiting_my_call_are_disjoint_and_sum_to_todo(db):
+    _every_edge_shape(db)
+    m = queries.dashboard_metrics()
+    fresh, awaiting = set(_ids("not_investigated")), set(_ids("awaiting_my_call"))
+
+    assert fresh & awaiting == set()
+    assert fresh | awaiting == set(_ids("todo"))
+    assert m["not_investigated_count"] + m["awaiting_my_call_count"] == m["todo_count"]
+
+
+def test_a_null_agent_verdict_still_lands_on_one_side_of_the_partition(db):
+    """claim_resolutions.final_verdict is nullable, and `NULL = 'ESCALATE'` is NULL — not false. A
+    predicate that isn't NULL-total would drop this claim from both halves, which is the same class of
+    silent-disappearance bug as the _DECIDED NULL trap."""
+    _every_edge_shape(db)
+    assert "CLM-H" in set(_ids("todo")) | set(_ids("decided"))
+    assert "CLM-H" not in set(_ids("todo")) & set(_ids("decided"))
+
+
+def test_an_overridden_never_investigated_claim_is_counted_once(db):
+    """The bug this layer exists to remove: CLM-A has no agent verdict but a human decision, so the
+    old predicates put it in `unresolved` (r.claim_id IS NULL) AND `resolved` (decided) at once."""
+    _every_edge_shape(db)
+    assert "CLM-A" in _ids("decided")
+    assert "CLM-A" not in _ids("todo")
+    assert "CLM-A" not in _ids("not_investigated")
+
+
+def test_parking_a_claim_is_not_deciding_it(db):
+    """disposition='escalate' means "someone else should look at this", so the claim stays in the
+    queue. It must not leak into the awaiting arm twice via its ESCALATE snapshot, either."""
+    _every_edge_shape(db)
+    assert "CLM-G" in _ids("todo")
+    assert "CLM-G" not in _ids("decided")
 
 
 def test_kpis_equal_the_row_counts_of_the_tabs_they_link_to(db):
+    """Every number on the KPI strip is the count of the tab its card opens — including the two
+    halves printed inside the To-do card."""
     from orchestrator.dispositions import write_claim_disposition
 
-    _escalate(db)
-    metrics = queries.dashboard_metrics()
-    assert metrics["needs_human_review"] == queries.batch_claims(
-        "LOT-2024-09-15", status_filter="escalated")["total"]
-    assert metrics["needs_me_count"] == queries.batch_claims(
-        "LOT-2024-09-15", status_filter="needs_me")["total"]
+    _every_edge_shape(db)
+    m = queries.dashboard_metrics()
+    for key, status_filter in [("todo_count", "todo"), ("decided_count", "decided"),
+                               ("not_investigated_count", "not_investigated"),
+                               ("awaiting_my_call_count", "awaiting_my_call")]:
+        assert m[key] == queries.batch_claims(
+            "LOT-2024-09-15", status_filter=status_filter)["total"], key
 
-    # ...and the KPI actually moves when the analyst works the claim.
-    before = queries.dashboard_metrics()["needs_human_review"]
+    # ...and the numbers actually move when the analyst works a claim.
+    before = queries.dashboard_metrics()
+    _escalate(db)  # CLM-D now awaits the analyst
     write_claim_disposition(claim_id="CLM-D", disposition="accept", decided_at="t", db_path=db)
-    assert queries.dashboard_metrics()["needs_human_review"] == before - 1
+    after = queries.dashboard_metrics()
+    assert after["todo_count"] == before["todo_count"] - 1
+    assert after["decided_count"] == before["decided_count"] + 1
+    assert after["lot_total"] == before["lot_total"]
 
 
-def test_resolved_this_month_counts_human_decisions_too(db):
+def test_decided_count_is_lot_scoped(db):
+    """Replaces the old cross-lot `resolved_this_month`, which no tab could reproduce: the card
+    counted every lot and every month, while the tab it linked to showed only today's lot."""
     from orchestrator.dispositions import write_claim_disposition
+    from orchestrator.resolutions import write_claim_resolution
 
-    # CLM-D, not CLM-A: as of Layer 34 you cannot accept a claim with no agent verdict to accept,
-    # and CLM-A has never been investigated. Its resolution is dated to a past month on purpose, so
-    # that only the *human* decision falls inside the window — `_escalate` stamps resolved_at with
-    # now, which would already put the claim in the count and make this assertion prove nothing.
     with connect(db) as conn:
-        conn.execute("INSERT INTO claim_resolutions (claim_id, final_verdict, resolved_at) "
-                     "VALUES ('CLM-D', 'ESCALATE', '2023-01-05T00:00:00+00:00')")
-    before = queries.dashboard_metrics()["resolved_this_month"]
-    write_claim_disposition(claim_id="CLM-D", disposition="accept",
+        conn.execute(
+            "INSERT INTO deduction_claims (claim_id, po_id, batch_id, retailer, claimed_reason, "
+            "claimed_amount, claim_date) VALUES ('CLM-OLD', 'PO-T', 'LOT-2024-06-08', 'walmart', "
+            "'shortage', 5000, '2024-06-08')")
+    before = queries.dashboard_metrics()["decided_count"]
+    write_claim_resolution(claim_id="CLM-OLD", investigator_verdict="VALID", final_verdict="VALID",
+                           confidence=0.9, resolved_at=datetime.now(UTC).isoformat(),
+                           run_id="r", db_path=db)
+    write_claim_disposition(claim_id="CLM-OLD", disposition="accept",
                             decided_at=datetime.now(UTC).isoformat(), db_path=db)
-    assert queries.dashboard_metrics()["resolved_this_month"] == before + 1
+    assert queries.dashboard_metrics()["decided_count"] == before
 
 
 # --- Layer 34: the effective verdict reads the analyst's snapshot -----------------------------------
@@ -288,11 +385,34 @@ def test_claim_documents_unknown_claim_is_none(db):
     assert queries.claim_documents("CLM-404") is None
 
 
+_METRIC_KEYS = {"lot_total", "todo_count", "not_investigated_count", "awaiting_my_call_count",
+                "decided_count", "open_amount_cents", "oldest_open_days", "priority_breakdown",
+                "batch"}
+
+
 def test_dashboard_metrics(db):
     m = queries.dashboard_metrics()
+    assert set(m) == _METRIC_KEYS
     assert m["batch"] == {"batch_id": "LOT-2024-09-15", "status": "complete"}
-    assert m["unresolved_count"] == 4
-    assert m["dollars_at_risk_cents"] == 30000  # A+B+C+D, E resolved
+    assert m["lot_total"] == 5
+    assert m["todo_count"] == 4
+    assert m["not_investigated_count"] == 4
+    assert m["awaiting_my_call_count"] == 0  # CLM-E is INVALID, not ESCALATE
+    assert m["decided_count"] == 1
+    assert m["open_amount_cents"] == 30000  # A+B+C+D open, E settled
     assert m["priority_breakdown"] == {"HIGH": 2, "MEDIUM": 1, "LOW": 1}
-    assert m["resolved_this_month"] == 1
-    assert m["needs_human_review"] == 0  # CLM-E resolved INVALID, not ESCALATE
+    # CLM-D is dated 2024-01-01 against a lot loaded 2024-09-15 — the aged claim drives this.
+    assert m["oldest_open_days"] == 258
+
+
+def test_dashboard_metrics_with_no_lot(monkeypatch, tmp_path):
+    """The empty-store shape has to carry every key the UI reads, or a first run renders "undefined"
+    across the strip."""
+    init_db(tmp_path / "empty.db")
+    monkeypatch.setenv("DEDUCTIONS_DB", str(tmp_path / "empty.db"))
+    m = queries.dashboard_metrics()
+    assert set(m) == _METRIC_KEYS  # the same shape as a populated lot, so no key reads "undefined"
+    assert m["batch"] is None
+    for key in _METRIC_KEYS - {"priority_breakdown", "batch"}:
+        assert m[key] == 0
+    assert m["priority_breakdown"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}

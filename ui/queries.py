@@ -7,7 +7,7 @@ same convention as FixtureLoader). No writes here — the pipeline owns resoluti
 import os
 import sqlite3
 from contextlib import closing
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path
 
 from mcp_server.db import DEFAULT_DB_PATH, connect
@@ -21,10 +21,15 @@ def _db_path() -> str:
     return os.environ.get("DEDUCTIONS_DB", str(DEFAULT_DB_PATH))
 
 
+def _age_days(claim_date: str, ref_date: str) -> int:
+    """Days between a claim and the lot's load date. Shared so priority and the oldest-open metric
+    measure age the same way."""
+    return (date.fromisoformat(ref_date) - date.fromisoformat(claim_date)).days
+
+
 def priority(amount_cents: int, claim_date: str, ref_date: str) -> str:
     """Derive worklist priority from dollars at risk + aging (ref_date = the lot's load date)."""
-    age_days = (date.fromisoformat(ref_date) - date.fromisoformat(claim_date)).days
-    if amount_cents >= _PRIORITY_HIGH_CENTS or age_days > _PRIORITY_AGE_DAYS:
+    if amount_cents >= _PRIORITY_HIGH_CENTS or _age_days(claim_date, ref_date) > _PRIORITY_AGE_DAYS:
         return "HIGH"
     if amount_cents >= _PRIORITY_MED_CENTS:
         return "MEDIUM"
@@ -109,19 +114,45 @@ _JOINS = (
 
 # SQL status predicates for the worklist filter tabs. Every KPI is counted with the predicate of the
 # tab its card links to, so the number on a card always equals the rows you get by clicking it.
-_ESCALATED_AWAITING_HUMAN = f"({_EFFECTIVE_VERDICT} = 'ESCALATE' AND {_NOT_DECIDED})"
+#
+# Layer 35 made the arithmetic close *by construction*. The previous set overlapped: `unresolved` was
+# `r.claim_id IS NULL` and `resolved` included any decided claim, so a never-investigated claim the
+# analyst overrode (legal since Layer 34 — source documents don't depend on an agent run) was counted
+# in both, and no combination of cards summed to the lot. Now there are exactly two disjoint queues,
+# and everything else is derived from them rather than defined alongside them.
+#
+# Two details are load-bearing rather than decorative:
+#
+#   * The `r.claim_id IS NULL` / `IS NOT NULL` split is what makes the two arms disjoint. Testing the
+#     effective verdict alone would not: a never-investigated claim with disposition='escalate' has
+#     decided_verdict='ESCALATE' (see orchestrator/dispositions.py::derive_decided_verdict), so it
+#     would match both arms and be double-counted.
+#   * COALESCE around the verdict comparison keeps the predicate NULL-total. claim_resolutions
+#     .final_verdict is nullable, and `NULL = 'ESCALATE'` is NULL, not false — so `todo` would be NULL
+#     for such a row, `NOT todo` would also be NULL, and the claim would fall out of *both* halves.
+#     That is the same NULL trap documented on _DECIDED above, and it would silently reopen exactly
+#     the class of bug this layer exists to close.
+_NOT_INVESTIGATED = f"(r.claim_id IS NULL AND {_NOT_DECIDED})"
+_AWAITING_MY_CALL = (
+    f"(r.claim_id IS NOT NULL AND COALESCE({_EFFECTIVE_VERDICT}, '') = 'ESCALATE' "
+    f"AND {_NOT_DECIDED})"
+)
+# The union is written as the union of the two constants, so the two halves cannot drift from the
+# whole; `decided` is the complement, which makes todo + decided == the lot an identity.
+_TODO = f"({_NOT_INVESTIGATED} OR {_AWAITING_MY_CALL})"
 _STATUS_SQL = {
-    # The analyst's actual queue: never investigated, or escalated and not yet decided.
-    "needs_me": f"(r.claim_id IS NULL OR {_ESCALATED_AWAITING_HUMAN})",
-    # Never investigated at all — so there is no agent verdict to accept or override.
-    "unresolved": "r.claim_id IS NULL",
-    # Reads as the card's label, "needs human review": still awaiting a human, not "ever escalated".
-    # Deciding it drains this, which is what makes the number respond to working the queue.
-    "escalated": _ESCALATED_AWAITING_HUMAN,
+    # The analyst's queue, and its two halves.
+    "todo": _TODO,
+    # Never investigated, and no human call either — so there is no verdict to accept or override.
+    "not_investigated": _NOT_INVESTIGATED,
+    # The agents ran and asked for a human. Deciding it drains this, which is what makes the number
+    # respond to working the queue.
+    "awaiting_my_call": _AWAITING_MY_CALL,
+    # Settled — by a human, or by agents who reached a verdict that wasn't "ask a human".
+    "decided": f"NOT {_TODO}",
+    # Orthogonal to the partition (a claim can be disputable and either decided or not), so it is a
+    # tab with no card: the KPI-equals-tab-rows invariant does not apply to it.
     "disputable": f"{_EFFECTIVE_VERDICT} = 'INVALID'",
-    # Settled: either a human decided it, or the agents reached a verdict that wasn't "ask a human".
-    "resolved": f"({_DECIDED} OR ({_EFFECTIVE_VERDICT} IS NOT NULL "
-                f"AND {_EFFECTIVE_VERDICT} <> 'ESCALATE'))",
 }
 _SORT_SQL = {
     "claim_id": "c.claim_id",
@@ -141,8 +172,8 @@ def batch_claims(
 ) -> dict:
     """One page of the lot's claims, each with derived priority, agent status, and human disposition.
 
-    `status_filter` ∈ {all, unresolved, escalated, disputable, resolved}; `sort` ∈ {claim_id,
-    amount, priority}; `q` matches claim_id / retailer / po_id (case-insensitive substring).
+    `status_filter` ∈ {all} | the keys of `_STATUS_SQL`; `sort` ∈ {claim_id, amount, priority};
+    `q` matches claim_id / retailer / po_id (case-insensitive substring).
     """
     where = ["c.batch_id = ?"]
     params: list = [batch_id]
@@ -253,14 +284,22 @@ def claim_documents(claim_id: str) -> dict | None:
 
 
 def dashboard_metrics() -> dict:
-    """Headline metrics for the active lot + resolved-this-month across all lots."""
+    """Headline metrics for the active lot.
+
+    Every count is lot-scoped and counted with the predicate of the tab its card links to, so a card's
+    number always equals the rows you get by clicking it. `todo_count` + `decided_count` == `lot_total`
+    by construction (see _STATUS_SQL), and `not_investigated_count` + `awaiting_my_call_count` ==
+    `todo_count`. There is deliberately no cross-lot month window any more: the old
+    `resolved_this_month` was the one metric no tab could reproduce, so that card could never agree
+    with its own rows.
+    """
     batch = active_batch()
     if batch is None:
-        return {"unresolved_count": 0, "resolved_this_month": 0, "dollars_at_risk_cents": 0,
-                "needs_human_review": 0, "needs_me_count": 0,
+        return {"lot_total": 0, "todo_count": 0, "not_investigated_count": 0,
+                "awaiting_my_call_count": 0, "decided_count": 0, "open_amount_cents": 0,
+                "oldest_open_days": 0,
                 "priority_breakdown": {"HIGH": 0, "MEDIUM": 0, "LOW": 0}, "batch": None}
 
-    month_start = datetime.now(UTC).strftime("%Y-%m-01")
     with closing(connect(_db_path())) as conn:
 
         def count(predicate: str) -> int:
@@ -270,39 +309,34 @@ def dashboard_metrics() -> dict:
                 (batch["batch_id"],),
             ).fetchone()[0]
 
-        # Counted with the same predicates the filter tabs use, so each KPI equals the number of
-        # rows you get by clicking it. These deliberately no longer come from `v_batch_summary`:
-        # that view only knows about `claim_resolutions`, so its needs_human_review could never
-        # respond to an analyst's decision. The view is left untouched for the ETL/batch reporting
-        # that owns it.
-        unresolved_count = count(_STATUS_SQL["unresolved"])
-        needs_human_review = count(_STATUS_SQL["escalated"])
-        needs_me_count = count(_STATUS_SQL["needs_me"])
-        # Settled this month by either spine — an accepted or overridden claim is worked, so it has
-        # to count here or the number stays flat no matter how much the analyst gets through.
-        resolved_this_month = conn.execute(
-            "SELECT COUNT(*) FROM deduction_claims c "
-            "LEFT JOIN claim_resolutions r ON r.claim_id = c.claim_id "
-            "LEFT JOIN claim_dispositions d ON d.claim_id = c.claim_id "
-            "WHERE r.resolved_at >= ? OR d.decided_at >= ?",
-            (month_start, month_start),
-        ).fetchone()[0]
-        at_risk = conn.execute(
+        lot_total = count("1")
+        todo_count = count(_STATUS_SQL["todo"])
+        not_investigated_count = count(_STATUS_SQL["not_investigated"])
+        awaiting_my_call_count = count(_STATUS_SQL["awaiting_my_call"])
+        decided_count = count(_STATUS_SQL["decided"])
+        # One pass over the open claims serves the money, the priority mix and the aging figure.
+        open_claims = conn.execute(
             f"SELECT c.claimed_amount, c.claim_date FROM deduction_claims c {_JOINS} "
-            f"WHERE c.batch_id = ? AND NOT ({_STATUS_SQL['resolved']})",
+            f"WHERE c.batch_id = ? AND {_STATUS_SQL['todo']}",
             (batch["batch_id"],),
         ).fetchall()
 
     breakdown = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
-    for amount, cdate in at_risk:
+    for amount, cdate in open_claims:
         breakdown[priority(amount, cdate, batch["load_date"])] += 1
 
     return {
-        "unresolved_count": unresolved_count,
-        "resolved_this_month": resolved_this_month,
-        "dollars_at_risk_cents": sum(amount for amount, _ in at_risk),
-        "needs_human_review": needs_human_review,
-        "needs_me_count": needs_me_count,
+        "lot_total": lot_total,
+        "todo_count": todo_count,
+        "not_investigated_count": not_investigated_count,
+        "awaiting_my_call_count": awaiting_my_call_count,
+        "decided_count": decided_count,
+        "open_amount_cents": sum(amount for amount, _ in open_claims),
+        # Age is measured against the lot's load date, which the client doesn't have — so it is
+        # derived here rather than in the browser.
+        "oldest_open_days": max(
+            (_age_days(cdate, batch["load_date"]) for _, cdate in open_claims), default=0
+        ),
         "priority_breakdown": breakdown,
         "batch": {"batch_id": batch["batch_id"], "status": batch["status"]},
     }
