@@ -9,6 +9,8 @@ Data comes from the relational store (ui/queries.py); "scenario" is retired (Lay
 """
 
 import asyncio
+import csv
+import io
 import json
 import logging
 import os
@@ -427,6 +429,127 @@ async def filter_options(batch_id: str):
     if not queries.batch_exists(batch_id):
         return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
     return queries.lot_filter_options(batch_id)
+
+
+# --- csv export (Layer 41) -------------------------------------------------------------------------
+
+# The export's column contract: explicit and ordered, rather than derived from the claim dict, so a
+# new field in ui/queries.py cannot silently change the shape of a file the analyst has built a
+# spreadsheet on top of.
+#
+# Two names differ from the API's on purpose. `claimed_amount_usd` carries its unit, because a bare
+# amount column is the one place a reader can be wrong by 100x without noticing. And the API's
+# `status`/`agent_status` become `verdict`/`agent_verdict`: in a file with no tooltips "status" reads
+# as workflow state (open/closed), and those two API names are a survival of the pre-Layer-36
+# vocabulary that ui/queries.py:339-342 already apologises for in a comment.
+_CSV_COLUMNS = (
+    "claim_id", "po_id", "retailer", "claimed_reason", "claim_date", "claimed_amount_usd",
+    "age_days", "priority", "priority_reason", "verdict", "agent_verdict", "disposition",
+    "override_verdict", "decided_verdict", "note", "decided_at", "decision_stale",
+)
+
+
+def _usd(cents: int) -> str:
+    """Cents -> plain decimal dollars: 20000 -> "200.00".
+
+    No "$" and no thousands separator, so the column SUMs in Excel — `dollars()`'s "$1,200.00" is
+    *text* that also forces quoting in a comma-separated file for no gain. Integer arithmetic, so no
+    float ever touches money.
+    """
+    whole, part = divmod(int(cents), 100)
+    return f"{whole}.{part:02d}"
+
+
+def _claims_csv(claims: list[dict]) -> str:
+    """The filtered worklist as RFC 4180 CSV.
+
+    Rows are handed to `csv.writer` as lists and never built with f-strings or joins: the writer
+    renders None as an empty field, while an f-string would write the literal "None" into the six
+    decision columns of every claim nobody has decided yet — which an analyst reads as data.
+    """
+    buf = io.StringIO()
+    # csv's default "\r\n" is kept deliberately. tools/generate_source_systems.py overrides it to
+    # "\n" for git-stable committed bytes; nothing about a download is committed, and CRLF is what
+    # RFC 4180 says and what every spreadsheet agrees on. Do not share that helper.
+    writer = csv.writer(buf)
+    writer.writerow(_CSV_COLUMNS)
+    for c in claims:
+        writer.writerow([
+            c["claim_id"], c["po_id"], c["retailer"], c["claimed_reason"], c["claim_date"],
+            _usd(c["claimed_amount"]), c["age_days"], c["priority"], c["priority_reason"],
+            # Raw machine verdicts, not lib.js's money-direction labels ("Disputable"/"Conceded").
+            # That map is defined in verdictLabel and nowhere else, and a Python copy of it would be
+            # the first duplicated mapping here that NO gate can catch: node --test cannot see this
+            # file and pytest cannot see lib.js, so the two would be free to drift with nothing able
+            # to compare them. The screen owns the words; the file owns the tokens — which is also
+            # what the SUMIFs and pivot tables reading it want.
+            c["status"], c["agent_status"], c["disposition"], c["override_verdict"],
+            c["decided_verdict"],
+            # Verbatim, including a note that starts with "=" or "-" and so renders as #NAME? in
+            # Excel. Every available guard is worse than the problem: a leading "'" is an Excel-only
+            # escape that becomes a *literal apostrophe* in Sheets, pandas and csv.reader, trading a
+            # rare loud mangling (the note is still intact in the app and the DB) for a universal
+            # silent one, in the one column whose whole job is fidelity to the analyst's words. The
+            # injection threat model is empty besides: author and reader are the same person on
+            # 127.0.0.1 with no auth.
+            c["note"], c["decided_at"],
+            # Not a bool: csv would write Python's True/False, and Excel's own booleans are
+            # locale-translated (WAHR in a German install), so a coerced bool is the one cell whose
+            # displayed value depends on the machine that opened it. Blank-when-false was rejected
+            # too — indistinguishable from "no data" in a column about whether a decision holds.
+            "yes" if c["decision_stale"] else "no",
+        ])
+    # Excel reads a BOM-less UTF-8 CSV in the system codepage, so an em dash or an accent in a note
+    # comes back as mojibake. Three bytes against a corrupted note.
+    return "\ufeff" + buf.getvalue()
+
+
+@app.get("/api/batches/{batch_id}/export.csv")
+async def export_csv(
+    batch_id: str,
+    status_filter: str = "all",
+    sort: str = "claim_id",
+    direction: str | None = None,
+    q: str | None = None,
+    retailer: str | None = None,
+    reason: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    """The filtered worklist as a CSV download — every matching claim, not the page on screen.
+
+    Server-side, and unpaginated, because the only correct export of a filtered queue is the whole
+    filtered set: a client-side export could write out only the 25 rows it happens to be holding,
+    under a filename claiming to be the lot.
+
+    Takes no `offset`/`limit` — the two query params it deliberately does NOT share with
+    `/api/batches/{batch_id}`. A URL carrying them exports the whole filtered set anyway (FastAPI
+    ignores undeclared params), which is the right answer: over-delivering the correctly-filtered
+    rows is never wrong, while 422-ing would break the download for any URL built from the client's
+    own `queryParams`, which always sets both. A test pins that, so "ignored" stays a decision.
+    """
+    if not queries.batch_exists(batch_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
+    try:
+        page = queries.batch_claims(
+            batch_id, limit=None, status_filter=status_filter, sort=sort, direction=direction,
+            q=q, retailer=retailer, reason=reason, date_from=date_from, date_to=date_to,
+        )
+    except ValueError as exc:
+        # The same 422 as the queue route, and it matters more here: a stale link that silently fell
+        # back to "all"/claim_id would produce a *file* of plausible wrong rows — and the file leaves
+        # the app, gets emailed, and carries nothing saying which query it came from.
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    return PlainTextResponse(
+        _claims_csv(page["claims"]),
+        media_type="text/csv",
+        # The filter is in the name because two exports of one lot from two tabs otherwise collide in
+        # ~/Downloads as "claims_LOT-2024-09-15 (1).csv" with nothing to tell them apart. Honestly
+        # incomplete — q/retailer/reason/dates aren't encoded — but encoding all of them produces a
+        # filename nobody can read.
+        headers={"Content-Disposition":
+                 f'attachment; filename="claims_{batch_id}_{status_filter}.csv"'},
+    )
 
 
 @app.post("/api/batches/{batch_id}/investigate")

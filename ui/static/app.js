@@ -8,7 +8,7 @@
 //
 // tests/js/architecture.test.mjs enforces that, so it stays true.
 
-import { parseHash } from "./lib.js";
+import { exportUrl, parseHash } from "./lib.js";
 import { hideBanner } from "./banner.js";
 import { renderControls } from "./controls.js";
 import { loadDashboard } from "./dashboard.js";
@@ -35,6 +35,13 @@ $("banner-dismiss").addEventListener("click", hideBanner);
 $("prev").addEventListener("click", () => { state.page = Math.max(1, state.page - 1); commit(); });
 
 $("next").addEventListener("click", () => { state.page += 1; commit(); });
+
+// The whole filtered set, not the page on screen — so the URL carries the filters and no paging.
+// Guarded on batchId: before the dashboard lands there is no lot to export, and a click that opened
+// /api/batches/null/export.csv would download a 404 body as a file.
+$("export-csv").addEventListener("click", () => {
+  if (state.batchId) window.open(exportUrl(state.batchId, state), "_blank");
+});
 
 $("page-size").addEventListener("change", (e) => {
   // Back to page 1: page 4 of 25-per-page does not exist at 100 per page, and landing on an empty

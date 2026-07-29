@@ -744,15 +744,18 @@ at the running app. One commit each.
 - **Verify:** `pytest -q` with a fixture that creates `latest` as a **real symlink** (every existing
   test uses `mkdir`, so a double-counting bug would pass unnoticed).
 - **Three deviations from the above, approved in planning.**
-  1. **`/runs` ships read-only; the run picker and `?run_id=` are deferred to Layer 41.** A picker
+  1. **`/runs` ships read-only; the run picker and `?run_id=` are deferred — see Layer 42.** A picker
      renders an old run's case file under the *current* verdict chip — `fromCasefile` sources
      `final_verdict` from the row's effective status, so CLM-002's VALID run would appear beneath an
      INVALID header. Doing it honestly needs the verdict header re-sourced from that run's
      `verdict.json`, an off-latest marker, the decision bar disabled and the packet re-pointed: ~40
      lines in ungated `app.js` governing *which claim's evidence is on screen*, the same failure family
-     as the two bugs recorded at 37b. Layer 41 is the right home, where plumbing
-     `d.decided_run_id`/`r.run_id` through `batch_claims` makes "open the run I signed off on" a task
-     rather than a date dropdown. `?run_id=` is deferred with it instead of shipping with no caller.
+     as the two bugs recorded at 37b. Plumbing `d.decided_run_id`/`r.run_id` through `batch_claims` is
+     what makes "open the run I signed off on" a task rather than a date dropdown. `?run_id=` is
+     deferred with it instead of shipping with no caller.
+     **Originally deferred "to Layer 41"; reassigned to its own Layer 42 in the Layer 41 planning
+     session**, because Layer 41's own scope was never amended to receive it and the picker is as large
+     as the rest of that layer put together. Not dropped — Layer 42 is written up below.
   2. **`/reasoning` dropped as redundant, swapped for `/trace`.** `/casefile` already returns both
      reasoning strings verbatim, so `/reasoning` would be a second reader of one file. The budget went
      to `GET /api/claims/{id}/trace`, a compact list derived from `reasoning_trace.json` — the only
@@ -838,3 +841,78 @@ at the running app. One commit each.
   `@media (prefers-color-scheme: light)`; a density pass on the 10–11px uppercase labels. No manual
   theme toggle.
 - **Verify:** `pytest -q`; print preview in greyscale, light-mode switch, CSV opens in Excel.
+- **The deferred run picker was reassigned to Layer 42, not dropped** (approved in planning; the
+  disagreement PROGRESS.md flagged). Layer 39 deferred it "to Layer 41" while Layer 41's bullets above
+  never mentioned it, and sized honestly it is as much work as the rest of this layer combined, all of
+  it in the ungated DOM layer that produced the 37b and 39 bugs. See Layer 42 below.
+- **`limit=None` reaches SQL as `LIMIT -1 OFFSET ?`, not by dropping both clauses.** Binding `None`
+  raises SQLite's "datatype mismatch", and the tempting shape copied from `unresolved_claim_ids`
+  (`if cap is not None: sql += " LIMIT ?"`) has no `offset` to lose — here it would leave `offset`
+  accepted and then not applied, which is the accepted-but-ignored-parameter failure 37a removed. The
+  SQL string is byte-identical under either call; only the bound value changes. A negative `limit`
+  still raises, or `?limit=-1` on the *interactive* route would reach SQLite's own "no upper bound".
+- **The export declares no `offset`/`limit` and ignores them if sent.** `lib.js::queryParams` always
+  emits both, so 422-ing would break the download for any URL the client itself builds; over-delivering
+  the correctly-filtered rows is never wrong. A test pins it so "ignored" stays a decision.
+- **The CSV carries raw machine verdicts, not `verdictLabel`'s money-direction labels.** A Python copy
+  of that map would be the first duplicated mapping in the repo that **no gate can compare** —
+  `node --test` cannot see `ui/server.py` and `pytest` cannot see `lib.js`. The screen owns the words,
+  the file owns the tokens, which is also what a pivot table wants. Money is decimal dollars in a
+  `claimed_amount_usd` column (a cents column sums to a number 100x wrong silently); `decision_stale`
+  is `yes`/`no` because Excel translates its own booleans; a UTF-8 BOM leads the body or Excel reads it
+  in the system codepage.
+- **The formula guard was considered and deliberately not built** (a reversal of the planning position).
+  A note beginning `-`/`=` renders as `#NAME?`, but every available escape is worse: a leading `'` is an
+  Excel-only convention that becomes a *literal apostrophe* in Sheets, pandas and `csv.reader`, trading a
+  rare loud mangling — the note is still intact in the app and the DB — for a universal silent one, in
+  the one column whose whole job is fidelity to the analyst's words. The injection threat model is empty
+  besides: author and reader are the same person on `127.0.0.1` with no auth. A test asserts the
+  verbatim behaviour and says why, so the next person to "improve" it fails a test that explains itself.
+- **Print shares the light palette through one `@media print, (prefers-color-scheme: light)` block.**
+  Two copies of a palette drift, and print is only ever wanted in the light one. The greens and reds are
+  **re-tuned, not reused**: `--ok #3fb950` on white measures 2.54:1 and fails AA outright.
+- **The predicted density consequence did not happen, for a checkable reason.** The plan said bumping
+  `th` to 11px would widen the 884px queue pane. It did not: `table { width: 100% }` sizes the table to
+  its scroller (882px), so a header font can only cause overflow if the columns' *natural* width exceeds
+  it — measured at **867px**, 15px of headroom. Recorded because the next column added is the thing that
+  spends it.
+- **Two things only the running app showed, both in print.**
+  1. **`break-inside: avoid` on `.block` wasted a third of a page.** "Why this verdict" is two
+     paragraphs of model prose, and making a whole *section* unbreakable pushed it to a fresh sheet
+     (measured: page 2 two-thirds empty, page 3 barely used). Prose is supposed to flow across a page,
+     and `avoid` is ignored anyway once a block exceeds one page — so it was inconsistent as well as
+     wasteful. Now scoped to the **atomic** units (`.doc`, `.check-row`, `.tl-event`, `.callout`,
+     `table.recon`, `.tl-gap`) with `break-after: avoid` on the headings; page 2 went 29 → 34 lines.
+  2. **The light selection tint failed AA on the verdict text sitting on it.** At `rgba(...,.10)` the
+     green `+ Disputable` in the status column measured **4.41** against the composited background and
+     missed by .09 — invisible to palette math, which only checks tokens against plain `--panel`.
+     Dropped to `.07` (4.60 / 4.86) and re-measured on the rendered page.
+- **Found and NOT fixed, deliberately:** the **dark** theme has two pre-existing AA failures on a
+  *selected* row — `.pill.p-HIGH` at **4.13** and `.disp-badge` at **4.48**. Both predate this layer and
+  fixing them means changing shipped dark-theme colours, which is a visual decision beyond this layer's
+  ask. Reported rather than silently changed.
+
+### 42. The run picker — open an older run honestly
+
+Reassigned here from Layer 39's deferral (approved 2026-07-29). `GET /api/claims/{id}/runs` has shipped
+read-only since Layer 39 precisely because a picker done carelessly renders one run's evidence under
+another run's verdict: `fromCasefile` takes `final_verdict` from the **row's effective status**, so
+CLM-002's VALID run would appear beneath an INVALID header.
+
+- `ui/server.py`: `?run_id=` on `/casefile`, `/trace` and `/dispute-packet`. The guard should be a
+  **whitelist, not a sanitizer** — accept a `run_id` only if it appears in `_run_dirs(claim_id)`, which
+  makes path traversal unrepresentable rather than filtered. Three joins need it (`:215`, `:290`, `:301`).
+- `ui/queries.py`: `d.decided_run_id` and `r.run_id` through `batch_claims` — both columns are already
+  joined and `decided_run_id` is already read by `_DECISION_STALE`; neither is in the SELECT list. **No
+  schema change**: Layer 34 added `claim_dispositions.decided_run_id` already. This is what makes "open
+  the run I signed off on" a task rather than a date dropdown.
+- `ui/static/`: `#w-runs` becomes a real control instead of one `textContent` line; the verdict header
+  re-sourced from that run's own `final_verdict` (**already in the `/runs` payload** — `_run_entry`
+  returns the whole verdict trio, so no new endpoint is needed); an off-latest marker; the decision bar
+  disabled while off-latest, since signing off on evidence you are not looking at is the failure this
+  phase exists to remove; the dispute packet re-pointed. A `run_id` key in `parseHash`/`buildHash`.
+- **Verify:** `pytest -q` for the whitelist and the two new row keys; `node --test` for the hash key and
+  the picker's pure logic; then drive the app on CLM-002, whose **six real runs** read Disputable →
+  Conceded → Disputable → Conceded → Disputable → Disputable and are the case that makes the wrong-header
+  bug visible. Note that **17 of 57 run dirs predate Layer 32** and have no `case_file.json`, so
+  `has_case_file` decides which runs are openable at all.

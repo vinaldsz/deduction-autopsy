@@ -279,6 +279,41 @@ def test_page_bounds_are_rejected_rather_than_clamped(db):
             queries.batch_claims("LOT-2024-09-15", **kwargs)
 
 
+# --- limit=None: the whole filtered set (Layer 41) -------------------------------------------------
+
+
+def test_limit_none_returns_the_whole_filtered_set_rather_than_a_page(db):
+    """The CSV export's query. Two halves, because both are the point: unpaginated, and still
+    *filtered* — an export that quietly widened to the lot would be a file of the wrong rows.
+
+    This is the test that fails if `limit=None` is reverted: the old `not 1 <= limit` raised
+    TypeError comparing int to None before any SQL ran.
+    """
+    whole = queries.batch_claims("LOT-2024-09-15", limit=None)
+    assert whole["total"] == 5
+    assert [c["claim_id"] for c in whole["claims"]] == ["CLM-A", "CLM-B", "CLM-C", "CLM-D", "CLM-E"]
+    # Echoed back as None, not as -1 (a SQLite encoding) or as `total` (a fabricated page size).
+    assert whole["limit"] is None
+
+    filtered = queries.batch_claims("LOT-2024-09-15", status_filter="decided", limit=None)
+    assert [c["claim_id"] for c in filtered["claims"]] == ["CLM-E"]
+
+
+def test_limit_none_still_honours_offset_rather_than_silently_ignoring_it(db):
+    """Fails on the tempting `if limit is not None: sql += " LIMIT ?"` shape copied from
+    unresolved_claim_ids (which has no offset to lose). A parameter accepted and then not applied
+    returns different rows than the caller asked for — the same class of defect as _check_date's."""
+    tail = queries.batch_claims("LOT-2024-09-15", offset=2, limit=None)
+    assert [c["claim_id"] for c in tail["claims"]] == ["CLM-C", "CLM-D", "CLM-E"]
+
+
+def test_a_negative_limit_is_rejected_so_only_none_can_mean_unbounded(db):
+    """-1 is SQLite's own "no upper bound", so a guard written as `limit > _MAX_LIMIT` would let
+    `?limit=-1` on the interactive route dump the whole lot into the paged grid."""
+    with pytest.raises(ValueError, match="limit"):
+        queries.batch_claims("LOT-2024-09-15", limit=-1)
+
+
 def test_lot_filter_options_lists_the_values_actually_in_the_lot(db):
     _tied_amounts(db)
     options = queries.lot_filter_options("LOT-2024-09-15")

@@ -8,6 +8,38 @@
     :root {
       --bg: #0f1115; --panel: #181b22; --panel2: #12151b; --border: #2a2f3a; --text: #e6e9ef;
       --muted: #8b93a3; --accent: #5b9bff; --ok: #3fb950; --bad: #f85149; --warn: #d29922;
+      /* Named by ROLE, not by alpha. These five were the only colour literals outside this block, so
+         a theme could not reach them: text on a filled button, the row hover, the row selection, and
+         the two accent washes. Values are byte-for-byte what they were, so the dark theme is
+         unchanged by the extraction. */
+      --btn-fg: #06122b; --row-hover: #1e222b; --row-selected: rgba(91,155,255,.14);
+      --tab-active-bg: rgba(91,155,255,.12); --bar-bg: rgba(91,155,255,.08);
+    }
+
+    /* Light mode has no toggle, on purpose: the OS already states the preference, and a third control
+       that disagrees with it is worse than none.
+       PRINT SHARES THIS BLOCK, which is the point of writing it as a two-condition media query rather
+       than two rule sets. A dark page prints either as a sheet of ink or — once the browser drops
+       backgrounds, which is the default — as #8b93a3 muted text on white paper, unreadable either
+       way. Two copies of a palette drift; there is only ever one light palette wanted here.
+       Safe at this position because nothing else in the file re-declares these tokens, so there is no
+       same-specificity tie to lose on source order (unlike the stacked-layout block — see the end).
+       The greens and reds are RE-TUNED, not reused: --ok #3fb950 on white is 2.54:1 and fails WCAG AA
+       outright. Every value below was measured on #ffffff: text 15.80, muted 6.11, accent 5.19,
+       ok 5.08, bad 5.36, warn 4.87, and #fff on --accent 5.19. */
+    @media print, (prefers-color-scheme: light) {
+      :root {
+        --bg: #ffffff; --panel: #ffffff; --panel2: #f6f8fa; --border: #d1d9e0; --text: #1f2328;
+        --muted: #59636e; --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700;
+        --btn-fg: #ffffff; --row-hover: #f6f8fa;
+        /* .07, not the .10 this started at. A selection tint is a background the verdict text has to
+           be read ON: at .10 the green "+ Disputable" in the status column measured 4.41 against it
+           and missed AA by .09. Measured on the rendered page, not on the token — the palette values
+           all clear AA on plain --panel and it is only the composited selection that fails. .07 gives
+           4.60 / 4.86 for --ok / --bad and is still visibly a selected row. */
+        --row-selected: rgba(9,105,218,.07);
+        --tab-active-bg: rgba(9,105,218,.08); --bar-bg: rgba(9,105,218,.06);
+      }
     }
     * { box-sizing: border-box; }
     body {
@@ -29,7 +61,7 @@
     .run-failures ul { margin: 0; padding-left: 18px; }
     .run-failure-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     button {
-      font: inherit; background: var(--accent); color: #06122b; border: none; border-radius: 8px;
+      font: inherit; background: var(--accent); color: var(--btn-fg); border: none; border-radius: 8px;
       font-weight: 600; cursor: pointer; padding: 8px 16px;
     }
     button:disabled { opacity: .5; cursor: default; }
@@ -103,7 +135,7 @@
     #search { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; padding: 7px 10px; }
     .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
     .tab { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; background: transparent; }
-    .tab.active { color: var(--text); border-color: var(--accent); background: rgba(91,155,255,.12); }
+    .tab.active { color: var(--text); border-color: var(--accent); background: var(--tab-active-bg); }
     /* Retailer / reason / date-range narrowing. Populated from /filter-options, so the dropdowns
        list what is actually in the lot rather than a hardcoded guess at the retailer roster. */
     .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -125,7 +157,7 @@
        override button here, because overriding rows in bulk is approving evidence you haven't read. */
     .queue-bar {
       display: flex; align-items: center; gap: 10px; padding: 8px 14px;
-      border-bottom: 1px solid var(--border); background: rgba(91,155,255,.08); flex: none;
+      border-bottom: 1px solid var(--border); background: var(--bar-bg); flex: none;
     }
     .bulk-controls { display: flex; align-items: center; gap: 10px; }
     .queue-bar .count { font-size: 13px; font-weight: 600; }
@@ -136,7 +168,11 @@
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
     /* `cursor: pointer` used to be on every th, including the four that do nothing when clicked. */
-    th { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); user-select: none; white-space: nowrap; }
+    /* Density (Layer 41): 10px uppercase with POSITIVE tracking is the least legible combination in
+       this file, and it was on the labels of the column the analyst scans most. 11px and .02em — the
+       tracking is what does the work, so the size only had to move one step. Widens the table, which
+       is why .workspace's measured 884px was re-measured after this change and not assumed. */
+    th { font-size: 11px; text-transform: uppercase; letter-spacing: .02em; color: var(--muted); user-select: none; white-space: nowrap; }
     /* The column labels survive the scroll, now that the rows scroll inside the pane rather than with
        the page. `box-shadow`, not `border-bottom`: under `border-collapse: collapse` the border
        belongs to the table and stays behind while the cell travels.
@@ -153,14 +189,14 @@
     td.pick input, th.pick input { cursor: pointer; margin: 0; vertical-align: middle; }
     th.sortable { cursor: pointer; }
     th.sortable:hover { color: var(--text); }
-    th .sort-ind { margin-left: 4px; font-size: 9px; }
+    th .sort-ind { margin-left: 4px; font-size: 10px; }  /* was 9px: the smallest text in the app */
     th.sorted { color: var(--text); }
     /* The total for the *filtered* set, in the column it totals. */
     tfoot td { border-bottom: none; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
     tfoot td.num { color: var(--text); font-weight: 700; }
     tbody tr { cursor: pointer; }
-    tbody tr:hover { background: #1e222b; }
-    tbody tr.selected { background: rgba(91,155,255,.14); }
+    tbody tr:hover { background: var(--row-hover); }
+    tbody tr.selected { background: var(--row-selected); }
     tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     td.num { font-variant-numeric: tabular-nums; text-align: right; }
     /* Nothing in a worklist row wraps. `CLM-SYN-0003` broke across three lines on its hyphens —
@@ -181,7 +217,9 @@
     td.status { white-space: nowrap; }
     /* The raw machine verdict, kept beside the money-direction label so the words the API, the CLI
        and the filter tabs use stay cross-referenceable — subdued, because it is the secondary read. */
-    .v-code { color: var(--muted); font-size: 10px; letter-spacing: .04em; margin-left: 6px; }
+    /* Keeps its 10px: this is the deliberately subdued secondary read (see the comment above), so
+       only the tracking is relaxed. */
+    .v-code { color: var(--muted); font-size: 10px; letter-spacing: .02em; margin-left: 6px; }
     .row-spin { color: var(--accent); }
     .disp-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
     .pager { display: flex; gap: 12px; align-items: center; padding: 10px 14px; flex: none; border-top: 1px solid var(--border); }
@@ -250,7 +288,7 @@
     table.doc-t { width: 100%; border-collapse: collapse; }
     table.doc-t th, table.doc-t td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
     table.doc-t tr:last-child td, table.doc-t tr:last-child th { border-bottom: none; }
-    table.doc-t th { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    table.doc-t th { font-size: 11px; text-transform: uppercase; letter-spacing: .02em; color: var(--muted); }
     table.doc-t td.num { font-variant-numeric: tabular-nums; }
     table.doc-t .note-cell { color: var(--muted); font-style: italic; }
     .doc-empty { color: var(--muted); font-size: 13px; }
@@ -307,7 +345,7 @@
     #trace li { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
     #trace li.error { border-color: var(--bad); }
     #trace-empty { color: var(--muted); font-size: 12px; padding: 0 12px 8px; }
-    .agent-tag { display: inline-block; min-width: 92px; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+    .agent-tag { display: inline-block; min-width: 92px; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .02em; }
     .agent-investigator { color: var(--accent); }
     .agent-reviewer { color: var(--warn); }
     .tool-args { color: var(--muted); }
@@ -358,6 +396,46 @@
       .queue-scroll { overflow: visible; overflow-x: auto; }
       .ws-body { overflow: visible; padding: 16px; }
       .queue-scroll thead th, .ws-head, .decision { position: static; }
+    }
+
+    /* Print = ONE CLAIM'S DOSSIER, not a screenshot of the app (Layer 41). An analyst prints to PDF to
+       attach a claim's evidence to a dispute file, so the worklist and every control come off and the
+       review pane becomes paper. The list's route out of the app is Export CSV, not the printer.
+       AFTER the stacked-layout block, and last in the file, for both of the reasons written there: the
+       selectors are plain classes that tie on specificity, AND a print sheet is narrow enough that the
+       max-width: 1360px block also matches — so this has to win on source order.
+       The colours are already handled: the palette block at the top of this file lists `print` beside
+       `prefers-color-scheme: light`, so everything here is layout. */
+    @media print {
+      @page { margin: 14mm; }
+      /* Controls, chrome, and the whole left pane. `.pane:first-child` is the worklist. */
+      .run-row, .run-failures, #banner, .cards, .stats,
+      .workspace > .pane:first-child, .pane > h2,
+      #w-investigate, #w-download, #w-decision-actions { display: none; }
+      /* A closed drawer prints nothing but a dead disclosure control; an open one prints its trace.
+         What is on screen is what prints. */
+      details.audit:not([open]) { display: none; }
+      /* One child left, so a `884px 1fr` grid would render the dossier in an 884px column. */
+      .workspace { display: block; padding: 0; }
+      .pane {
+        position: static; max-height: none; overflow: visible;
+        border: none; border-radius: 0; background: none;
+      }
+      /* Stays `display: flex` — switching to block would silently drop its `gap: 18px` and every
+         evidence block would butt against the next. Only the scroller has to go. */
+      .ws-body { overflow: visible; padding: 0; }
+      .ws-head, .decision { position: static; background: none; }
+      /* Kept unbreakable: the ATOMIC units, where a page boundary through the middle destroys the
+         reading — a document card away from its header row, a check away from its description, a
+         timeline event away from its date.
+         Deliberately NOT `.block`. A block is a whole section, and "Why this verdict" is two
+         paragraphs of model prose; making it unbreakable pushed it to a fresh page and left a third
+         of the previous one blank (measured: 4 pages, page 2 two-thirds empty; 3 pages after). Prose
+         is supposed to flow across a page, and `avoid` is ignored anyway once a block is taller than
+         one page — so on a longer reasoning it would have been inconsistent as well as wasteful.
+         `break-after` on the heading is what keeps a section title from being orphaned at a foot. */
+      .doc, .callout, .check-row, .tl-event, table.recon, .tl-gap { break-inside: avoid; }
+      .block h3, .why .who { break-after: avoid; }
     }
   </style>
 </head>
@@ -475,6 +553,9 @@
         <button class="ghost sm" id="prev">Prev</button>
         <span id="page-info" class="muted"></span>
         <button class="ghost sm" id="next">Next</button>
+        <!-- Exports the FILTERED set, not this page — which is why it sits here, directly under the
+             <tfoot> that already states how many claims and how much money that is. -->
+        <button class="ghost sm" id="export-csv">Export CSV</button>
         <select id="page-size" aria-label="Rows per page">
           <option value="25">25 / page</option>
           <option value="50">50 / page</option>

@@ -463,6 +463,19 @@ export function queryParams(state, overrides = {}) {
   return params;
 }
 
+/** The CSV export's URL: the same filter params the queue sends, minus paging.
+ *
+ *  Reuses `queryParams` rather than restating the filter contract, so a filter added to one is added
+ *  to both. Paging is stripped because the export is the whole filtered set — the server ignores both
+ *  params anyway, and sending `limit=25` alongside a file that contains 137 rows would describe the
+ *  request as something it isn't. */
+export function exportUrl(batchId, state) {
+  const params = queryParams(state);
+  params.delete("offset");
+  params.delete("limit");
+  return `/api/batches/${encodeURIComponent(batchId)}/export.csv?${params}`;
+}
+
 /** The pager: "26–50 of 137" plus whether each arrow is spent.
  *
  *  `rowCount` is the rows actually returned, not `size` — the last page is short, and computing the

@@ -167,6 +167,15 @@ evidence → decide**):
 - **Keyboard** — `j`/`k` move, `a` accept, `o` focus the override picker, `x` select the row, `/`
   search, `Esc` leave a field. There is deliberately no key that *records* an override: that needs a
   verdict and a stated reason.
+- **Getting work out** — two routes, and the split is deliberate. **Export CSV** (in the pager, beside
+  the footer that totals what it will export) takes the *filtered set unpaginated* into Excel.
+  **Printing** takes the *open claim* onto paper: `@media print` hides the worklist and every control
+  and lays the review pane out as a dispute-file dossier — evidence, reconciliation, timeline, checks,
+  both agents' reasoning, dispute grounds and the recorded decision, black on white, with tables and
+  check rows kept off page boundaries. The list's route out of the app is the CSV, not the printer.
+- **Light mode** follows the OS (`prefers-color-scheme`) with no manual toggle, and print shares the
+  same palette — a dark page prints as either a sheet of ink or unreadable grey-on-white. The colour
+  tokens are re-tuned rather than inverted: the dark green fails WCAG AA at 2.54:1 on white.
 
 **Process lot (investigate + review all)** runs the pipeline over every unresolved claim in the lot,
 so the analyst opens to fully-evidenced cases. Dependency-free static client (`ui/static/`, no
@@ -184,6 +193,14 @@ API (data comes from the relational store — there is no "scenario"):
   With no runs on disk the median is `null` and the UI says there is nothing to estimate from, for the
   same reason there is no ETA: a number nobody measured is worse than an admitted unknown when the
   analyst is about to spend against it. `claims` comes from the same query the run uses.
+- `GET /api/batches/{batch_id}/export.csv?status_filter=&sort=&direction=&q=&retailer=&reason=
+  &date_from=&date_to=` → the filtered worklist as a CSV download: **every matching claim, not the page
+  on screen**, which is why it is server-side at all. Takes no `offset`/`limit` and ignores them if sent
+  — a partial export is never the answer to "give me this queue". One row per claim with the full record
+  including the analyst's note and `decided_at`; money as a plain `claimed_amount_usd` decimal so it sums
+  in Excel, verdicts as the **raw** machine tokens (`INVALID`, not the UI's "Disputable" — the screen
+  owns the words, the file owns the tokens), CRLF line endings and a UTF-8 BOM. 404 for an unknown
+  batch, 422 for a query it will not honour, same as the queue route.
 - `POST /api/batches/{batch_id}/investigate?cap=` (SSE) → run over the lot's unresolved claims
   (the whole lot by default; `cap` limits it). Frames: `batch_start {total}`, then per claim
   `claim_start {claim_id}` → `tool_call`* → `claim_done` **or** `claim_error {claim_id, error}`, then
@@ -203,7 +220,7 @@ API (data comes from the relational store — there is no "scenario"):
   timestamp** (run ids are arbitrary strings, so directory order is not recency), each with its verdict
   trio, confidence, token usage and `has_case_file`/`has_dispute_packet`. A claim with no runs is `200`
   with an empty list, not a 404. Read-only history — there is no way to *open* an older run, because
-  rendering one run's evidence beside another run's verdict is worse than not showing it (Layer 41).
+  rendering one run's evidence beside another run's verdict is worse than not showing it (**Layer 42**).
 - `GET /api/claims/{claim_id}/trace` → the latest run's tool-call trace, compacted from
   `reasoning_trace.json` into the same `{agent, name, args, is_error}` shape the live SSE emits, so the
   audit drawer works on a claim nobody just ran. Compacted rather than raw: the artifact embeds both

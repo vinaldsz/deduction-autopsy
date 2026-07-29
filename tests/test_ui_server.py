@@ -6,6 +6,8 @@ tests/test_ui_queries.py; the pipeline by tests/test_orchestrator_pipeline.py.
 """
 
 import asyncio
+import csv
+import io
 import json
 import os
 from types import SimpleNamespace
@@ -124,6 +126,182 @@ def test_filter_options_lists_the_lots_values(monkeypatch):
 def test_filter_options_unknown_batch_is_404(monkeypatch):
     monkeypatch.setattr(queries, "batch_exists", lambda b: False)
     assert client.get("/api/batches/nope/filter-options").status_code == 404
+
+
+# --- csv export (Layer 41) -----------------------------------------------------------------------
+#
+# _claim() carries EVERY key _claims_csv reads, so a field renamed in ui/queries.py fails here with a
+# KeyError instead of 500-ing in the running app. `c["key"]` in the writer is what makes that true —
+# `.get()` would have shipped a silently blank column in a file that has already left the app.
+
+
+def _claim(**overrides):
+    claim = {
+        "claim_id": "CLM-001", "po_id": "PO-9001", "retailer": "walmart",
+        "claimed_reason": "shortage", "claim_date": "2024-01-20", "claimed_amount": 20000,
+        "age_days": 239, "priority": "HIGH", "priority_reason": "$200.00 at risk",
+        "status": "INVALID", "agent_status": "INVALID", "disposition": None,
+        "override_verdict": None, "decided_verdict": None, "note": None, "decided_at": None,
+        "decision_stale": False,
+    }
+    claim.update(overrides)
+    return claim
+
+
+def _export(monkeypatch, claims, seen=None, url="/api/batches/LOT-2024-09-15/export.csv"):
+    def fake_batch_claims(batch_id, **kwargs):
+        if seen is not None:
+            seen.update(batch_id=batch_id, **kwargs)
+        return {"batch_id": batch_id, "total": len(claims), "limit": kwargs["limit"],
+                "claims": claims}
+
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "batch_claims", fake_batch_claims)
+    return client.get(url)
+
+
+def _rows(resp):
+    """The body parsed the way a spreadsheet would, BOM stripped."""
+    return list(csv.reader(io.StringIO(resp.content.decode("utf-8-sig"))))
+
+
+def test_export_forwards_every_filter_param_and_asks_for_the_whole_filtered_set(monkeypatch):
+    """Whole-dict, like test_batch_returns_claims_and_forwards_every_query_param: a dropped filter
+    would export more rows than the analyst asked for, under a filename claiming otherwise."""
+    seen = {}
+    resp = _export(monkeypatch, [_claim()], seen,
+                   "/api/batches/LOT-2024-09-15/export.csv?status_filter=disputable&sort=amount"
+                   "&direction=asc&q=walmart&retailer=kroger&reason=promo_billback"
+                   "&date_from=2024-09-01&date_to=2024-09-15")
+    assert resp.status_code == 200
+    assert seen == {"batch_id": "LOT-2024-09-15", "limit": None, "status_filter": "disputable",
+                    "sort": "amount", "direction": "asc", "q": "walmart", "retailer": "kroger",
+                    "reason": "promo_billback", "date_from": "2024-09-01", "date_to": "2024-09-15"}
+
+
+def test_a_paginated_url_still_exports_the_whole_filtered_set(monkeypatch):
+    """The client builds its query with lib.js::queryParams, which always sets offset and limit. This
+    route declares neither, so FastAPI drops them — and that has to be a decision, not an accident."""
+    seen = {}
+    claims = [_claim(claim_id=f"CLM-00{i}") for i in (1, 2, 3)]
+    resp = _export(monkeypatch, claims, seen,
+                   "/api/batches/LOT-2024-09-15/export.csv?offset=25&limit=1")
+    assert seen["limit"] is None and "offset" not in seen
+    assert len(_rows(resp)) == 1 + 3
+
+
+def test_export_is_a_csv_attachment_named_for_the_lot_and_its_filter(monkeypatch):
+    resp = _export(monkeypatch, [_claim()],
+                   url="/api/batches/LOT-2024-09-15/export.csv?status_filter=disputable")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert resp.headers["content-disposition"] == \
+        'attachment; filename="claims_LOT-2024-09-15_disputable.csv"'
+
+
+def test_export_header_is_the_documented_column_set_in_order(monkeypatch):
+    """Spelled out rather than compared to server._CSV_COLUMNS, which would assert nothing: an
+    analyst's spreadsheet is built on these names in this order, so a rename costs two edits."""
+    assert _rows(_export(monkeypatch, [_claim()]))[0] == [
+        "claim_id", "po_id", "retailer", "claimed_reason", "claim_date", "claimed_amount_usd",
+        "age_days", "priority", "priority_reason", "verdict", "agent_verdict", "disposition",
+        "override_verdict", "decided_verdict", "note", "decided_at", "decision_stale",
+    ]
+
+
+def test_the_export_states_money_as_decimal_dollars_excel_can_sum(monkeypatch):
+    """A column of raw cents lets the analyst sum to a number 100x wrong with nothing saying so."""
+    resp = _export(monkeypatch, [_claim(claimed_amount=20000), _claim(claimed_amount=3005),
+                                 _claim(claimed_amount=7)])
+    amounts = [row[5] for row in _rows(resp)[1:]]
+    assert amounts == ["200.00", "30.05", "0.07"]
+    # Scoped to the column, not the body: `priority_reason` is server-generated prose that says
+    # "$200.00 at risk" and is a column of its own — the money *sentence* keeps its currency symbol,
+    # the money *number* must not.
+    assert not any("$" in a or "," in a for a in amounts)
+
+
+def test_the_export_carries_raw_verdicts_not_the_ui_labels_lib_js_owns(monkeypatch):
+    """verdictLabel's INVALID->"Disputable" map is defined in lib.js and nowhere else. A Python copy
+    would be the first duplicated mapping here that no gate can compare: node --test cannot see
+    ui/server.py and pytest cannot see lib.js. The screen owns the words, the file owns the tokens."""
+    resp = _export(monkeypatch, [_claim(status="INVALID", agent_status="ESCALATE")])
+    row = _rows(resp)[1]
+    assert row[9] == "INVALID" and row[10] == "ESCALATE"
+    body = resp.content.decode("utf-8-sig")
+    for label in ("Disputable", "Conceded", "Your call"):
+        assert label not in body
+
+
+def test_a_claim_with_no_human_decision_exports_empty_cells_not_the_word_none(monkeypatch):
+    """Most of the lot is undecided, so an f-string in the writer would put the literal "None" in six
+    columns of nearly every row — which an analyst reads as data."""
+    resp = _export(monkeypatch, [_claim()])
+    row = _rows(resp)[1]
+    assert row[11:16] == ["", "", "", "", ""]
+    assert row[16] == "no"
+    assert "None" not in resp.content.decode("utf-8-sig")
+
+
+def test_a_stale_decision_says_yes_in_words_not_a_locale_dependent_boolean(monkeypatch):
+    """Excel translates its own TRUE/FALSE (WAHR in a German install), so a coerced bool is the one
+    cell whose displayed value depends on the machine that opened the file."""
+    resp = _export(monkeypatch, [_claim(disposition="accept", decided_verdict="VALID",
+                                        note="agreed on the call", decision_stale=True)])
+    row = _rows(resp)[1]
+    assert row[16] == "yes"
+    assert "True" not in resp.content.decode("utf-8-sig")
+
+
+def test_export_rows_end_with_crlf_because_that_is_what_rfc_4180_and_excel_want(monkeypatch):
+    """The line-terminator pin. tools/generate_source_systems.py overrides csv's default to "\\n" for
+    git-stable committed bytes; nothing about a download is committed, so that helper must not be
+    reused here — and this is the test that notices if someone tries."""
+    body = _export(monkeypatch, [_claim(), _claim(claim_id="CLM-002")]).content.decode("utf-8-sig")
+    assert body.count("\r\n") == 3          # header + two rows
+    assert "\n" not in body.replace("\r\n", "")
+
+
+def test_export_starts_with_a_utf8_bom_so_excel_reads_the_encoding(monkeypatch):
+    """Without it Excel reads UTF-8 as the system codepage and mangles any non-ASCII an analyst typed
+    into a note — the one column whose whole job is fidelity to their own words."""
+    resp = _export(monkeypatch, [_claim(disposition="override", note="retailer conceded — see thread")])
+    assert resp.content.startswith(b"\xef\xbb\xbf")
+    assert _rows(resp)[1][14] == "retailer conceded — see thread"
+
+
+def test_the_export_round_trips_a_note_containing_a_comma_a_quote_and_a_newline(monkeypatch):
+    """Proves the file is parseable and blocks any future hand-rolled string joining."""
+    note = 'they said "short by 12", so:\nwe disputed it, twice'
+    resp = _export(monkeypatch, [_claim(disposition="override", note=note)])
+    assert _rows(resp)[1][14] == note
+
+
+def test_a_note_that_looks_like_a_formula_is_exported_verbatim(monkeypatch):
+    """Deliberately unguarded. Every available escape is worse than the problem: a leading "'" is an
+    Excel-only convention that becomes a literal apostrophe in Sheets, pandas and csv.reader, trading
+    a rare loud mangling (#NAME?, with the note still intact in the app and the DB) for a universal
+    silent one. The injection threat model is empty besides — one person, 127.0.0.1, no auth."""
+    resp = _export(monkeypatch, [_claim(disposition="override", note="-12 EACH, not 20")])
+    assert _rows(resp)[1][14] == "-12 EACH, not 20"
+
+
+def test_export_unknown_batch_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "batch_exists", lambda b: False)
+    resp = client.get("/api/batches/nope/export.csv")
+    assert resp.status_code == 404 and "unknown batch" in resp.json()["error"]
+
+
+def test_export_rejects_a_bad_query_with_422_rather_than_exporting_the_wrong_rows(monkeypatch):
+    """Worse than the on-screen case: a file of plausible wrong rows leaves the app, gets emailed,
+    and carries nothing saying which query produced it."""
+    def boom(batch_id, **kwargs):
+        raise ValueError("unknown sort: 'nope' (expected one of age, amount, claim_id)")
+
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "batch_claims", boom)
+    resp = client.get("/api/batches/LOT-2024-09-15/export.csv?sort=nope")
+    assert resp.status_code == 422 and "unknown sort" in resp.json()["error"]
 
 
 # --- batch bulk-run SSE --------------------------------------------------------------------------

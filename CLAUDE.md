@@ -146,6 +146,9 @@ from a deductions analyst's seat). Full detail in `docs/PLAN.md`:
 39. Explainability — reasoning, runs, checks, timeline
 40. Run transparency — a batch stream that survives one claim failing
 41. Export, print, light mode, density
+42. The run picker — open an older run honestly (reassigned here from Layer 39's deferral, approved
+    2026-07-29: Layer 39 deferred it "to Layer 41" while Layer 41's own scope never received it, so it
+    became its own layer rather than a quiet drop. Detail in `docs/PLAN.md`.)
 
 **Rule:** Do not start layer N+1 until layer N has passing tests. Check PROGRESS.md for
 current state before starting any session.

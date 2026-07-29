@@ -246,7 +246,7 @@ def _check_date(value: str | None, name: str) -> None:
 def batch_claims(
     batch_id: str,
     offset: int = 0,
-    limit: int = 25,
+    limit: int | None = 25,
     status_filter: str = "all",
     sort: str = "claim_id",
     direction: str | None = None,
@@ -267,6 +267,11 @@ def batch_claims(
     Raises ValueError on an unrecognised filter, sort, direction, date or page bound. It used to
     fall back to "all"/claim_id, which hands back a plausible page of the *wrong* rows — worse than
     an error, because nothing on screen says so.
+
+    `limit=None` means the whole filtered set — the CSV export, where the only correct file is the
+    filtered set unpaginated (mirrors `unresolved_claim_ids(cap=None)`). It bypasses `_MAX_LIMIT`
+    deliberately: that cap bounds an interactive *page* — a response the browser renders and a pager
+    walks — not a download. `offset` keeps its meaning under either.
     """
     _check(status_filter, _STATUS_FILTERS, "status_filter")
     _check(sort, _SORT_SQL, "sort")
@@ -275,7 +280,9 @@ def batch_claims(
     _check(direction, _DIRECTIONS, "direction")
     _check_date(date_from, "date_from")
     _check_date(date_to, "date_to")
-    if not 1 <= limit <= _MAX_LIMIT:
+    # `None` is the only spelling of "unbounded". A negative limit still raises, or `?limit=-1` on the
+    # *interactive* route would reach SQLite's "no upper bound" and dump the whole lot into the grid.
+    if limit is not None and not 1 <= limit <= _MAX_LIMIT:
         raise ValueError(f"limit must be between 1 and {_MAX_LIMIT}, got {limit}")
     if offset < 0:
         raise ValueError(f"offset must not be negative, got {offset}")
@@ -319,13 +326,19 @@ def batch_claims(
             f"FROM deduction_claims c {_JOINS} WHERE {where_sql}",
             params,
         ).fetchone()
+        # SQLite reads a negative LIMIT as "no upper bound", which is how `limit=None` reaches SQL
+        # with OFFSET still applied. Binding `None` is not an option — SQLite raises "datatype
+        # mismatch" — and dropping both clauses instead would leave `offset` accepted and then not
+        # applied, quietly returning different rows than the caller asked for. The SQL string below
+        # is therefore identical under either call: only the bound value changes.
+        row_limit = -1 if limit is None else limit
         rows = conn.execute(
             "SELECT c.claim_id, c.po_id, c.retailer, c.claimed_reason, c.claimed_amount, "
             f"c.claim_date, {_EFFECTIVE_VERDICT}, r.final_verdict, d.disposition, d.override_verdict, "
             f"d.decided_verdict, d.note, d.decided_at, {_DECISION_STALE} "
             f"FROM deduction_claims c {_JOINS} "
             f"WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
-            [*params, *order_params, limit, offset],
+            [*params, *order_params, row_limit, offset],
         ).fetchall()
     claims = [
         {

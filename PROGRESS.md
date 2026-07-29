@@ -1,6 +1,133 @@
 # Progress
 
 ## Current layer
+**Layer 41 — Export, print, light mode, density — complete**
+
+Ninth and last of the Layers 33–41 UX-remediation phase. No agent/prompt/verdict-logic changes, no
+fixture edits, **no schema change**; the 8 ground-truth verdicts are untouched and the fidelity oracle
+was re-run explicitly. Layers 33–40 made the worklist correct, workable, explainable and honest about
+what a paid run costs. What the analyst still could not do was **get work out of it**: no route into
+Excel, no way to put a claim's evidence into a dispute file, no support for a light-scheme OS, and the
+smallest labels on the page were the ones they scan most.
+
+**The deferred run picker became Layer 42 rather than a quiet drop.** The disagreement the Layer 40
+notes flagged was real: Layer 39 deferred the picker and `?run_id=` "to Layer 41", while Layer 41's own
+bullets never mentioned it. Sized honestly it is `?run_id=` on three routes with a traversal guard, a
+clickable run list, the verdict chip re-sourced per run, an off-latest marker, a disabled decision bar
+and a new hash key — as much work as the rest of Layer 41 together, all of it in the ungated DOM layer
+that produced the 37b and 39 bugs. It is written up as Layer 42 in `docs/PLAN.md`, and `CLAUDE.md`,
+`README.md` and this file all point there.
+
+**One writer, no second copy of anything.** `batch_claims` gained `limit: int | None`, and `None`
+reaches SQL as **`LIMIT -1 OFFSET ?`** — SQLite's own "no upper bound". Binding `None` raises "datatype
+mismatch", and the shape the plan suggested copying from `unresolved_claim_ids`
+(`if cap is not None: sql += " LIMIT ?"`) has no `offset` to lose: here it would have left `offset`
+accepted and then unapplied, the accepted-but-ignored-parameter failure 37a removed. The SQL string is
+byte-identical under either call; only the bound value changes. A negative limit still raises, or
+`?limit=-1` on the *interactive* route would dump the whole lot into the paged grid. **No new bounds
+test**, deliberately: `test_page_bounds_are_rejected_rather_than_clamped` passes unmodified, which is
+the tell that widening the type did not widen the contract — the same tell Layer 38 used.
+
+**The CSV carries raw machine verdicts.** `verdictLabel`'s `INVALID → "Disputable"` map is defined in
+`lib.js` and nowhere else, and a Python copy would be the first duplicated mapping in this repo that
+**no gate can compare**: `node --test` cannot see `ui/server.py` and `pytest` cannot see `lib.js`. The
+screen owns the words, the file owns the tokens — which is also what the SUMIFs reading it want. Money
+is a plain `claimed_amount_usd` decimal (a cents column sums to a number 100x wrong with nothing saying
+so); `decision_stale` is `yes`/`no` because Excel translates its own booleans (`WAHR` in a German
+install); rows are handed to `csv.writer` as lists so `None` renders empty rather than as the literal
+`None` in six columns of nearly every row; a UTF-8 BOM leads the body. The route declares no
+`offset`/`limit` and **ignores them if sent** — the client's own `queryParams` always emits both, so
+422-ing would break the download for a URL the app itself builds, and over-delivering correctly-filtered
+rows is never wrong. A test pins that so "ignored" stays a decision.
+
+**The formula guard was planned and then deliberately not built.** A note beginning `-` or `=` renders
+as `#NAME?` in Excel, but every available escape is worse than the problem: a leading `'` is an
+Excel-only convention that becomes a *literal apostrophe* in Sheets, pandas and `csv.reader` — trading a
+rare, loud mangling (the note is still intact in the app and the DB) for a universal, silent one, in the
+one column whose whole job is fidelity to the analyst's words. The injection threat model is empty
+besides: author and reader are the same person on `127.0.0.1` with no auth. A test asserts the verbatim
+behaviour and explains why, so the next person to "improve" it fails a test that argues back.
+
+**Print and light mode share one palette declaration**, `@media print, (prefers-color-scheme: light)`.
+Two copies of a palette drift, and print is only ever wanted in the light one — a dark page prints as a
+sheet of ink, or, once the browser drops backgrounds, as `#8b93a3` on white. Five colour literals were
+first extracted to role-named tokens (`--btn-fg`, `--row-hover`, `--row-selected`, `--tab-active-bg`,
+`--bar-bg`) at byte-identical values, so the dark theme is provably unchanged. The greens and reds are
+**re-tuned, not reused**: `--ok #3fb950` on white measures **2.54:1**.
+
+**Print is one claim's dossier, not a screenshot of the app** — PLAN.md's "analysts PDF dispute files"
+names the use. The worklist pane and every control come off; the four stickies unpin, the scrollers and
+the `max-height` go, and the grid collapses. `.ws-body` **stays `display: flex`**: switching it to block
+would silently drop its `gap: 18px`. The block sits last in the stylesheet for both reasons the
+stacked-layout block does — plain-class selectors that tie on specificity, *and* because a print sheet is
+~688px, below the 1360px breakpoint, so both blocks match at once and this one has to win.
+
+**Verification.** `scripts/check.sh` — `pytest` **463 passed, 10 deselected** (was 446); `pyright` 0
+errors; `node --test` **174 passing** (was 170). Explicit `pytest tests/test_etl.py tests/test_db.py` —
+59 passed, so the fidelity oracle is untouched (confirmed, not assumed, as in Layers 34/35/37a/38/39/40).
+The `limit=None` change was **mutation-tested**: restoring the old guard fails both new tests with
+exactly the documented `TypeError`.
+
+**Live.** Real `uvicorn` against the real `data/deductions.db`, driven headless over CDP —
+**read-only, every request a GET, no writes, no OpenRouter run**; the DB was confirmed afterwards at its
+original 52 resolutions / 6 dispositions. ~75 assertions across six passes, plus a rendered contrast
+audit and a real PDF.
+
+- **The CSV is the filtered set, on real data.** `retailer=walmart` → the queue reports 13 claims /
+  $354.00 and the download has **13 data rows summing to exactly $354.00**, with a real override note
+  (`UOM looks right to me`) carried through. The full lot exports **50 rows where the page shows 25**,
+  and `?offset=25&limit=1` still returns all 50. 404 and 422 both confirmed against the live route.
+- **A real printed PDF, not just a computed style.** Rendered to a 3-page dossier and read back with
+  `pdftotext`: **14 required elements present** (claim id, lot provenance, source documents, the PO,
+  reconciliation, the UOM callout, the out-of-order timeline finding, all seven checks with the real
+  FAIL, both reasonings, dispute grounds, the recorded decision) and **11 absent** (the worklist, the
+  filter tabs, Export CSV, Accept/Override, Process lot, the pager, the keymap, any other claim, the
+  audit drawer, the pane titles). Geometry at true paper width: the worklist measures 0×0, the dossier
+  fills 688px from the left margin, nothing pinned, no horizontal overflow.
+- **A rendered contrast audit, not palette arithmetic.** Every text node on the page composited against
+  its actual background: **light 0 failures over 395 nodes** (lowest 4.60), **print 0 over 113**.
+- **Greyscale:** the verdict reads `+ Disputable`, every check states `PASS`/`FAIL`/`N/A` in words, and
+  the backwards interval says `1 day earlier · out of order`.
+
+**Three things only the running app showed.**
+
+1. **`break-inside: avoid` on `.block` wasted a third of a printed page.** "Why this verdict" is two
+   paragraphs of model prose, and making a whole *section* unbreakable pushed it onto a fresh sheet —
+   measured, page 2 two-thirds empty. Prose is supposed to flow across a page, and `avoid` is ignored
+   anyway once a block exceeds one page, so it was inconsistent as well as wasteful. Now scoped to the
+   **atomic** units (`.doc`, `.check-row`, `.tl-event`, `.callout`, `table.recon`, `.tl-gap`) with
+   `break-after: avoid` on the headings; page 2 went **29 → 34 lines** and the reasoning now starts on
+   it with its heading attached.
+2. **The light selection tint failed AA on the verdict text sitting on it.** At `rgba(9,105,218,.10)`
+   the green `+ Disputable` in the status column measured **4.41** against the composited background —
+   missed by .09, and invisible to palette math, which only checks a token against plain `--panel`.
+   Dropped to `.07` (4.60 / 4.86) and re-measured on the rendered page. This is the whole argument for
+   auditing the render rather than the palette.
+3. **The predicted density consequence never happened, for a checkable reason.** The plan said bumping
+   `th` from 10px to 11px would widen the measured 884px pane. It did not: `table { width: 100% }` sizes
+   the table to its scroller (882px), so a header font can only overflow if the columns' *natural* width
+   exceeds it — measured at **867px**, i.e. 15px of headroom. Recorded because the next column added is
+   what spends it. The density pass itself: `th` and `table.doc-t th` to 11px, `th .sort-ind` 9px → 10px,
+   and tracking `.04em → .02em` on those plus `.v-code`/`.agent-tag`. The seven 11–12px labels were left
+   alone on purpose — changing them is taste, not legibility.
+
+**Found and NOT fixed, deliberately.** The **dark** theme carries two pre-existing WCAG AA failures, both
+on a *selected* row where the accent tint lightens the background: `.pill.p-HIGH` at **4.13** and
+`.disp-badge` at **4.48**. Both predate this layer; fixing them means changing shipped dark-theme colours,
+which is a visual decision beyond this layer's ask. Surfaced by the same audit that caught finding 2, and
+reported rather than silently changed.
+
+**Known and deferred:** the run picker, `?run_id=` and the `decided_run_id`/`run_id` plumbing — now
+**Layer 42**, with `has_case_file` deciding which of the 57 run dirs are openable at all (17 predate
+Layer 32). The two dark-mode contrast failures above. `app.js` and the stylesheet remain unreachable by
+every gate, which is why all three findings above came from driving the app; the harness note worth
+keeping is that **`Page.captureScreenshot` under print emulation uses the viewport width, not the page
+width**, so it showed two-column tables stretched across 1200px that read correctly at 688px on real
+paper — the PDF is the only honest print artifact.
+
+---
+
+## Previous layer
 **Layer 40 — Run transparency: a batch stream that survives one claim failing — complete**
 
 Eighth of the Layers 33–41 UX-remediation phase. No agent/prompt/verdict-logic changes, no fixture

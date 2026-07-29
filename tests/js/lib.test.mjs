@@ -10,6 +10,7 @@ import {
   safeClass, selectAllState, sentenceCase, sortIndicator, splitFrames, statusParts, timelineGaps,
   todoSplit, usageLine, verdictLabel,
   batchSummaryLine, runConfirmMessage, runProgressLine, usageTokens,
+  exportUrl,
 } from "../../ui/static/lib.js";
 
 /** The /api/dashboard shape, as ui/queries.py::dashboard_metrics returns it. */
@@ -693,6 +694,38 @@ describe("queryParams", () => {
     assert.equal(one.status_filter, "all");
     assert.equal(one.limit, "100");
     assert.equal(one.q, "CLM-042");
+  });
+});
+
+describe("exportUrl", () => {
+  const base = { page: 3, size: 25, filter: "disputable", sort: "amount", direction: "asc",
+                 q: "walmart", retailer: "kroger", reason: "shortage",
+                 date_from: "2024-01-01", date_to: "2024-06-30" };
+  const query = (state) => Object.fromEntries(
+    new URL(exportUrl("LOT-2024-09-15", state), "http://x").searchParams);
+
+  it("carries every filter the queue is showing", () => {
+    // The file has to describe the same set of claims the analyst is looking at.
+    assert.deepEqual(query(base), {
+      status_filter: "disputable", sort: "amount", direction: "asc", q: "walmart",
+      retailer: "kroger", reason: "shortage", date_from: "2024-01-01", date_to: "2024-06-30",
+    });
+  });
+
+  it("strips paging, because the export is the whole filtered set", () => {
+    // queryParams always sets both; sending limit=25 with a 137-row file would describe the request
+    // as something it is not. The server ignores them either way.
+    const q = query(base);
+    assert.equal("offset" in q, false);
+    assert.equal("limit" in q, false);
+  });
+
+  it("omits an unset direction, leaving the column's default to the server", () => {
+    assert.equal("direction" in query({ ...base, direction: null }), false);
+  });
+
+  it("percent-encodes the batch id rather than splicing it into the path", () => {
+    assert.match(exportUrl("LOT/../etc", {}), /^\/api\/batches\/LOT%2F\.\.%2Fetc\/export\.csv\?/);
   });
 });
 
