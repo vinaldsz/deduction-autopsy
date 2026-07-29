@@ -51,6 +51,10 @@
       border: 1px solid var(--bad); color: var(--bad); border-radius: 8px; padding: 10px 14px;
       margin: 0 24px 12px; display: flex; align-items: center; gap: 12px;
     }
+    /* Must be an ID selector too: `.hidden { display: none }` is specificity 0-1-0 and loses to
+       `#banner`'s 1-0-0 whatever the source order, so the banner shipped permanently visible — an
+       empty red box on every page load, with a dismiss button that couldn't dismiss it. */
+    #banner.hidden { display: none; }
     #banner-msg { flex: 1; }
     #banner button { color: var(--bad); border-color: var(--bad); }
 
