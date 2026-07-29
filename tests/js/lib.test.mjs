@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  confidenceBand, discrepancyPhrase, dollars, dollarsCompact, lotSubtitle, sentenceCase, todoSplit,
+  ageLabel, buildHash, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars, dollarsCompact,
+  lotSubtitle, parseHash, priorityLegend, queueFooter, sentenceCase, sortIndicator, todoSplit,
   verdictLabel,
 } from "../../ui/static/lib.js";
 
@@ -234,5 +235,140 @@ describe("lotSubtitle", () => {
     // The empty store: dashboard_metrics returns batch: null, and a blank header reads as broken.
     assert.match(lotSubtitle({ ...METRICS, batch: null }), /run the ETL/i);
     assert.match(lotSubtitle(null), /run the ETL/i);
+  });
+});
+
+// --- Layer 37b: the URL is the description of what you're looking at --------------------------------
+
+describe("parseHash", () => {
+  it("reads a full worklist state out of a hash", () => {
+    const s = parseHash("#filter=disputable&sort=amount&dir=asc&q=walmart&page=3&size=50" +
+      "&retailer=kroger&reason=shortage&from=2024-09-01&to=2024-09-15&claim=CLM-002");
+    assert.deepEqual(s, {
+      filter: "disputable", sort: "amount", direction: "asc", q: "walmart", page: 3, size: 50,
+      claim: "CLM-002", retailer: "kroger", reason: "shortage",
+      date_from: "2024-09-01", date_to: "2024-09-15",
+    });
+  });
+
+  it("falls back to the defaults for an empty or absent hash", () => {
+    assert.deepEqual(parseHash(""), DEFAULT_STATE);
+    assert.deepEqual(parseHash("#"), DEFAULT_STATE);
+    assert.deepEqual(parseHash(null), DEFAULT_STATE);
+    assert.deepEqual(parseHash(undefined), DEFAULT_STATE);
+  });
+
+  it("sanitizes every unrecognised value instead of passing it to the API", () => {
+    // The API rejects these with 422 (Layer 37a). A stale bookmark is the client's own mess, so it
+    // lands on the default rather than erroring the whole page — e.g. `needs_me`, a filter key that
+    // Layer 35 renamed out of existence.
+    const s = parseHash("#filter=needs_me&sort=nope&dir=sideways&size=7&page=0");
+    assert.equal(s.filter, DEFAULT_STATE.filter);
+    assert.equal(s.sort, DEFAULT_STATE.sort);
+    assert.equal(s.direction, null);
+    assert.equal(s.size, DEFAULT_STATE.size);
+    assert.equal(s.page, 1);
+  });
+
+  it("rejects a page number that isn't a positive integer", () => {
+    for (const page of ["0", "-4", "abc", "25abc", "2.5e9999", ""]) {
+      assert.equal(parseHash(`#page=${page}`).page, 1, page);
+    }
+    assert.equal(parseHash("#page=12").page, 12);
+  });
+
+  it("rejects a date that only looks like one", () => {
+    // Shape alone is not enough: claim_date is stored as a string, so the server would compare
+    // "2024-13-45" lexicographically and quietly return the wrong rows rather than complain.
+    assert.equal(parseHash("#from=2024-13-45").date_from, null);
+    assert.equal(parseHash("#from=2024-02-30").date_from, null);
+    assert.equal(parseHash("#from=yesterday").date_from, null);
+    assert.equal(parseHash("#from=2024-9-1").date_from, null);
+    assert.equal(parseHash("#from=2024-09-01").date_from, "2024-09-01");
+    assert.equal(parseHash("#from=2024-02-29").date_from, "2024-02-29");  // a real leap day
+  });
+
+  it("passes retailer and reason through unvalidated", () => {
+    // Deliberate: an unknown retailer returns no rows, which is the honest answer to "show me claims
+    // from a retailer that isn't in this lot" — not something to silently rewrite.
+    assert.equal(parseHash("#retailer=nobody").retailer, "nobody");
+  });
+});
+
+describe("buildHash", () => {
+  it("omits everything at its default so a shared link carries only what changed", () => {
+    assert.equal(buildHash(DEFAULT_STATE), "");
+    assert.equal(buildHash({ ...DEFAULT_STATE, filter: "all" }), "#filter=all");
+    assert.equal(buildHash({ ...DEFAULT_STATE, page: 1, size: 25 }), "");
+  });
+
+  it("round-trips every state parseHash can produce", () => {
+    for (const state of [
+      DEFAULT_STATE,
+      { ...DEFAULT_STATE, filter: "decided", sort: "age", direction: "asc", page: 4 },
+      { ...DEFAULT_STATE, q: "walmart", size: 100, claim: "CLM-SYN-0009" },
+      { ...DEFAULT_STATE, retailer: "kroger", reason: "promo_billback",
+        date_from: "2024-09-01", date_to: "2024-09-15" },
+    ]) {
+      assert.deepEqual(parseHash(buildHash(state)), state, JSON.stringify(state));
+    }
+  });
+
+  it("keeps a null direction out of the URL", () => {
+    // null means "server's choice of default for this column"; writing it as a value would freeze
+    // the client's guess at that default into every link it ever produced.
+    assert.equal(buildHash({ ...DEFAULT_STATE, sort: "amount" }), "#sort=amount");
+    assert.equal(buildHash({ ...DEFAULT_STATE, sort: "amount", direction: "desc" }),
+      "#sort=amount&dir=desc");
+  });
+});
+
+describe("sortIndicator", () => {
+  it("marks only the sorted column, in the direction the server applied", () => {
+    assert.equal(sortIndicator("amount", "amount", "desc"), "▼");
+    assert.equal(sortIndicator("amount", "amount", "asc"), "▲");
+    assert.equal(sortIndicator("age", "amount", "desc"), "");
+  });
+
+  it("shows nothing until the server has answered", () => {
+    // appliedSort is null before the first response. An arrow drawn from the *request* would point
+    // at a sort the table may not be in — `direction` goes out null most of the time.
+    assert.equal(sortIndicator("amount", null, null), "");
+    assert.equal(sortIndicator(null, null, null), "");
+  });
+});
+
+describe("priorityLegend", () => {
+  it("states the bands from the server's own thresholds", () => {
+    const legend = priorityLegend({ high_cents: 15000, med_cents: 5000, age_days: 45 });
+    assert.match(legend, /HIGH \$150\.00\+ at risk, or older than 45 days/);
+    assert.match(legend, /MEDIUM \$50\.00\+/);
+    assert.match(legend, /LOW everything else/);
+  });
+
+  it("says nothing rather than inventing thresholds when there are none", () => {
+    assert.equal(priorityLegend(null), "");
+    assert.equal(priorityLegend(undefined), "");
+  });
+});
+
+describe("ageLabel", () => {
+  it("renders days compactly and admits a missing value", () => {
+    assert.equal(ageLabel(239), "239d");
+    assert.equal(ageLabel(0), "0d");
+    assert.equal(ageLabel(null), "—");
+    assert.equal(ageLabel(undefined), "—");
+  });
+});
+
+describe("queueFooter", () => {
+  it("totals the filtered set and says that it is filtered", () => {
+    assert.deepEqual(queueFooter(13, 35400, true), { label: "13 claims, filtered", amount: "$354.00" });
+    assert.deepEqual(queueFooter(50, 371140, false), { label: "50 claims", amount: "$3,711.40" });
+  });
+
+  it("agrees with itself on one claim", () => {
+    assert.equal(queueFooter(1, 3000, false).label, "1 claim");
+    assert.equal(queueFooter(0, 0, true).label, "0 claims, filtered");
   });
 });

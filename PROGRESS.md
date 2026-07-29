@@ -1,6 +1,93 @@
 # Progress
 
 ## Current layer
+**Layer 37b — A grid you can work complete**
+
+The frontend half of the Layer 37 split. Consumes everything 37a started serving and nothing else:
+**no Python change at all**, `pytest` stayed at exactly 409 passed / 10 deselected, and `node --test`
+went 32 → 48. No agent/prompt/verdict-logic changes, no fixture edits; the 8 ground-truth verdicts are
+untouched.
+
+**The grid.** Eight columns (Claim, PO, Retailer, Reason, Amount, Age, Priority, Status) — `po_id` had
+been returned and searchable since Layer 30b and never rendered, so a search that matched on it showed
+rows with no visible reason for matching. Sortable headers carry ▲/▼ and are the only ones with
+`cursor: pointer` (it was on all eight, including the four that do nothing). A `<tfoot>` totals the
+**filtered set**, saying "13 claims, filtered · $354.00", and a page-size selector offers 25/50/100.
+The priority legend states the banding rules from the server's `priority_thresholds`, and each pill
+carries its own `priority_reason` as `title` + `aria-label` — the *visible* statement of the rule is
+the legend, because Layer 36 already established that a `title` tooltip alone is keyboard-inaccessible.
+
+**The URL is now the description of the view.** `#filter=&sort=&dir=&q=&page=&size=&retailer=&reason=
+&from=&to=&claim=`, with anything at its default omitted so a clean view has no hash. New pure
+`parseHash`/`buildHash` in `lib.js` (hence covered by `node --test`) **sanitize** every unrecognised
+value to its default — the deliberate mirror image of 37a's 422. A stale bookmark is the client's own
+mess and erroring the page over one is not a fix; an API that quietly substitutes a different query
+*is* a lie. This is what finally closes the Layer 35 deferred `?status_filter=needs_me` note, from both
+ends.
+
+Three details are load-bearing:
+
+1. **`dir` is omitted, not defaulted.** The useful first click per column (desc for money and age, asc
+   for ids and names) lives in `ui/queries.py`; mirroring that table into `lib.js` would be a second
+   copy free to drift. So the client sends `direction: null` for a new column and flips only what the
+   server **echoes back** — which is also why `sortIndicator` reads `appliedSort`/`appliedDirection`
+   and not the request. An arrow drawn from the request would point at a sort the table may not be in.
+2. **A `writingHash` flag distinguishes our own hash write from a real navigation**, so `hashchange`
+   drives back/forward without the app re-entering itself on every click.
+3. **`parseHash` uses a strict digit test, not `Number.parseInt`.** `parseInt` stops at the first
+   non-digit, so `page=2.5e9999` parsed as page 2 and `size=25abc` as 25 — leniency in the one
+   function whose entire job is to distrust the URL. Caught by a test, fixed in the source rather
+   than by relaxing the assertion.
+
+**The bug only the running app could show.** A deep link to a claim **never opened the review pane at
+all**. `restoreSelection` guarded on `state.selectedClaim`, but `loadQueue` re-points that at the
+freshly-loaded row *before* restore runs — so the guard matched and returned while the pane was still
+empty. `selectedClaim` (which row's data is loaded) and `renderedClaim` (what the pane is displaying)
+are different questions, and the new `state.renderedClaim` keeps them apart. Confirmed by reverting
+the guard and watching the pane header come back empty. No test could have caught it: `app.js` is
+DOM+fetch and deliberately outside the `node --test` boundary — the same gap Layer 35 recorded for
+static CSS, now demonstrated for render state.
+
+**Also found by looking, and measured rather than guessed.** `CLM-SYN-0003` wrapped across three lines
+on its hyphens and "Wrong item" took two, so row heights ran 37–56px and a screen held a third fewer
+claims. `white-space: nowrap` on `tbody td` fixed it; the eight columns' natural width then measured
+829px, so the pane went 540 → **850px** (breakpoint 1024 → 1360px) — and the table now lives in an
+`overflow-x: auto` scroller, so the *next* column added degrades to a visible scrollbar instead of
+being clipped silently inside `.pane { overflow: hidden }`, which is what went unnoticed from Layer 32
+to Layer 36.
+
+**Verification.** `scripts/check.sh` — `pytest` **409 passed, 10 deselected** (unchanged, as
+predicted); `pyright` 0 errors; `node --test` **48 passing** (was 32).
+
+**Live.** Real `uvicorn` against the real DB, driven headless over CDP, **read-only — no writes, no
+OpenRouter run**. Grid: 848px table in an 850px pane, zero overflow, uniform 37px rows, review pane
+686px with no table overflowing. Sorting: Amount ▼ → ▲ → Age hands the default back (no `dir=` in the
+URL), and the $180.00 tie group came back in claim_id order — 37a's tiebreaker visible in the UI.
+Filters: `retailer=walmart` → 13 rows and a footer of `13 claims, filtered · $354.00`, unchanged when
+the page size went 25 → 100 (the filtered-not-page invariant, on real data); Clear reset every control
+and the URL. Routing: click → URL gains the claim; refresh reopens it; back and forward both restore
+pane *and* row in agreement; a claim on page 2 opens through the targeted-lookup fallback; page 2
+keeps the sort and the total. The stale bookmark
+`#filter=needs_me&sort=nope&dir=sideways&size=7&page=0&from=2024-13-45` landed on To do / Priority ▼ /
+25 / empty date with **no error banner**. Then a `filter: grayscale(1)` pass: every verdict still
+readable from glyph + word, ids on one line, 14 rows on screen where there had been 10.
+
+**A false bug report, and the harness fault behind it.** The first CDP run reported the review pane
+showing one claim under another claim's highlighted row. It was real in the sense that the guard bug
+existed — but the evidence was not: `Page.navigate` between two URLs differing only in the hash is a
+*same-document* navigation, so no reload and no module re-import happened, and every assertion after
+the first was silently testing the code loaded at the very first navigation. `Page.reload` straight
+afterwards doesn't help — it races the commit and reloads the *previous* URL. Bouncing through
+`about:blank` does. Recorded in `docs/PLAN.md` too, because a UI harness that quietly tests stale code
+will manufacture findings like this every time it is used.
+
+**Known and deferred:** `app.js` remains untested by construction (the `lib.js` boundary is the design;
+this layer moved six more pure functions across it), so DOM wiring and static CSS are still verified
+only by looking at the running app. Layers 38–41 continue the phase.
+
+---
+
+## Previous layer
 **Layer 37a — Query surface for a grid you can work complete**
 
 Fifth of the Layers 33–41 UX-remediation phase, and the first half of a **split**: `docs/PLAN.md`'s

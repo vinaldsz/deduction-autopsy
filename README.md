@@ -63,6 +63,7 @@ was gated on sign-off — it is the only layer that edits the agent prompts):
 | 35 | KPIs that add up — to-do/decided partition, `v_batch_summary` dropped | ✅ Done |
 | 36 | Verdict semantics that match the money — tone keyed to money direction, not verdict name | ✅ Done |
 | 37a | Query surface for a workable grid — total sort order, filters, filtered totals, 422 on bad input | ✅ Done |
+| 37b | A grid you can work — PO/Age columns, sort indicators, filtered total, page size, URL-hash routing | ✅ Done |
 | — | Layer-end verification tooling (`scripts/check.sh`, `/layer-done`, `tests/test_invariants.py`) | ✅ Done |
 
 ## Setup

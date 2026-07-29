@@ -668,14 +668,29 @@ at the running app. One commit each.
 - `ui/static/`: PO and Age columns (`po_id` was already returned and searchable but never rendered);
   `cursor:pointer` scoped to `th.sortable`; sort indicators; a `<tfoot>` total; page-size selector;
   the priority thresholds stated in the UI; URL-hash routing for filter/sort/search/page/selection.
-- Left pane widened to ~700px (**measured over CDP**, as Layer 36 measured its 540px) and the table
-  wrapped in an `overflow-x: auto` scroller, so the next column added degrades to scrolling instead of
-  clipping silently inside `.pane { overflow: hidden }` — the defect that went unnoticed from Layer 32
-  to Layer 36. Breakpoint 1024→1200px.
+- Left pane widened to **850px** (**measured over CDP**, as Layer 36 measured its 540px — the eight
+  columns' natural width is 829px) and the table wrapped in an `overflow-x: auto` scroller, so the
+  next column added degrades to scrolling instead of clipping silently inside
+  `.pane { overflow: hidden }` — the defect that went unnoticed from Layer 32 to Layer 36.
+  Breakpoint 1024→1360px.
 - Hash routing gets pure `parseHash`/`buildHash` in `ui/static/lib.js` that **sanitize unknown values
   to defaults client-side**. Not in tension with 37a's 422: the client is responsible for its own
   stale bookmarks, and the API is responsible for not lying about what it did.
 - **Verify:** `node --test`; deep-link a URL, refresh, confirm restore.
+- **What the build added.** `state.renderedClaim` alongside `state.selectedClaim`. They answer
+  different questions — which row's *data* is loaded vs. which claim the review pane is *displaying*
+  — and `loadQueue` re-points the former on every reload. Guarding selection-restore on
+  `selectedClaim` therefore matched before the pane had rendered anything, so a **deep link to a
+  claim never opened the review pane at all**. Found by driving the running app; no test could have
+  caught it, since `app.js` is DOM+fetch and deliberately outside the `node --test` boundary.
+- **Rows never wrap.** `CLM-SYN-0003` broke across three lines on its hyphens and "Wrong item" took
+  two, so row heights were ragged and a screen held a third fewer claims. `white-space: nowrap` on
+  `tbody td`, and the pane sized to the resulting measured width.
+- **CDP harness note, worth keeping.** `Page.navigate` between two URLs differing only in the hash is
+  a *same-document* navigation: no reload, no module re-import. A harness that uses it to "load a
+  page" silently tests whatever code was loaded first — which is exactly what happened here, and it
+  produced a convincing false bug report before it was caught. Bounce through `about:blank`;
+  `Page.reload` straight after `Page.navigate` races the commit and reloads the previous URL.
 
 ### 38. Working the volume
 

@@ -2,15 +2,26 @@
 // `node --test` can reach it (tests/js/). No framework, no build step.
 
 import {
-  confidenceBand, discrepancyPhrase, dollars, dollarsCompact, lotSubtitle, sentenceCase, todoSplit,
+  ageLabel, buildHash, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars, dollarsCompact,
+  lotSubtitle, parseHash, priorityLegend, queueFooter, sentenceCase, sortIndicator, todoSplit,
   verdictLabel,
 } from "./lib.js";
 
-const LIMIT = 25;
+// Everything in DEFAULT_STATE is mirrored in the URL hash and sanitized by parseHash. The rest is
+// per-session view state that has no business in a shared link — including `appliedSort`, which is
+// what the *server* reports sorting by, and is what the column indicator reads.
 const state = {
-  batchId: null, offset: 0, total: 0, filter: "todo", sort: "priority", q: "",
-  selected: null, selectedClaim: null,
+  ...DEFAULT_STATE,
+  batchId: null, total: 0, appliedSort: null, appliedDirection: null,
+  // `selectedClaim` is the row DATA for state.claim, re-pointed by loadQueue on every reload.
+  // `renderedClaim` is what the review pane is actually DISPLAYING. They are not the same question,
+  // and conflating them put one claim's evidence under another claim's header — see restoreSelection.
+  selectedClaim: null, renderedClaim: null,
 };
+
+const isFiltered = () =>
+  Boolean(state.q || state.retailer || state.reason || state.date_from || state.date_to) ||
+  state.filter !== "all";
 
 const $ = (id) => document.getElementById(id);
 const banner = $("banner");
@@ -62,6 +73,9 @@ async function loadDashboard() {
     const p = d.priority_breakdown;
     $("m-priority").textContent = `${p.HIGH}/${p.MEDIUM}/${p.LOW}`;
     $("m-oldest").textContent = d.oldest_open_days ? `${d.oldest_open_days}d` : "—";
+    // Generated from the server's own thresholds, so the stated rule and the applied rule are the
+    // same rule. A priority pill that never says what put it there is a number on trust.
+    $("priority-legend").textContent = priorityLegend(d.priority_thresholds);
     state.batchId = d.batch ? d.batch.batch_id : null;
   } catch (err) {
     // Log the real error: the catch also covers render bugs, and without this a
@@ -100,11 +114,22 @@ function renderRow(claim) {
   tr.dataset.claimId = claim.claim_id;
   tr.tabIndex = 0;
   tr.appendChild(el("td", null, claim.claim_id));
+  // po_id was returned and searchable from Layer 30b and never rendered, so a search that matched on
+  // it showed rows with no visible reason for matching.
+  tr.appendChild(el("td", null, claim.po_id));
   tr.appendChild(el("td", null, claim.retailer));
   tr.appendChild(el("td", null, sentenceCase(claim.claimed_reason)));
   tr.appendChild(el("td", "num", dollars(claim.claimed_amount)));
+  tr.appendChild(el("td", "num", ageLabel(claim.age_days)));
   const priority = el("td");
-  priority.appendChild(el("span", `pill p-${claim.priority}`, claim.priority));
+  const pill = el("span", `pill p-${claim.priority}`, claim.priority);
+  // Why this claim is in this band, for the screen reader and the hover. The visible statement of
+  // the rule is the legend above the table — a title attribute alone would be keyboard-inaccessible.
+  if (claim.priority_reason) {
+    pill.title = claim.priority_reason;
+    pill.setAttribute("aria-label", `${claim.priority} priority — ${claim.priority_reason}`);
+  }
+  priority.appendChild(pill);
   tr.appendChild(priority);
   tr.appendChild(statusCell(claim));
   const open = () => selectClaim(claim);
@@ -121,42 +146,100 @@ function setQueueMessage(msg) {
   node.classList.toggle("hidden", !msg);
 }
 
+/** The column headers' ▲/▼, from the sort the server reports applying rather than the one requested
+    — `direction` goes out null most of the time, meaning "your choice". */
+function renderSortIndicators() {
+  document.querySelectorAll("th.sortable").forEach((th) => {
+    const mark = sortIndicator(th.dataset.sort, state.appliedSort, state.appliedDirection);
+    th.classList.toggle("sorted", Boolean(mark));
+    let ind = th.querySelector(".sort-ind");
+    if (!ind) { ind = el("span", "sort-ind"); th.appendChild(ind); }
+    ind.textContent = mark;
+  });
+}
+
+function queryParams(overrides = {}) {
+  const s = { ...state, ...overrides };
+  const params = new URLSearchParams({
+    offset: (s.page - 1) * s.size, limit: s.size, status_filter: s.filter, sort: s.sort,
+  });
+  if (s.direction) params.set("direction", s.direction);
+  for (const [key, value] of [["q", s.q], ["retailer", s.retailer], ["reason", s.reason],
+                              ["date_from", s.date_from], ["date_to", s.date_to]]) {
+    if (value) params.set(key, value);
+  }
+  return params;
+}
+
 async function loadQueue() {
   if (!state.batchId) {
     $("rows").replaceChildren();
     $("page-info").textContent = "";
+    $("queue-foot").classList.add("hidden");
     setQueueMessage("No lot loaded. Run the ETL (python -m semantic_layer.etl), then reload.");
     return;
   }
-  const params = new URLSearchParams({
-    offset: state.offset, limit: LIMIT, status_filter: state.filter, sort: state.sort,
-  });
-  if (state.q) params.set("q", state.q);
   try {
-    const data = await fetchJSON(`/api/batches/${encodeURIComponent(state.batchId)}?${params}`);
+    const data = await fetchJSON(
+      `/api/batches/${encodeURIComponent(state.batchId)}?${queryParams()}`);
     state.total = data.total;
+    state.appliedSort = data.sort;
+    state.appliedDirection = data.direction;
+    renderSortIndicators();
     const rows = $("rows");
     rows.replaceChildren();
     for (const claim of data.claims) rows.appendChild(renderRow(claim));
-    if (state.selected) markSelectedRow(state.selected);
+    if (state.claim) markSelectedRow(state.claim);
     // Re-point the open claim at the freshly-loaded row. Without this `state.selectedClaim` keeps
     // whatever it was selected with, so the decision line, the stale badge and the re-investigate
     // confirmation all reason about data that may be several writes out of date.
-    const reselected = data.claims.find((c) => c.claim_id === state.selected);
+    const reselected = data.claims.find((c) => c.claim_id === state.claim);
     if (reselected) {
       state.selectedClaim = reselected;
       renderDecision(reselected);
       syncOverrideButton();
     }
     setQueueMessage(data.total ? "" : "No claims match this filter.");
-    const shown = data.claims.length ? `${state.offset + 1}–${state.offset + data.claims.length}` : "0";
+    const foot = queueFooter(data.total, data.total_amount_cents, isFiltered());
+    $("queue-foot").classList.toggle("hidden", !data.total);
+    $("foot-label").textContent = foot.label;
+    $("foot-amount").textContent = foot.amount;
+    const offset = (state.page - 1) * state.size;
+    const shown = data.claims.length ? `${offset + 1}–${offset + data.claims.length}` : "0";
     $("page-info").textContent = `${shown} of ${data.total}`;
-    $("prev").disabled = state.offset === 0;
-    $("next").disabled = state.offset + LIMIT >= data.total;
+    $("prev").disabled = state.page === 1;
+    $("next").disabled = offset + state.size >= data.total;
   } catch (err) {
     console.error("loadQueue", err);
     showBanner("Couldn't load the worklist.", loadQueue);
   }
+}
+
+/** The retailers and reasons actually in this lot. Fetched once — the lot doesn't change under the
+    analyst, and re-fetching it on every keystroke-debounced query would be noise. */
+async function loadFilterOptions() {
+  if (!state.batchId) return;
+  try {
+    const opts = await fetchJSON(
+      `/api/batches/${encodeURIComponent(state.batchId)}/filter-options`);
+    fillOptions($("f-retailer"), opts.retailers, "All retailers", state.retailer);
+    fillOptions($("f-reason"), opts.reasons, "All reasons", state.reason);
+  } catch (err) {
+    // Not banner-worthy: the dropdowns degrade to "All", and every other way of narrowing the
+    // queue still works.
+    console.error("loadFilterOptions", err);
+  }
+}
+
+function fillOptions(select, values, allLabel, selected) {
+  select.replaceChildren(el("option", null, allLabel));
+  select.firstChild.value = "";
+  for (const value of values) {
+    const option = el("option", null, sentenceCase(value));
+    option.value = value;
+    select.appendChild(option);
+  }
+  select.value = selected || "";
 }
 
 function markSelectedRow(claimId) {
@@ -171,15 +254,68 @@ function setRowStatus(claimId, verdict) {
   tr.querySelector(".status").replaceWith(statusCell({ status: verdict }));
 }
 
-// --- filters / sort / search ---------------------------------------------------------------------
+// --- filters / sort / search / URL state -----------------------------------------------------------
+//
+// The hash is the single description of "what am I looking at": filter, sort, search, page, size, the
+// three narrowing filters, and the open claim. Every control writes to `state` then calls commit(),
+// which writes the hash and reloads — so a link is always shareable and a refresh always lands where
+// the analyst was.
+
+/** Set while we are the ones writing the hash, so our own write doesn't come back through
+    `hashchange` and re-parse the state we just built. Back/forward still work: those fire
+    `hashchange` without us having written anything. */
+let writingHash = false;
+
+function syncHash() {
+  const next = buildHash(state);
+  if (next === (location.hash || "")) return;
+  writingHash = true;
+  location.hash = next;
+}
+
+/** Push the current state into the controls that display it. Needed because state can arrive from
+    the URL (a deep link, or the back button) and not only from a click. */
+function renderControls() {
+  document.querySelectorAll("#tabs .tab").forEach(
+    (t) => t.classList.toggle("active", t.dataset.filter === state.filter));
+  document.querySelectorAll("#kpis .card[data-filter]").forEach(
+    (c) => c.classList.toggle("active", c.dataset.filter === state.filter));
+  $("search").value = state.q;
+  $("f-retailer").value = state.retailer || "";
+  $("f-reason").value = state.reason || "";
+  $("f-from").value = state.date_from || "";
+  $("f-to").value = state.date_to || "";
+  $("page-size").value = String(state.size);
+  const narrowed = Boolean(state.retailer || state.reason || state.date_from || state.date_to);
+  $("f-clear").classList.toggle("hidden", !narrowed);
+}
+
+function commit() {
+  renderControls();
+  syncHash();
+  loadQueue();
+}
 
 function setFilter(filter) {
   state.filter = filter;
-  state.offset = 0;
-  document.querySelectorAll("#tabs .tab").forEach((t) => t.classList.toggle("active", t.dataset.filter === filter));
-  document.querySelectorAll("#kpis .card[data-filter]").forEach((c) => c.classList.toggle("active", c.dataset.filter === filter));
-  loadQueue();
+  state.page = 1;
+  commit();
 }
+
+/** Back/forward, or a hand-edited URL. parseHash sanitizes, so a stale bookmark naming a filter that
+    no longer exists lands on the default instead of erroring — the API rejects unknown values with
+    422, but that is about the API not lying, not about punishing an old link. */
+async function applyHash() {
+  Object.assign(state, parseHash(location.hash));
+  renderControls();
+  await loadQueue();
+  await restoreSelection();
+}
+
+window.addEventListener("hashchange", () => {
+  if (writingHash) { writingHash = false; return; }
+  applyHash();
+});
 
 // --- claim review workspace ----------------------------------------------------------------------
 
@@ -295,8 +431,45 @@ function fromDone(p) {
     confidence: p.confidence, dispute_grounds: p.dispute_grounds, usage: p.usage };
 }
 
+/** Reopen the claim named in the URL after a deep link, a refresh or a back button.
+ *
+ *  Usually it is on the page already — the hash carries the filter and page too. The targeted lookup
+ *  is for the case where it isn't (a link shared with no page in it, or a claim since filtered out of
+ *  the tab): a deep link that silently opens nothing is worse than one extra request.
+ *
+ *  The guard reads `renderedClaim`, NOT `selectedClaim`. Found in the running app: navigating from
+ *  one claim's URL to another's fires `hashchange`, and `loadQueue` re-points `selectedClaim` at the
+ *  new row before this runs — so a `selectedClaim` guard saw a match, returned early, and left the
+ *  previous claim's evidence sitting under the new claim's highlighted row. Same failure mode as the
+ *  Layer 33 stale-documents bug, reached by a different route. */
+async function restoreSelection() {
+  if (!state.claim) return;
+  if (state.renderedClaim === state.claim) return;
+  const onPage = document.querySelector(`tr[data-claim-id="${CSS.escape(state.claim)}"]`);
+  if (onPage) { onPage.click(); return; }
+  const row = await fetchClaimRow(state.claim);
+  if (row) selectClaim(row);
+}
+
+async function fetchClaimRow(claimId) {
+  try {
+    const params = queryParams({ filter: "all", page: 1, size: 100, q: claimId,
+                                 retailer: null, reason: null, date_from: null, date_to: null });
+    const data = await fetchJSON(
+      `/api/batches/${encodeURIComponent(state.batchId)}?${params}`);
+    return data.claims.find((c) => c.claim_id === claimId) || null;
+  } catch (err) {
+    console.error("fetchClaimRow", err);
+    return null;
+  }
+}
+
 async function selectClaim(claim) {
-  state.selected = claim.claim_id;
+  state.claim = claim.claim_id;
+  // Set before the awaits below, not after: it records which claim the pane is now committed to
+  // showing, and restoreSelection may run again while the documents are still in flight.
+  state.renderedClaim = claim.claim_id;
+  syncHash();
   markSelectedRow(claim.claim_id);
   if (source) { source.close(); source = null; }
 
@@ -616,10 +789,10 @@ function syncOverrideButton() {
 }
 
 async function postDisposition(disposition) {
-  if (!state.selected) return;
+  if (!state.claim) return;
   const body = { disposition, note: $("w-note").value.trim() || null };
   if (disposition === "override") body.override_verdict = $("w-override-verdict").value;
-  const resp = await fetch(`/api/claims/${encodeURIComponent(state.selected)}/disposition`, {
+  const resp = await fetch(`/api/claims/${encodeURIComponent(state.claim)}/disposition`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   const status = $("w-disp-status");
@@ -661,10 +834,17 @@ async function postDisposition(disposition) {
 
 $("run").addEventListener("click", runBatch);
 $("banner-dismiss").addEventListener("click", hideBanner);
-$("prev").addEventListener("click", () => { state.offset = Math.max(0, state.offset - LIMIT); loadQueue(); });
-$("next").addEventListener("click", () => { state.offset += LIMIT; loadQueue(); });
+$("prev").addEventListener("click", () => { state.page = Math.max(1, state.page - 1); commit(); });
+$("next").addEventListener("click", () => { state.page += 1; commit(); });
+$("page-size").addEventListener("change", (e) => {
+  // Back to page 1: page 4 of 25-per-page does not exist at 100 per page, and landing on an empty
+  // table after changing a row count reads as a broken filter.
+  state.size = Number(e.target.value);
+  state.page = 1;
+  commit();
+});
 $("w-investigate").addEventListener("click", () => {
-  if (!state.selected) return;
+  if (!state.claim) return;
   // Re-running the agents on a claim that already carries a human decision is legitimate (a second
   // opinion after a prompt change), but it must not be a silent one-click action: the analyst needs
   // to know a recorded sign-off is about to be contradicted.
@@ -677,7 +857,7 @@ $("w-investigate").addEventListener("click", () => {
       "verdict the decision will be flagged as stale.\n\nRun the agents again?");
     if (!ok) return;
   }
-  investigateClaim(state.selected);
+  investigateClaim(state.claim);
 });
 
 $("w-override-verdict").addEventListener("change", syncOverrideButton);
@@ -689,18 +869,50 @@ document.querySelectorAll("#kpis .card[data-filter]").forEach((c) =>
   c.addEventListener("click", () => setFilter(c.dataset.filter)));
 // Sorting lives on the column headers only. No KPI card sorts any more — one that looked like the
 // filter cards but reordered the table instead taught that a card's behaviour is unguessable.
-document.querySelectorAll("th.sortable").forEach((el) =>
-  el.addEventListener("click", () => { state.sort = el.dataset.sort; state.offset = 0; loadQueue(); }));
+document.querySelectorAll("th.sortable").forEach((th) =>
+  th.addEventListener("click", () => {
+    // Clicking the column you are already sorted by flips the direction the SERVER applied. Clicking
+    // a different one hands the choice back with `direction: null`, because the useful first click
+    // per column (desc for money and age, asc for ids and names) is defined in ui/queries.py and
+    // mirroring that table here would be a second copy free to drift.
+    state.direction = th.dataset.sort === state.appliedSort
+      ? (state.appliedDirection === "asc" ? "desc" : "asc")
+      : null;
+    state.sort = th.dataset.sort;
+    state.page = 1;
+    commit();
+  }));
 document.querySelectorAll(".decision [data-disp]").forEach((b) =>
   b.addEventListener("click", () => postDisposition(b.dataset.disp)));
+
+// Retailer / reason / date narrowing. `|| null` rather than "": an empty <select> or a cleared date
+// input means "no filter", and buildHash omits nulls so a cleared control leaves the URL too.
+for (const [id, key] of [["f-retailer", "retailer"], ["f-reason", "reason"],
+                         ["f-from", "date_from"], ["f-to", "date_to"]]) {
+  $(id).addEventListener("change", (e) => {
+    state[key] = e.target.value || null;
+    state.page = 1;
+    commit();
+  });
+}
+$("f-clear").addEventListener("click", () => {
+  Object.assign(state, { retailer: null, reason: null, date_from: null, date_to: null, page: 1 });
+  commit();
+});
 
 let searchTimer = null;
 $("search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { state.q = e.target.value.trim(); state.offset = 0; loadQueue(); }, 250);
+  searchTimer = setTimeout(() => { state.q = e.target.value.trim(); state.page = 1; commit(); }, 250);
 });
 
 (async () => {
+  // The URL first: it is the description of what to show, and loadQueue needs the batch id, so the
+  // dashboard and the lot's filter options have to land in between.
+  Object.assign(state, parseHash(location.hash));
   await loadDashboard();
-  setFilter(state.filter);  // sets active tab/card and loads the queue
+  await loadFilterOptions();
+  renderControls();
+  await loadQueue();
+  await restoreSelection();
 })();

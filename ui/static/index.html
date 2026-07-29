@@ -66,13 +66,15 @@
     #banner-msg { flex: 1; }
     #banner button { color: var(--bad); border-color: var(--bad); }
 
-    /* Two-pane layout. The queue is 540px because that is what its six columns actually measure —
-       at 420px the table came to 531px inside a `.pane { overflow: hidden }`, so the rightmost column
-       was clipped mid-word and the four rows carrying a disposition badge lost it entirely. That has
-       been true since Layer 32; the longer verdict labels only made it visible. Layer 37 owns the
-       grid proper (it adds PO and Age columns and will have to size them). */
-    .workspace { display: grid; grid-template-columns: 540px 1fr; gap: 16px; padding: 0 24px 48px; align-items: start; }
-    @media (max-width: 1024px) { .workspace { grid-template-columns: 1fr; } }
+    /* Two-pane layout. 850px is the eight columns' measured natural width (829px) plus margin —
+       Layer 37b widened it from 540px for PO and Age, measured over CDP rather than guessed, the
+       same way Layer 36 arrived at 540. But the width is no longer the only thing standing between a
+       new column and a silently clipped one: `.pane { overflow: hidden }` gives the pane its rounded
+       corners and, from Layer 32 to Layer 36, quietly cut the rightmost column off mid-word. The
+       table now sits in its own `.queue-scroll`, so the next column added overflows into a visible
+       scrollbar instead of disappearing. */
+    .workspace { display: grid; grid-template-columns: 850px 1fr; gap: 16px; padding: 0 24px 48px; align-items: start; }
+    @media (max-width: 1360px) { .workspace { grid-template-columns: 1fr; } }
     .pane { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
     .pane > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 
@@ -82,15 +84,41 @@
     .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
     .tab { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); cursor: pointer; background: transparent; }
     .tab.active { color: var(--text); border-color: var(--accent); background: rgba(91,155,255,.12); }
+    /* Retailer / reason / date-range narrowing. Populated from /filter-options, so the dropdowns
+       list what is actually in the lot rather than a hardcoded guess at the retailer roster. */
+    .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .filters select, .filters input {
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font: inherit; font-size: 12px; padding: 4px 8px;
+    }
+    .filters .sep { color: var(--muted); font-size: 12px; }
+    /* The banding rules, stated rather than left to be inferred from a coloured pill. Text comes
+       from the server's own thresholds (lib.js::priorityLegend). */
+    .legend { font-size: 11px; color: var(--muted); }
+    /* Scrolls rather than clips. See the .workspace note above — this is the guard; the 850px there
+       is just the width that makes scrolling unnecessary in the common case. */
+    .queue-scroll { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
-    th { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); cursor: pointer; user-select: none; }
+    /* `cursor: pointer` used to be on every th, including the four that do nothing when clicked. */
+    th { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); user-select: none; white-space: nowrap; }
+    th.sortable { cursor: pointer; }
     th.sortable:hover { color: var(--text); }
+    th .sort-ind { margin-left: 4px; font-size: 9px; }
+    th.sorted { color: var(--text); }
+    /* The total for the *filtered* set, in the column it totals. */
+    tfoot td { border-bottom: none; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+    tfoot td.num { color: var(--text); font-weight: 700; }
     tbody tr { cursor: pointer; }
     tbody tr:hover { background: #1e222b; }
     tbody tr.selected { background: rgba(91,155,255,.14); }
     tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
     td.num { font-variant-numeric: tabular-nums; text-align: right; }
+    /* Nothing in a worklist row wraps. `CLM-SYN-0003` broke across three lines on its hyphens —
+       unreadable as an identifier — and "Wrong item" took a second line, so row heights were ragged
+       and a screen held a third fewer claims. Uniform 37px rows are what make a column scannable;
+       the pane is sized to the resulting natural width, and .queue-scroll catches the rest. */
+    tbody td { white-space: nowrap; }
     .pill { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
     .p-HIGH { color: var(--bad); border: 1px solid var(--bad); }
     .p-MEDIUM { color: var(--warn); border: 1px solid var(--warn); }
@@ -108,6 +136,10 @@
     .row-spin { color: var(--accent); }
     .disp-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
     .pager { display: flex; gap: 12px; align-items: center; padding: 10px 14px; }
+    #page-size {
+      margin-left: auto; background: var(--panel2); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font: inherit; font-size: 12px; padding: 4px 8px;
+    }
     /* An empty table with "0 of " reads as a broken page; both the no-lot and no-match states need
        to say which one they are. */
     .queue-msg { color: var(--muted); font-size: 13px; padding: 16px 14px; }
@@ -275,21 +307,51 @@
           <button class="tab" data-filter="decided">Decided</button>
           <button class="tab" data-filter="all">All</button>
         </div>
+        <div class="filters">
+          <select id="f-retailer" aria-label="Filter by retailer">
+            <option value="">All retailers</option>
+          </select>
+          <select id="f-reason" aria-label="Filter by reason">
+            <option value="">All reasons</option>
+          </select>
+          <input id="f-from" type="date" aria-label="Claims filed on or after" />
+          <span class="sep">→</span>
+          <input id="f-to" type="date" aria-label="Claims filed on or before" />
+          <button class="ghost sm hidden" id="f-clear">Clear filters</button>
+        </div>
+        <div class="legend" id="priority-legend"></div>
       </div>
-      <table>
-        <thead><tr>
-          <th>Claim</th><th>Retailer</th><th>Reason</th>
-          <th class="sortable num" data-sort="amount">Amount</th>
-          <th class="sortable" data-sort="priority">Priority</th>
-          <th>Status</th>
-        </tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
+      <div class="queue-scroll">
+        <table>
+          <thead><tr>
+            <th class="sortable" data-sort="claim_id">Claim</th>
+            <th class="sortable" data-sort="po_id">PO</th>
+            <th class="sortable" data-sort="retailer">Retailer</th>
+            <th>Reason</th>
+            <th class="sortable num" data-sort="amount">Amount</th>
+            <th class="sortable num" data-sort="age">Age</th>
+            <th class="sortable" data-sort="priority">Priority</th>
+            <th>Status</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+          <!-- Totals the filtered set, not the page: paging must not change the number. -->
+          <tfoot id="queue-foot" class="hidden"><tr>
+            <td colspan="4" id="foot-label"></td>
+            <td class="num" id="foot-amount"></td>
+            <td colspan="3"></td>
+          </tr></tfoot>
+        </table>
+      </div>
       <div id="queue-msg" class="queue-msg hidden"></div>
       <div class="pager">
         <button class="ghost sm" id="prev">Prev</button>
         <span id="page-info" class="muted"></span>
         <button class="ghost sm" id="next">Next</button>
+        <select id="page-size" aria-label="Rows per page">
+          <option value="25">25 / page</option>
+          <option value="50">50 / page</option>
+          <option value="100">100 / page</option>
+        </select>
       </div>
     </section>
 

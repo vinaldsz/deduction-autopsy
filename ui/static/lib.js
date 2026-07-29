@@ -118,6 +118,128 @@ export function sentenceCase(s) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+// --- the worklist grid, and the URL that describes it ----------------------------------------------
+//
+// These whitelists mirror ui/queries.py's. The two are deliberately enforced in opposite directions:
+// the server *rejects* an unrecognised value with 422 (a plausible page of the wrong rows is worse
+// than an error), while the client *sanitizes* its own persisted URL down to a default. A stale
+// bookmark is the client's own mess, and erroring the whole page over one is not a fix.
+
+export const FILTERS = [
+  "todo", "not_investigated", "awaiting_my_call", "disputable", "decided", "all",
+];
+export const SORTS = ["claim_id", "po_id", "retailer", "amount", "age", "priority"];
+export const DIRECTIONS = ["asc", "desc"];
+export const PAGE_SIZES = [25, 50, 100];
+
+/** `direction: null` means "let the server pick". Each column has a useful first click (money and
+    age descending, ids and names ascending) and that table lives in ui/queries.py — mirroring it
+    here would be a second copy free to drift. */
+export const DEFAULT_STATE = {
+  filter: "todo", sort: "priority", direction: null, q: "", page: 1, size: 25,
+  claim: null, retailer: null, reason: null, date_from: null, date_to: null,
+};
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const DIGITS = /^\d+$/;
+
+/** A non-negative integer, or null. Strict on purpose: `Number.parseInt` stops at the first
+    non-digit, so "2.5e9999" parses as 2 and "25abc" as 25 — leniency in the one function whose job
+    is to distrust the URL. */
+function wholeNumber(value) {
+  return value != null && DIGITS.test(value) ? Number(value) : null;
+}
+
+/** An ISO date, or null. Shape alone isn't enough — "2024-13-45" matches the pattern and is not a
+    date, and `claim_date` is stored as a string, so the server would compare it lexicographically
+    rather than complain. */
+function isoDate(value) {
+  if (!value || !ISO_DATE.test(value)) return null;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10) === value ? value : null;
+}
+
+/** A location.hash -> the worklist state it describes, with every unrecognised value replaced by its
+    default. Total by construction: it always returns a complete, usable state. */
+export function parseHash(hash) {
+  const p = new URLSearchParams(String(hash || "").replace(/^#/, ""));
+  const oneOf = (key, allowed, fallback) =>
+    (allowed.includes(p.get(key)) ? p.get(key) : fallback);
+  const page = wholeNumber(p.get("page"));
+  const size = wholeNumber(p.get("size"));
+  return {
+    filter: oneOf("filter", FILTERS, DEFAULT_STATE.filter),
+    sort: oneOf("sort", SORTS, DEFAULT_STATE.sort),
+    direction: oneOf("dir", DIRECTIONS, null),
+    q: p.get("q") || "",
+    page: page && page > 0 ? page : DEFAULT_STATE.page,
+    size: PAGE_SIZES.includes(size) ? size : DEFAULT_STATE.size,
+    // Free text, deliberately not validated against the lot: an unknown retailer returns no rows,
+    // which is the honest answer to "show me claims from a retailer that isn't in this lot".
+    claim: p.get("claim") || null,
+    retailer: p.get("retailer") || null,
+    reason: p.get("reason") || null,
+    date_from: isoDate(p.get("from")),
+    date_to: isoDate(p.get("to")),
+  };
+}
+
+/** The inverse: state -> hash, omitting anything at its default so a shared link carries only what
+    the analyst actually changed. */
+export function buildHash(state) {
+  const p = new URLSearchParams();
+  const put = (key, value, dflt) => {
+    if (value != null && value !== "" && value !== dflt) p.set(key, String(value));
+  };
+  put("filter", state.filter, DEFAULT_STATE.filter);
+  put("sort", state.sort, DEFAULT_STATE.sort);
+  put("dir", state.direction, null);
+  put("q", state.q, "");
+  put("page", state.page, DEFAULT_STATE.page);
+  put("size", state.size, DEFAULT_STATE.size);
+  put("retailer", state.retailer, null);
+  put("reason", state.reason, null);
+  put("from", state.date_from, null);
+  put("to", state.date_to, null);
+  put("claim", state.claim, null);
+  const query = p.toString();
+  return query ? `#${query}` : "";
+}
+
+/** The ▲/▼ on a column header, read from the sort the SERVER reports applying — not from what the
+ *  client asked for. `direction` is often null on the way out (meaning "your choice"), so rendering
+ *  the request would leave the arrow guessing, and a rejected or defaulted parameter would leave it
+ *  pointing at a sort the table isn't in. */
+export function sortIndicator(column, appliedSort, appliedDirection) {
+  if (!column || column !== appliedSort) return "";
+  return appliedDirection === "asc" ? "▲" : "▼";
+}
+
+/** The banding rules, in the UI, generated from the server's own constants — so a threshold change
+    in ui/queries.py can't leave the page confidently explaining a rule that no longer applies. */
+export function priorityLegend(thresholds) {
+  if (!thresholds) return "";
+  return `HIGH ${dollars(thresholds.high_cents)}+ at risk, or older than ` +
+    `${thresholds.age_days} days · MEDIUM ${dollars(thresholds.med_cents)}+ · LOW everything else`;
+}
+
+/** Days -> "239d". An age column is scanned down, not read across; the word belongs in the header. */
+export function ageLabel(days) {
+  if (days == null || Number.isNaN(Number(days))) return "—";
+  return `${Number(days)}d`;
+}
+
+/** The table footer: how many claims match, and what they add up to.
+ *
+ *  Says "filtered" whenever a narrowing is active, because the number is over the filtered set and
+ *  not the lot — a total that quietly means something different depending on the tab is the same
+ *  class of defect as a KPI that doesn't equal its own rows. */
+export function queueFooter(total, cents, filtered) {
+  const noun = total === 1 ? "claim" : "claims";
+  return { label: `${total} ${noun}${filtered ? ", filtered" : ""}`, amount: dollars(cents) };
+}
+
 /** The header subtitle: the state of today's lot, not a description of the architecture. */
 export function lotSubtitle(metrics) {
   if (!metrics || !metrics.batch) return "No lot loaded — run the ETL to ingest today's deductions.";

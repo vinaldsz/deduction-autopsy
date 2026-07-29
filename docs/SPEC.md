@@ -702,3 +702,17 @@ worklist the analyst eyeballs (ESCALATE = human attention).
   `amount DESC, claim_date ASC` proxy, which never grouped the bands.
 - `GET /api/batches/{batch_id}/filter-options` → `{retailers, reasons}`, the distinct values present
   in that lot. 404 on an unknown batch.
+
+### UI URL state — Layer 37b
+
+The worklist's view is described entirely by the **location hash**, so a view is shareable and a
+refresh lands where the analyst was:
+`#filter=&sort=&dir=&q=&page=&size=&retailer=&reason=&from=&to=&claim=`. Anything at its default is
+omitted, so a clean view has no hash at all.
+
+`ui/static/lib.js`'s `parseHash` **sanitizes** every unrecognised value to its default — the mirror
+image of the API's 422, and deliberately so: a stale bookmark (e.g. `#filter=needs_me`, a key Layer 35
+renamed away) is the client's own mess, and erroring the whole page over one is not a fix, while an
+API that quietly substitutes a different query *is* a lie. `dir` is omitted rather than defaulted
+because the useful default direction per column lives in `ui/queries.py`; the client renders its sort
+indicator from the `sort`/`direction` the server **echoes back**, never from what it requested.
