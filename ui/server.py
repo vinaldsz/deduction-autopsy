@@ -179,14 +179,35 @@ async def batch(
     limit: int = 25,
     status_filter: str = "all",
     sort: str = "claim_id",
+    direction: str | None = None,
     q: str | None = None,
+    retailer: str | None = None,
+    reason: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ):
     """One page of the lot's claims — filtered/sorted/searched for the triage queue."""
     if not queries.batch_exists(batch_id):
         return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
-    return queries.batch_claims(
-        batch_id, offset=offset, limit=limit, status_filter=status_filter, sort=sort, q=q
-    )
+    try:
+        return queries.batch_claims(
+            batch_id, offset=offset, limit=limit, status_filter=status_filter, sort=sort,
+            direction=direction, q=q, retailer=retailer, reason=reason,
+            date_from=date_from, date_to=date_to,
+        )
+    except ValueError as exc:
+        # 422, not a silent fallback to "all"/claim_id: a page of plausible but wrong rows with
+        # nothing on screen saying so is worse than an error. Distinct from the 404 above, which
+        # is about the batch rather than the query.
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+
+
+@app.get("/api/batches/{batch_id}/filter-options")
+async def filter_options(batch_id: str):
+    """The retailers and reasons present in this lot, for the queue's filter dropdowns."""
+    if not queries.batch_exists(batch_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown batch: {batch_id!r}"})
+    return queries.lot_filter_options(batch_id)
 
 
 @app.post("/api/batches/{batch_id}/investigate")

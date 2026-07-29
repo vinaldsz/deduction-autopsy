@@ -633,16 +633,49 @@ Layer 34 is the only schema gate.
 
 ### 37. A grid you can work
 
+**Split into 37a / 37b (approved 2026-07-28), same precedent as Layer 30a/30b.** The two halves have
+disjoint verification stories — 37a is provable by `pytest` alone and lands no frontend change at all
+(`node --test` must stay unchanged, which is the tell); 37b is provable by `node --test` plus looking
+at the running app. One commit each.
+
+#### 37a. Query surface (backend only)
+
 - `ui/queries.py`: split sort direction out of `_SORT_SQL` (whitelisted, never interpolated) and add
   a `c.claim_id` tiebreaker — amount sorting is currently non-deterministic across pages on ties.
   New `retailer`/`reason`/`date_from`/`date_to` filters; `total_amount_cents` over the filtered set
   (not the page) folded into the existing COUNT query; per-claim `age_days` and `priority_reason`,
   both server-side because age is measured against the lot's `load_date`, which the client doesn't
   have. Unknown filter/sort/direction values are rejected instead of silently falling back to "all".
+- `ui/server.py`: the five new query params, `ValueError` → **422** (distinct from the batch 404), and
+  `GET /api/batches/{batch_id}/filter-options` so 37b's dropdowns are populated from the data.
+- **Verify:** `pytest -q`; `node --test` **unchanged**; live uvicorn against the real DB, read-only.
+- **Two additions the build made, neither in the text above.**
+  1. **`sort=priority` now orders by the band.** It was the proxy `claimed_amount DESC, claim_date
+     ASC`, which never groups HIGH/MEDIUM/LOW: on the real lot, 4 of the 5 claims that are HIGH purely
+     from aging sorted below all six MEDIUM claims, one as far down as row 44 of 50 — under a column
+     header labelled Priority. Replaced by a SQL `CASE` rank built from the same `_PRIORITY_*`
+     constants `priority()` uses, with a test asserting the two agree row-for-row (built from the same
+     constants is not the same as computes the same answer — the `julianday` arithmetic is a separate
+     implementation). Approved in the planning session as a deviation from this plan.
+  2. **`priority_thresholds` on `/api/dashboard`**, so 37b's threshold legend is generated rather than
+     retyped into `index.html` where it would drift from the server on the next threshold change.
+- **The `age` sort is an age expression, not `claim_date`.** Age runs opposite to date, so sorting a
+  column labelled Age on `claim_date` would make "ascending" return the oldest claims first — a
+  control that reads correct and behaves backwards. It costs a bound `ref_date` in the `ORDER BY`.
+
+#### 37b. The grid itself (frontend)
+
 - `ui/static/`: PO and Age columns (`po_id` was already returned and searchable but never rendered);
   `cursor:pointer` scoped to `th.sortable`; sort indicators; a `<tfoot>` total; page-size selector;
   the priority thresholds stated in the UI; URL-hash routing for filter/sort/search/page/selection.
-- **Verify:** `pytest -q`, `node --test`; deep-link a URL, refresh, confirm restore.
+- Left pane widened to ~700px (**measured over CDP**, as Layer 36 measured its 540px) and the table
+  wrapped in an `overflow-x: auto` scroller, so the next column added degrades to scrolling instead of
+  clipping silently inside `.pane { overflow: hidden }` — the defect that went unnoticed from Layer 32
+  to Layer 36. Breakpoint 1024→1200px.
+- Hash routing gets pure `parseHash`/`buildHash` in `ui/static/lib.js` that **sanitize unknown values
+  to defaults client-side**. Not in tension with 37a's 422: the client is responsible for its own
+  stale bookmarks, and the API is responsible for not lying about what it did.
+- **Verify:** `node --test`; deep-link a URL, refresh, confirm restore.
 
 ### 38. Working the volume
 

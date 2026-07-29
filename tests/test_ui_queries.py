@@ -46,6 +46,17 @@ def test_priority_thresholds():
     assert queries.priority(1000, "2024-01-01", "2024-09-15") == "HIGH"  # aging
 
 
+def test_priority_reason_states_the_driver_priority_actually_used():
+    """The reason has to branch in the same order priority() does, or a pill can say HIGH while the
+    line under it explains a rule that wasn't the one that fired."""
+    assert queries.priority_reason(20000, "2024-09-15", "2024-09-15") == "$200.00 at risk"
+    assert queries.priority_reason(1000, "2024-01-01", "2024-09-15") == "aged 258 days"
+    assert queries.priority_reason(8000, "2024-09-15", "2024-09-15") == "$80.00 at risk"
+    assert "routine" in queries.priority_reason(1000, "2024-09-15", "2024-09-15")
+    # Over the HIGH amount *and* aged: priority() tests amount first, so the reason must too.
+    assert queries.priority_reason(20000, "2024-01-01", "2024-09-15") == "$200.00 at risk"
+
+
 def test_active_batch_is_latest_load_date(db):
     assert queries.active_batch()["batch_id"] == "LOT-2024-09-15"
 
@@ -88,6 +99,193 @@ def test_batch_claims_search_matches_claim_id(db):
     page = queries.batch_claims("LOT-2024-09-15", q="CLM-A")
     assert [c["claim_id"] for c in page["claims"]] == ["CLM-A"]
     assert page["total"] == 1
+
+
+# --- Layer 37a: a sort you can page, filters you can narrow with, and a total you can trust --------
+
+
+def _tied_amounts(db):
+    """Two claims with identical amounts, inserted in *reverse* claim_id order.
+
+    The reversal is the point. Without an explicit tiebreaker SQLite is free to return a tie group in
+    any order and in practice returns it in rowid (= insertion) order, so a fixture inserted
+    alphabetically hides the bug entirely. Inserting Z before Y makes the two orders disagree, which
+    is what lets these tests fail on a partial ORDER BY instead of passing by luck.
+
+    Kept out of the `db` fixture for the same reason `_every_edge_shape` is: the pagination and total
+    assertions above are written against its 5 claims.
+    """
+    with connect(db) as conn:
+        for cid in ("CLM-Z", "CLM-Y"):
+            conn.execute(
+                "INSERT INTO deduction_claims (claim_id, po_id, batch_id, retailer, claimed_reason, "
+                "claimed_amount, claim_date) VALUES (?, 'PO-T', 'LOT-2024-09-15', 'kroger', "
+                "'promo_billback', 7500, '2024-09-10')", (cid,))
+
+
+def test_ties_are_broken_by_claim_id_so_the_order_is_total(db):
+    """`ORDER BY claimed_amount DESC` alone is a *partial* order: the two 7500 claims can come back
+    in either order, and which one you get is an implementation detail of the query plan."""
+    _tied_amounts(db)
+    page = queries.batch_claims("LOT-2024-09-15", sort="amount", limit=99)
+    ids = [c["claim_id"] for c in page["claims"]]
+    assert ids.index("CLM-Y") < ids.index("CLM-Z")
+    # The tiebreaker is always ASC, so reversing the primary key must not reshuffle the tie group.
+    reversed_ids = [c["claim_id"] for c in
+                    queries.batch_claims("LOT-2024-09-15", sort="amount", direction="asc",
+                                         limit=99)["claims"]]
+    assert reversed_ids.index("CLM-Y") < reversed_ids.index("CLM-Z")
+
+
+def test_paging_a_sorted_list_never_repeats_or_drops_a_claim(db):
+    """The consequence the analyst actually sees: LIMIT/OFFSET re-runs the query once per page, so
+    under a partial order a tied claim can appear on two consecutive pages while its twin appears
+    on none.
+
+    Honest scope: this test does *not* fail on the un-tiebroken query, because SQLite runs identical
+    queries through an identical plan and so happens to return the same partial order every time.
+    The guarantee was never promised, only observed — the test above is the one that catches the
+    defect, and this one pins the invariant that guarantee exists to provide.
+    """
+    _tied_amounts(db)
+    everything = {c["claim_id"] for c in
+                  queries.batch_claims("LOT-2024-09-15", limit=99)["claims"]}
+    walked = []
+    for offset in range(len(everything)):
+        walked += [c["claim_id"] for c in
+                   queries.batch_claims("LOT-2024-09-15", sort="amount", offset=offset,
+                                        limit=1)["claims"]]
+    assert len(set(walked)) == len(walked)   # no claim shown twice
+    assert set(walked) == everything         # and none lost between the pages
+
+
+def test_direction_reverses_the_sort_and_is_whitelisted(db):
+    desc = [c["claimed_amount"] for c in
+            queries.batch_claims("LOT-2024-09-15", sort="amount", direction="desc")["claims"]]
+    asc = [c["claimed_amount"] for c in
+           queries.batch_claims("LOT-2024-09-15", sort="amount", direction="asc")["claims"]]
+    assert desc == sorted(desc, reverse=True)
+    assert asc == sorted(asc)
+    # The string never reaches SQL — it is a key into _DIRECTIONS.
+    with pytest.raises(ValueError, match="direction"):
+        queries.batch_claims("LOT-2024-09-15", sort="amount", direction="DESC; DROP TABLE batches")
+
+
+def test_each_sort_column_has_a_useful_default_direction(db):
+    """Money and age are scanned biggest/oldest first; ids and names alphabetically. Stated as
+    behaviour rather than as a dict lookup, so the defaults can't silently invert."""
+    assert queries.batch_claims("LOT-2024-09-15", sort="amount")["direction"] == "desc"
+    assert queries.batch_claims("LOT-2024-09-15", sort="age")["direction"] == "desc"
+    assert queries.batch_claims("LOT-2024-09-15", sort="priority")["direction"] == "desc"
+    assert queries.batch_claims("LOT-2024-09-15", sort="claim_id")["direction"] == "asc"
+    assert queries.batch_claims("LOT-2024-09-15", sort="retailer")["direction"] == "asc"
+
+
+def test_sorting_by_age_puts_the_oldest_claim_first(db):
+    page = queries.batch_claims("LOT-2024-09-15", sort="age")
+    assert page["claims"][0]["claim_id"] == "CLM-D"     # filed 2024-01-01
+    assert page["claims"][0]["age_days"] == 258
+    assert [c["age_days"] for c in page["claims"]] == sorted(
+        [c["age_days"] for c in page["claims"]], reverse=True)
+
+
+def test_priority_sort_groups_by_band_not_by_amount(db):
+    """CLM-D is a $10 claim that is HIGH only because it is 258 days old. Under the old proxy sort
+    (`claimed_amount DESC, claim_date ASC`) it landed below every MEDIUM claim — under a column
+    header labelled Priority."""
+    ids = [c["claim_id"] for c in queries.batch_claims("LOT-2024-09-15", sort="priority")["claims"]]
+    assert ids.index("CLM-D") < ids.index("CLM-B")      # aged HIGH above a $80 MEDIUM
+    bands = [c["priority"] for c in queries.batch_claims("LOT-2024-09-15", sort="priority")["claims"]]
+    assert bands == sorted(bands, key=["LOW", "MEDIUM", "HIGH"].index, reverse=True)
+
+
+def test_sql_priority_rank_agrees_with_the_python_priority_for_every_row(db):
+    """The drift guard on the one duplicated rule in the module: _PRIORITY_RANK_SQL restates
+    priority()'s thresholds in SQL. They are built from the same constants, but "built from the same
+    constants" is not the same as "computes the same answer" — the julianday arithmetic and the
+    boundary comparisons are separate implementations."""
+    _tied_amounts(db)
+    rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+    ordered = queries.batch_claims("LOT-2024-09-15", sort="priority", limit=99)["claims"]
+    ranks = [rank[queries.priority(c["claimed_amount"], c["claim_date"], "2024-09-15")]
+             for c in ordered]
+    assert ranks == sorted(ranks, reverse=True)
+    # ...and every band the row reports is the band the SQL sorted it into.
+    assert [rank[c["priority"]] for c in ordered] == ranks
+
+
+def test_filters_by_retailer_reason_and_claim_date_range(db):
+    _tied_amounts(db)   # two 'kroger' / 'promo_billback' claims dated 2024-09-10
+
+    kroger = queries.batch_claims("LOT-2024-09-15", retailer="kroger")
+    assert {c["claim_id"] for c in kroger["claims"]} == {"CLM-Y", "CLM-Z"}
+    assert kroger["total"] == 2
+
+    promo = queries.batch_claims("LOT-2024-09-15", reason="promo_billback")
+    assert {c["claim_id"] for c in promo["claims"]} == {"CLM-Y", "CLM-Z"}
+
+    # Inclusive on both ends: the boundary date is in the range, not next to it.
+    window = queries.batch_claims("LOT-2024-09-15", date_from="2024-09-10", date_to="2024-09-10")
+    assert {c["claim_id"] for c in window["claims"]} == {"CLM-Y", "CLM-Z"}
+    assert "CLM-D" in {c["claim_id"] for c in           # 2024-01-01, before the window
+                       queries.batch_claims("LOT-2024-09-15", date_to="2024-06-01")["claims"]}
+
+    # Filters compose with each other and with the status predicates.
+    both = queries.batch_claims("LOT-2024-09-15", retailer="kroger", status_filter="not_investigated")
+    assert both["total"] == 2
+
+
+def test_total_amount_is_over_the_filtered_set_not_the_page(db):
+    """A footer that added up only the rows on screen would show a different total on every page —
+    which is the one thing a total must never do."""
+    page = queries.batch_claims("LOT-2024-09-15", limit=1)
+    assert len(page["claims"]) == 1
+    assert page["total"] == 5
+    assert page["total_amount_cents"] == 50000   # 20000 + 8000 + 1000 + 1000 + 20000
+    filtered = queries.batch_claims("LOT-2024-09-15", status_filter="decided", limit=1)
+    assert filtered["total_amount_cents"] == 20000   # CLM-E alone
+    empty = queries.batch_claims("LOT-2024-09-15", retailer="nobody")
+    assert empty["total"] == 0 and empty["total_amount_cents"] == 0   # SUM of nothing is NULL
+
+
+def test_claims_carry_their_age_and_why_they_are_prioritised(db):
+    """Both are measured against the lot's load_date, which the browser never receives."""
+    rows = {c["claim_id"]: c for c in queries.batch_claims("LOT-2024-09-15", limit=99)["claims"]}
+    assert rows["CLM-D"]["age_days"] == 258
+    assert rows["CLM-D"]["priority"] == "HIGH"
+    assert rows["CLM-D"]["priority_reason"] == "aged 258 days"
+    assert rows["CLM-A"]["age_days"] == 0
+    assert rows["CLM-A"]["priority_reason"] == "$200.00 at risk"
+
+
+def test_unknown_filter_sort_direction_and_dates_are_rejected(db):
+    """Layer 35 left this as a known gap: an unrecognised value fell back to "all"/claim_id, so a
+    stale link returned a plausible page of the wrong rows with nothing on screen saying so."""
+    for kwargs, expected in [
+        ({"status_filter": "needs_me"}, "status_filter"),
+        ({"sort": "nope"}, "sort"),
+        ({"direction": "sideways"}, "direction"),
+        ({"date_from": "yesterday"}, "date_from"),
+        ({"date_to": "2024-13-45"}, "date_to"),
+    ]:
+        with pytest.raises(ValueError, match=expected):
+            queries.batch_claims("LOT-2024-09-15", **kwargs)
+
+
+def test_page_bounds_are_rejected_rather_than_clamped(db):
+    for kwargs, expected in [({"limit": 0}, "limit"), ({"limit": 5000}, "limit"),
+                             ({"offset": -1}, "offset")]:
+        with pytest.raises(ValueError, match=expected):
+            queries.batch_claims("LOT-2024-09-15", **kwargs)
+
+
+def test_lot_filter_options_lists_the_values_actually_in_the_lot(db):
+    _tied_amounts(db)
+    options = queries.lot_filter_options("LOT-2024-09-15")
+    assert options == {"retailers": ["kroger", "walmart"],
+                       "reasons": ["promo_billback", "shortage"]}
+    # Scoped to the lot, not the whole store — the other batch has no claims at all.
+    assert queries.lot_filter_options("LOT-2024-06-08") == {"retailers": [], "reasons": []}
 
 
 def test_batch_claims_includes_human_disposition(db):
@@ -387,7 +585,9 @@ def test_claim_documents_unknown_claim_is_none(db):
 
 _METRIC_KEYS = {"lot_total", "todo_count", "not_investigated_count", "awaiting_my_call_count",
                 "decided_count", "open_amount_cents", "oldest_open_days", "priority_breakdown",
-                "batch"}
+                "priority_thresholds", "batch"}
+# The non-numeric metrics, excluded from the "everything is 0 on an empty store" sweep below.
+_NON_COUNT_KEYS = {"priority_breakdown", "priority_thresholds", "batch"}
 
 
 def test_dashboard_metrics(db):
@@ -403,6 +603,8 @@ def test_dashboard_metrics(db):
     assert m["priority_breakdown"] == {"HIGH": 2, "MEDIUM": 1, "LOW": 1}
     # CLM-D is dated 2024-01-01 against a lot loaded 2024-09-15 — the aged claim drives this.
     assert m["oldest_open_days"] == 258
+    # Shipped so the queue can state its own banding rules instead of index.html retyping them.
+    assert m["priority_thresholds"] == {"high_cents": 15000, "med_cents": 5000, "age_days": 45}
 
 
 def test_dashboard_metrics_with_no_lot(monkeypatch, tmp_path):
@@ -413,6 +615,9 @@ def test_dashboard_metrics_with_no_lot(monkeypatch, tmp_path):
     m = queries.dashboard_metrics()
     assert set(m) == _METRIC_KEYS  # the same shape as a populated lot, so no key reads "undefined"
     assert m["batch"] is None
-    for key in _METRIC_KEYS - {"priority_breakdown", "batch"}:
+    for key in _METRIC_KEYS - _NON_COUNT_KEYS:
         assert m[key] == 0
     assert m["priority_breakdown"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    # The thresholds are constants, not counts — they must be present even with nothing loaded, or
+    # the first-run legend renders "undefined".
+    assert m["priority_thresholds"]["high_cents"] == 15000

@@ -69,25 +69,59 @@ def test_dashboard_returns_metrics(monkeypatch):
     assert client.get("/api/dashboard").json() == fake
 
 
-def test_batch_returns_claims_and_forwards_pagination(monkeypatch):
+def test_batch_returns_claims_and_forwards_every_query_param(monkeypatch):
     seen = {}
 
-    def fake_batch_claims(batch_id, offset=0, limit=25, status_filter="all", sort="claim_id", q=None):
-        seen.update(batch_id=batch_id, offset=offset, limit=limit,
-                    status_filter=status_filter, sort=sort, q=q)
-        return {"batch_id": batch_id, "total": 50, "offset": offset, "limit": limit, "claims": []}
+    def fake_batch_claims(batch_id, **kwargs):
+        seen.update(batch_id=batch_id, **kwargs)
+        return {"batch_id": batch_id, "total": 50, "offset": kwargs["offset"],
+                "limit": kwargs["limit"], "claims": []}
 
     monkeypatch.setattr(queries, "batch_exists", lambda b: True)
     monkeypatch.setattr(queries, "batch_claims", fake_batch_claims)
-    resp = client.get("/api/batches/LOT-2024-09-15?offset=25&limit=10&status_filter=escalated&sort=amount&q=walmart")
+    resp = client.get(
+        "/api/batches/LOT-2024-09-15?offset=25&limit=10&status_filter=disputable&sort=amount"
+        "&direction=asc&q=walmart&retailer=kroger&reason=promo_billback"
+        "&date_from=2024-09-01&date_to=2024-09-15")
     assert resp.status_code == 200 and resp.json()["total"] == 50
+    # Asserted as a whole dict, not key by key: a param the route forgets to forward silently
+    # narrows nothing, and the analyst sees an unfiltered page that looks perfectly plausible.
     assert seen == {"batch_id": "LOT-2024-09-15", "offset": 25, "limit": 10,
-                    "status_filter": "escalated", "sort": "amount", "q": "walmart"}
+                    "status_filter": "disputable", "sort": "amount", "direction": "asc",
+                    "q": "walmart", "retailer": "kroger", "reason": "promo_billback",
+                    "date_from": "2024-09-01", "date_to": "2024-09-15"}
 
 
 def test_unknown_batch_is_404(monkeypatch):
     monkeypatch.setattr(queries, "batch_exists", lambda b: False)
     assert client.get("/api/batches/nope").status_code == 404
+
+
+def test_a_rejected_query_is_422_not_a_silent_fallback(monkeypatch):
+    """The batch exists, the query doesn't. Distinct from the 404 above — and distinct from the
+    pre-37a behaviour, which quietly served "all"/claim_id and said nothing."""
+    def boom(batch_id, **kwargs):
+        raise ValueError("unknown sort: 'nope' (expected one of age, amount, claim_id)")
+
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "batch_claims", boom)
+    resp = client.get("/api/batches/LOT-2024-09-15?sort=nope")
+    assert resp.status_code == 422
+    assert "unknown sort" in resp.json()["error"]
+
+
+def test_filter_options_lists_the_lots_values(monkeypatch):
+    monkeypatch.setattr(queries, "batch_exists", lambda b: True)
+    monkeypatch.setattr(queries, "lot_filter_options",
+                        lambda b: {"retailers": ["kroger", "walmart"], "reasons": ["shortage"]})
+    resp = client.get("/api/batches/LOT-2024-09-15/filter-options")
+    assert resp.status_code == 200
+    assert resp.json() == {"retailers": ["kroger", "walmart"], "reasons": ["shortage"]}
+
+
+def test_filter_options_unknown_batch_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "batch_exists", lambda b: False)
+    assert client.get("/api/batches/nope/filter-options").status_code == 404
 
 
 # --- batch bulk-run SSE --------------------------------------------------------------------------

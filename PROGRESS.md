@@ -1,6 +1,94 @@
 # Progress
 
 ## Current layer
+**Layer 37a — Query surface for a grid you can work complete**
+
+Fifth of the Layers 33–41 UX-remediation phase, and the first half of a **split**: `docs/PLAN.md`'s
+Layer 37 bundled a backend query rewrite with a substantial frontend rebuild, and the two have
+disjoint verification stories. 37a is backend only — **no frontend change at all**, and `node --test`
+staying at exactly 32 passing is the tell rather than an accident. No agent/prompt/verdict-logic
+changes, no fixture edits, no schema change; the 8 ground-truth verdicts are untouched.
+
+**The sort was a partial order, so paging could lie.** `_SORT_SQL["amount"]` was
+`c.claimed_amount DESC` with no tiebreaker. LIMIT/OFFSET re-runs the query once per page, so under a
+partial order a tied claim can appear on two consecutive pages while its twin appears on none — and
+ties are not an edge case here: **43 of today's 50 claims share an amount with another** (the
+synthetic lot clones 42 claims from 8 archetypes). Direction was also baked into the string, so no
+column could be reversed without interpolating into SQL.
+
+Now `_SORT_SQL` holds **expressions only**, direction is a `_DIRECTIONS` dict lookup (the value that
+reaches SQL never comes from the caller), a per-key `_DEFAULT_DIRECTION` gives each column the useful
+first click, and every `ORDER BY` ends with `c.claim_id ASC`. Sort keys widen to
+`claim_id | po_id | retailer | amount | age | priority`.
+
+Two details are load-bearing rather than tidiness:
+
+1. **`age` sorts on an age expression, not on `claim_date`.** Age runs opposite to date, so sorting a
+   column labelled Age on `claim_date` would make "ascending" return the *oldest* claims first — a
+   control that reads correct and behaves backwards. It costs a bound `ref_date` in the `ORDER BY`,
+   which is why `_SORT_REF_PARAMS` exists: those params sit between the WHERE params and
+   `LIMIT/OFFSET`, and the COUNT query (no `ORDER BY`) still takes the WHERE params alone.
+2. **The tie test had to insert its two claims in reverse claim_id order.** Without an explicit
+   tiebreaker SQLite returns a tie group in rowid (= insertion) order, so a fixture inserted
+   alphabetically hides the bug completely. Inserting `CLM-Z` before `CLM-Y` makes the two orders
+   disagree — confirmed by deleting the tiebreaker and watching the test fail, then restoring it.
+
+**`sort=priority` now orders by the band — a deviation from PLAN.md, approved in planning and
+recorded there.** It was the proxy `claimed_amount DESC, claim_date ASC`, which never groups
+HIGH/MEDIUM/LOW. Measured on the real lot: **4 of the 5 claims that are HIGH purely from aging sorted
+below all six MEDIUM claims, one as far down as row 44 of 50** — under a column header labelled
+Priority. `CLM-001` is the shape of it: a $30 claim, 239 days old, HIGH, buried. Replaced by
+`_PRIORITY_RANK_SQL`, a `CASE` built from the same `_PRIORITY_*` constants `priority()` uses, with its
+`OR` order mirroring `priority()`'s. A test asserts the two agree row-for-row rather than trusting
+they look alike: built from the same constants is not the same as computes the same answer, since the
+`julianday` arithmetic is a separate implementation of the age comparison.
+
+**Rejection replaces silent fallback (closes the Layer 35 deferred note).** Unknown
+`status_filter`/`sort`/`direction`, a non-ISO date, `limit` outside 1–200 or a negative `offset` now
+raise `ValueError` naming the value and the allowed set; `ui/server.py` maps that to **422**, distinct
+from the batch 404. The old behaviour served "all"/`claim_id` — a plausible page of the *wrong* rows
+with nothing on screen saying so. Dates need the check specifically because `claim_date` is stored as
+an ISO string: a non-ISO bound parameter doesn't error, it compares lexicographically.
+
+**The rest of the query surface.** `retailer`/`reason` exact-match filters (dropdown-driven; the store
+holds lowercase tokens and there is no retailer master) and inclusive `date_from`/`date_to`;
+`total_amount_cents` folded into the existing COUNT query as `COALESCE(SUM(...), 0)` so it is one pass
+and over the **filtered set, not the page** — a footer that added up only the visible rows would show
+a different total on every page, which is the one thing a total must never do; per-claim `age_days`
+and a new pure `priority_reason()` (`"aged 239 days"` / `"$200.00 at risk"`), both server-side because
+they are measured against the lot's `load_date`, which the browser never receives. `priority_reason`
+branches in the same order `priority()` does, so a pill can't say HIGH while the line under it
+explains a rule that wasn't the one that fired. New `lot_filter_options(batch_id)` +
+`GET /api/batches/{id}/filter-options`, and `priority_thresholds` on `/api/dashboard` so 37b's legend
+is generated rather than retyped into `index.html`.
+
+**Verification.** `scripts/check.sh` — `pytest` **409 passed, 10 deselected** (was 392); `pyright` 0
+errors; `node --test` **32 passing, unchanged**. Explicit `pytest tests/test_etl.py tests/test_db.py`
+— 59 passed, so the fidelity oracle is untouched (confirmed, not assumed, as in Layers 34/35).
+
+**Live.** Real `uvicorn` against the real `data/deductions.db`, **read-only — every call a GET, no
+writes, no OpenRouter run**. Walking the whole lot one row at a time under `sort=amount` returned 50
+distinct claims equal to the full set; `direction=asc` reversed `desc`; `sort=priority` came back
+grouped 17 HIGH / 6 MEDIUM / 27 LOW with `CLM-001` (`aged 239 days`, $30) at the top instead of buried;
+`retailer=walmart` narrowed to 13 claims / $354.00 and `total_amount_cents` held constant at `limit=5`
+and `limit=200`; all six rejection cases returned 422 with a message naming the allowed values, the
+unknown batch still 404; `filter-options` returned the 7 real retailers and 3 real reasons.
+
+**Honest note on one test.** `test_paging_a_sorted_list_never_repeats_or_drops_a_claim` does *not*
+fail on the un-tiebroken query — SQLite runs identical queries through an identical plan and so
+happens to return the same partial order every time. The guarantee was never promised, only observed.
+`test_ties_are_broken_by_claim_id_so_the_order_is_total` is the test that catches the defect; the
+paging test pins the invariant the guarantee exists to provide, and its docstring says so rather than
+implying coverage it doesn't have.
+
+**Known and deferred:** the queue table still renders 6 columns and no `total_amount_cents` footer —
+`po_id`, `age_days`, `priority_reason`, the new filters, the echoed `sort`/`direction` and
+`priority_thresholds` are all served and none are consumed yet. That is 37b by design, and until it
+lands the new API surface is exercised only by tests and by hand.
+
+---
+
+## Previous layer
 **Layer 36 — Verdict semantics that match the money complete**
 
 Fourth of the Layers 33–41 UX-remediation phase. **No Python at all** — no agent/prompt/verdict-logic

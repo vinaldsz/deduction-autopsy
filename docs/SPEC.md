@@ -673,3 +673,32 @@ worklist the analyst eyeballs (ESCALATE = human attention).
   (all three were already stored and never returned) and `decision_stale` — true when the agents have
   re-run since the decision was recorded. Staleness is reported, never applied: the human's recorded
   call remains the claim's effective verdict until they revisit it.
+
+### UI API Contract — Layer 37a amendments (query surface)
+
+- `GET /api/dashboard` additionally carries `priority_thresholds: {high_cents, med_cents, age_days}`,
+  generated from the constants in `ui/queries.py`. It exists so the UI can state its own banding rules
+  without retyping them into `index.html`, where a threshold change would leave the page confidently
+  explaining a rule the server no longer applies. Present even when no lot is loaded (they are
+  constants, not counts).
+- `GET /api/batches/{batch_id}` accepts five more parameters: `direction` (`asc`/`desc`), `retailer`
+  and `reason` (exact match — the store holds lowercase tokens and there is no retailer master, per
+  schema decision 1), and `date_from`/`date_to` (inclusive, ISO, on `claim_date`). `sort` widens to
+  `claim_id | po_id | retailer | amount | age | priority`.
+- **Unrecognised values are rejected with 422**, not silently defaulted. Covers an unknown
+  `status_filter`/`sort`/`direction`, a non-ISO date, `limit` outside 1–200 and a negative `offset`.
+  Distinct from the 404, which is about the batch rather than the query. Falling back to
+  "all"/`claim_id` returned a plausible page of the *wrong* rows with nothing on screen saying so.
+- Response gains `total_amount_cents` (over the **filtered set**, not the page — a footer that added
+  up only the visible rows would show a different total on every page), plus the echoed `sort` and
+  `direction` so the client can render the active sort indicator from the server's answer rather than
+  from its own request. Each claim gains `age_days` and `priority_reason` (e.g. `"aged 239 days"` /
+  `"$200.00 at risk"`), both measured against the lot's `load_date`, which the browser never receives.
+- Sorting is a **total order**: direction is a whitelisted lookup rather than part of the column
+  expression, and every `ORDER BY` ends with `c.claim_id ASC`. Without the tiebreaker, tied rows may
+  be returned in any order — and 43 of today's 50 claims share an amount with another, so a tied claim
+  could appear on two consecutive pages while its twin appeared on none. `sort=priority` orders by the
+  HIGH/MEDIUM/LOW band (a SQL `CASE` built from the same constants `priority()` uses), not by the old
+  `amount DESC, claim_date ASC` proxy, which never grouped the bands.
+- `GET /api/batches/{batch_id}/filter-options` → `{retailers, reasons}`, the distinct values present
+  in that lot. 404 on an unknown batch.
