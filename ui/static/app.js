@@ -1,7 +1,10 @@
 // Analyst workspace over the Layer 30/32 API. DOM + fetch only — pure logic lives in lib.js where
 // `node --test` can reach it (tests/js/). No framework, no build step.
 
-import { dollars, dollarsCompact, lotSubtitle, todoSplit } from "./lib.js";
+import {
+  confidenceBand, discrepancyPhrase, dollars, dollarsCompact, lotSubtitle, sentenceCase, todoSplit,
+  verdictLabel,
+} from "./lib.js";
 
 const LIMIT = 25;
 const state = {
@@ -73,9 +76,15 @@ async function loadDashboard() {
 /** The status cell: effective verdict, plus what it superseded. Shared with setRowStatus so a live
     run and a page load render the same thing. */
 function statusCell(claim) {
-  const td = el("td", "status");
-  td.appendChild(el("span", `dot d-${claim.status}`));
-  td.appendChild(document.createTextNode(claim.status));
+  const v = verdictLabel(claim.status);
+  const td = el("td", `status t-${v.tone}`);
+  // Glyph, not the old coloured dot: a dot carries nothing in greyscale or to a colour-blind reader,
+  // and it cost the same width as the mark that actually states the money direction.
+  td.appendChild(el("span", "v-glyph", v.glyph));
+  td.appendChild(el("span", null, v.label));
+  // The raw machine verdict is NOT repeated here — the label is the scannable read, and at 420px the
+  // extra word pushed the column past the pane and clipped itself. It lives on the review pane's
+  // chip, which is where a single claim gets cross-referenced against the CLI and the API.
   // `status` is the effective verdict, so an override shows the analyst's answer as the claim's
   // answer. The superseded agent verdict stays visible beside it — dropping it would erase the
   // audit trail that keeping the two spines separate exists to preserve.
@@ -92,7 +101,7 @@ function renderRow(claim) {
   tr.tabIndex = 0;
   tr.appendChild(el("td", null, claim.claim_id));
   tr.appendChild(el("td", null, claim.retailer));
-  tr.appendChild(el("td", null, claim.claimed_reason));
+  tr.appendChild(el("td", null, sentenceCase(claim.claimed_reason)));
   tr.appendChild(el("td", "num", dollars(claim.claimed_amount)));
   const priority = el("td");
   priority.appendChild(el("span", `pill p-${claim.priority}`, claim.priority));
@@ -225,8 +234,9 @@ function emptyNode(msg) {
 
 function renderReason(claim, notes) {
   const box = $("w-reason"); box.replaceChildren();
+  // Reason leads the sentence, so sentenceCase reads correctly without a lowercase round-trip.
   box.appendChild(el("div", "lead",
-    `${claim.retailer} claims ${claim.claimed_reason} for ${dollars(claim.claimed_amount)} · claimed ${claim.claim_date}`));
+    `${sentenceCase(claim.claimed_reason)} claimed by ${claim.retailer} for ${dollars(claim.claimed_amount)} · filed ${claim.claim_date}`));
   if (notes) box.appendChild(el("div", "notes", `“${notes}”`));
 }
 
@@ -262,7 +272,8 @@ function renderDocuments(docs) {
   if (docs.prior_claims.length) {
     wrap.appendChild(docCard(`Prior claims on this PO (${docs.prior_claims.length})`, null,
       rowTable(["Claim", "Reason", "Amount", "Date", "Verdict"], docs.prior_claims,
-        (c) => [[c.claim_id], [c.claimed_reason], [dollars(c.claimed_amount), true], [c.claim_date], [c.final_verdict || "unresolved"]])));
+        (c) => [[c.claim_id], [sentenceCase(c.claimed_reason)], [dollars(c.claimed_amount), true],
+                [c.claim_date], [verdictLabel(c.final_verdict).label]])));
   }
 }
 
@@ -292,7 +303,7 @@ async function selectClaim(claim) {
   $("ws-empty").classList.add("hidden");
   $("ws-body").classList.remove("hidden");
   $("w-claim").textContent = claim.claim_id;
-  $("w-meta").textContent = `${claim.retailer} · ${claim.claimed_reason} · ${dollars(claim.claimed_amount)} · claimed ${claim.claim_date}`;
+  $("w-meta").textContent = `${claim.retailer} · ${sentenceCase(claim.claimed_reason)} · ${dollars(claim.claimed_amount)} · claimed ${claim.claim_date}`;
   $("trace").replaceChildren();
   $("usage").textContent = "";
   $("w-disp-status").textContent = "";
@@ -365,23 +376,35 @@ function showDisputeDownloadOnly(claimId) {
 }
 
 function renderVerdictHeader(ev) {
+  const v = verdictLabel(ev.final_verdict);
   const chip = $("w-final");
-  chip.textContent = ev.final_verdict;
-  chip.className = "verdict-chip " + ev.final_verdict;
-  if (ev.confidence != null) {
+  chip.className = "verdict-chip t-" + v.tone;
+  chip.title = v.blurb;
+  chip.replaceChildren(el("span", "v-glyph", v.glyph), el("span", null, v.label));
+  if (v.tone !== "neutral") chip.appendChild(el("span", "v-code", v.verdict));
+
+  const conf = confidenceBand(ev.confidence);
+  if (conf) {
     $("w-conf-wrap").classList.remove("hidden");
-    $("w-conf-bar").style.width = Math.round(ev.confidence * 100) + "%";
-    $("w-conf-txt").textContent = `${Math.round(ev.confidence * 100)}% confidence`;
+    const bar = $("w-conf-bar");
+    bar.style.width = conf.pct + "%";
+    bar.className = "c-" + conf.band;
+    $("w-conf-meter").setAttribute("aria-valuenow", String(conf.pct));
+    $("w-conf-txt").textContent = `${conf.band} confidence (${conf.pct}%)`;
   } else {
     $("w-conf-wrap").classList.add("hidden");
   }
+
   const prov = $("w-provenance");
   if (ev.investigator_verdict && ev.reviewer_verdict) {
+    // The provenance chain keeps the machine words: it records what each agent literally said, and
+    // the Reviewer's CONFIRM/OVERTURN is an action, not a money direction — only ESCALATE is toned.
+    const proposed = verdictLabel(ev.investigator_verdict);
     prov.replaceChildren(
       document.createTextNode("Investigator proposed "),
-      el("span", `v V-${ev.investigator_verdict}`, ev.investigator_verdict),
+      el("span", `v t-${proposed.tone}`, ev.investigator_verdict),
       document.createTextNode(" → Reviewer "),
-      el("span", `v r-${ev.reviewer_verdict}`, ev.reviewer_verdict),
+      el("span", ev.reviewer_verdict === "ESCALATE" ? "v t-warn" : "v", ev.reviewer_verdict),
     );
   } else { prov.textContent = ""; }
 }
@@ -398,9 +421,12 @@ function renderRecon(po, discQty, discCents) {
     tr.appendChild(el("td", "num", v));
     body.appendChild(tr);
   }
+  // Not "0 EACH · $0.00" in plain text and anything else in red: a zero discrepancy IS the grounds
+  // for disputing, and a real shortage is a finding rather than an error.
+  const phrase = discrepancyPhrase(discQty, discCents);
   const disc = el("tr", "disc");
   disc.appendChild(el("td", null, "Discrepancy"));
-  disc.appendChild(el("td", discQty ? "num bad" : "num", `${discQty} EACH · ${dollars(discCents)}`));
+  disc.appendChild(el("td", `num t-${phrase.tone}`, phrase.text));
   body.appendChild(disc);
   $("w-recon").replaceChildren(body);
 }
@@ -418,7 +444,7 @@ function renderEvidence(claimId, ev) {
   const tl = $("w-timeline"); tl.replaceChildren();
   for (const e of ev.timeline || []) {
     const div = el("div", "tl-event" + (e.valid ? "" : " invalid"));
-    div.appendChild(el("span", "e", e.event));
+    div.appendChild(el("span", "e", sentenceCase(e.event)));
     div.appendChild(el("span", "d", e.date));
     tl.appendChild(div);
   }

@@ -61,6 +61,7 @@ was gated on sign-off — it is the only layer that edits the agent prompts):
 | 33 | JS test harness + render hygiene (`tests/js/`, `ui/static/lib.js`) | ✅ Done |
 | 34 | Decision integrity — accept recorded as a snapshot, not a pointer (`decided_verdict`) | ✅ Done |
 | 35 | KPIs that add up — to-do/decided partition, `v_batch_summary` dropped | ✅ Done |
+| 36 | Verdict semantics that match the money — tone keyed to money direction, not verdict name | ✅ Done |
 | — | Layer-end verification tooling (`scripts/check.sh`, `/layer-done`, `tests/test_invariants.py`) | ✅ Done |
 
 ## Setup

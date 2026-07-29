@@ -66,9 +66,13 @@
     #banner-msg { flex: 1; }
     #banner button { color: var(--bad); border-color: var(--bad); }
 
-    /* Two-pane layout */
-    .workspace { display: grid; grid-template-columns: 420px 1fr; gap: 16px; padding: 0 24px 48px; align-items: start; }
-    @media (max-width: 880px) { .workspace { grid-template-columns: 1fr; } }
+    /* Two-pane layout. The queue is 540px because that is what its six columns actually measure —
+       at 420px the table came to 531px inside a `.pane { overflow: hidden }`, so the rightmost column
+       was clipped mid-word and the four rows carrying a disposition badge lost it entirely. That has
+       been true since Layer 32; the longer verdict labels only made it visible. Layer 37 owns the
+       grid proper (it adds PO and Age columns and will have to size them). */
+    .workspace { display: grid; grid-template-columns: 540px 1fr; gap: 16px; padding: 0 24px 48px; align-items: start; }
+    @media (max-width: 1024px) { .workspace { grid-template-columns: 1fr; } }
     .pane { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
     .pane > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 
@@ -91,9 +95,16 @@
     .p-HIGH { color: var(--bad); border: 1px solid var(--bad); }
     .p-MEDIUM { color: var(--warn); border: 1px solid var(--warn); }
     .p-LOW { color: var(--muted); border: 1px solid var(--border); }
-    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-    .d-VALID { background: var(--ok); } .d-INVALID { background: var(--bad); }
-    .d-ESCALATE { background: var(--warn); } .d-unresolved { background: var(--muted); }
+    /* The verdict glyph earns its place: it is what states the money direction in greyscale and to a
+       colour-blind reader, so the tone is reinforcement, never the only carrier. It replaced a
+       coloured dot in the queue, which conveyed nothing without colour. */
+    .v-glyph { font-weight: 700; margin-right: 5px; font-variant-numeric: tabular-nums; }
+    /* The verdict is the column the analyst scans; the claim id above it already wraps, so let the
+       narrower columns give way rather than let this one clip mid-word. */
+    td.status { white-space: nowrap; }
+    /* The raw machine verdict, kept beside the money-direction label so the words the API, the CLI
+       and the filter tabs use stay cross-referenceable — subdued, because it is the secondary read. */
+    .v-code { color: var(--muted); font-size: 10px; letter-spacing: .04em; margin-left: 6px; }
     .row-spin { color: var(--accent); }
     .disp-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; margin-left: 6px; }
     .pager { display: flex; gap: 12px; align-items: center; padding: 10px 14px; }
@@ -107,18 +118,31 @@
     .ws-head { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start; }
     .ws-head .id { font-size: 18px; font-weight: 700; }
     .ws-head .meta { color: var(--muted); font-size: 13px; }
-    .verdict-chip { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
-    .verdict-chip.VALID { color: var(--ok); border: 1px solid var(--ok); }
-    .verdict-chip.INVALID { color: var(--bad); border: 1px solid var(--bad); }
-    .verdict-chip.ESCALATE { color: var(--warn); border: 1px solid var(--warn); }
-    .verdict-chip.unresolved { color: var(--muted); border: 1px solid var(--border); }
+    /* Verdict colour is keyed to the MONEY DIRECTION, not to the verdict name. "INVALID" means the
+       retailer's deduction doesn't hold and the amount is recoverable — a positive outcome; "VALID"
+       means we concede it. The old palette had those two exactly backwards, and because the mapping
+       lived in class names (.verdict-chip.VALID) no test could reach it. It now lives only in
+       lib.js::verdictLabel; this stylesheet knows nothing but the four tones. */
+    .t-pos { color: var(--ok); } .t-neg { color: var(--bad); }
+    .t-warn { color: var(--warn); } .t-neutral { color: var(--muted); }
+    .verdict-chip { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; border: 1px solid currentColor; }
+    .verdict-chip.t-neutral { border-color: var(--border); }
     .provenance { font-size: 12px; color: var(--muted); }
     .provenance .v { font-weight: 700; }
-    .provenance .V-VALID { color: var(--ok); } .provenance .V-INVALID { color: var(--bad); } .provenance .V-ESCALATE { color: var(--warn); }
-    .provenance .r-CONFIRM { color: var(--ok); } .provenance .r-OVERTURN { color: var(--bad); } .provenance .r-ESCALATE { color: var(--warn); }
+    /* The Reviewer's ACTION carries no tone except ESCALATE. Painting CONFIRM green and OVERTURN red
+       says agreement is good and disagreement is bad — the opposite of why a second agent exists. */
+    .conf-wrap { display: flex; flex-direction: column; gap: 3px; }
     .conf { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
     .meter { width: 120px; height: 7px; background: var(--panel2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
     .meter > span { display: block; height: 100%; background: var(--accent); }
+    /* A separate scale from the verdict tones on purpose: high confidence must not be green, or the
+       token that now means "recoverable money" would mean two things at once. */
+    .meter > span.c-High { background: var(--accent); }
+    .meter > span.c-Moderate { background: var(--warn); }
+    .meter > span.c-Low { background: var(--bad); }
+    /* A bare "95% confidence" invites false precision. This is the Reviewer's own claim about itself,
+       and saying so is the difference between a number and a measurement. */
+    .conf-note { font-size: 11px; color: var(--muted); max-width: 260px; }
 
     .block h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
 
@@ -142,9 +166,10 @@
     table.recon th, table.recon td { text-align: right; }
     table.recon th:first-child, table.recon td:first-child { text-align: left; }
     table.recon tr.disc td { font-weight: 700; }
-    table.recon tr.disc td.bad { color: var(--bad); }
-    .callout { background: rgba(210,153,34,.1); border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
-    .callout .k { color: var(--warn); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    /* Unit-of-measure normalization is neutral arithmetic — the explanation of why 5 CASE is not a
+       115-unit shortage. It was styled as a warning, which framed the correct reading as a problem. */
+    .callout { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+    .callout .k { color: var(--muted); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 
     .timeline { display: flex; flex-wrap: wrap; gap: 8px; }
     .tl-event { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-width: 92px; }
@@ -182,8 +207,9 @@
       background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font: inherit; padding: 7px 10px;
     }
     .decision input.note { flex: 1; min-width: 160px; }
-    button.ok { background: var(--ok); color: #06210d; }
-    button.danger { background: var(--bad); color: #2b0606; }
+    /* Both decision buttons are .ghost. A green Accept beside a red Override told the analyst that
+       agreeing with the agents is the safe choice and disagreeing is the dangerous one; overriding a
+       verdict from the source documents is an ordinary, expected part of the job. */
     .disp-current { font-size: 12px; color: var(--muted); }
     .disp-note { font-style: italic; }
     /* The agents have re-run since this decision was recorded. The decision still stands — this
@@ -279,7 +305,17 @@
           </div>
           <div>
             <div><span class="verdict-chip" id="w-final"></span></div>
-            <div class="conf" id="w-conf-wrap"><span class="meter"><span id="w-conf-bar"></span></span><span id="w-conf-txt"></span></div>
+            <div class="conf-wrap" id="w-conf-wrap">
+              <div class="conf">
+                <span class="meter" id="w-conf-meter" role="progressbar"
+                      aria-valuemin="0" aria-valuemax="100" aria-label="Reviewer's stated confidence">
+                  <span id="w-conf-bar"></span>
+                </span>
+                <span id="w-conf-txt"></span>
+              </div>
+              <!-- Static, so it hides with the meter when there is no confidence to qualify. -->
+              <div class="conf-note">The Reviewer's own stated confidence in this verdict — not a measured accuracy rate.</div>
+            </div>
           </div>
           <div class="provenance" id="w-provenance"></div>
           <div style="margin-left:auto"><button class="sm" id="w-investigate">Investigate</button></div>
@@ -340,14 +376,16 @@
                sat after the button and defaulted to VALID, so one stray click recorded
                "override → VALID" with no confirmation and no stated reason. -->
           <div class="actions" id="w-decision-actions">
-            <button class="ok sm" data-disp="accept">Accept verdict</button>
+            <button class="ghost sm" data-disp="accept">Accept verdict</button>
+            <!-- The one place the analyst *enters* a verdict, so the option text spells out the money
+                 direction the machine words hide. `value` is the raw verdict — the API contract. -->
             <select id="w-override-verdict">
               <option value="">— choose verdict —</option>
-              <option value="VALID">VALID</option>
-              <option value="INVALID">INVALID</option>
-              <option value="ESCALATE">ESCALATE</option>
+              <option value="INVALID">INVALID — disputable, we recover</option>
+              <option value="VALID">VALID — conceded, we absorb it</option>
+              <option value="ESCALATE">ESCALATE — unresolved, leave it open</option>
             </select>
-            <button class="danger sm" data-disp="override" disabled>Override</button>
+            <button class="ghost sm" data-disp="override" disabled>Override</button>
             <input class="note" id="w-note" type="text" placeholder="Reason for override (required)" />
           </div>
           <!-- Shown instead of the buttons until the claim has been investigated: there is no

@@ -615,6 +615,21 @@ Layer 34 is the only schema gate.
   confidence meter gets `role="progressbar"` + ARIA values + an explanation of what it measures.
 - **Verify:** `node --test`, plus a `filter: grayscale(1)` pass — this layer lands no Python change,
   so `pytest` cannot regress it.
+- **What the build changed from the above.** `reasonLabel` + `titleCase` collapsed to one
+  `sentenceCase`: real title case ("Promo Billback") matches nothing else on the page, and with a
+  sentence-caser all four `ClaimReason` values come out right *with no map*, which left `reasonLabel`
+  a single-use wrapper whose fallback branch was unreachable. `confidenceBand` deliberately returns no
+  `tone` — high confidence must not be green, or the token that now means "recoverable money" means
+  two things at once; it gets its own `.c-High/.c-Moderate/.c-Low` scale. The tone tokens are the
+  point of the layer: the verdict→colour mapping used to live in CSS *class names*
+  (`.verdict-chip.VALID`, `.d-INVALID`), where no test could reach it, and now lives only in
+  `verdictLabel`.
+- **Found by looking at the running app, and fixed here:** the queue's rightmost column had been
+  clipped since Layer 32 — its six columns measure 531px inside a 420px `.pane { overflow: hidden }`,
+  so the four rows carrying a disposition badge lost it entirely. Widened to 540px (measured, not
+  guessed). Layer 37 owns the grid proper and will have to size the columns it adds. The queue's
+  status cell also traded its coloured dot for the verdict glyph — a dot says nothing in greyscale,
+  and it cost the same width as the mark that does.
 
 ### 37. A grid you can work
 

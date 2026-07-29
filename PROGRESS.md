@@ -1,6 +1,121 @@
 # Progress
 
 ## Current layer
+**Layer 36 — Verdict semantics that match the money complete**
+
+Fourth of the Layers 33–41 UX-remediation phase. **No Python at all** — no agent/prompt/verdict-logic
+changes, no fixture edits, no schema; the 8 ground-truth verdicts are untouched and `pytest` stayed at
+exactly 392 passed / 10 deselected, which is the point: this layer is only reachable by `node --test`
+and by looking at the running app.
+
+**The palette said the opposite of the money.** `VALID` rendered green and `INVALID` red. `VALID`
+means the retailer's deduction holds — we concede, the money is gone. `INVALID` means it doesn't hold
+— disputable, and the amount is **recoverable**. The words were as backwards as the colours ("VALID"
+is valid *for the retailer*), and the one place the UI already had it right — the `Disputable` filter
+tab — was contradicted by the verdict chip two panes over.
+
+**Tone replaces the verdict name (`ui/static/lib.js`).** The mapping used to live in CSS *class
+names* (`.verdict-chip.VALID`, `.d-INVALID`, `.provenance .V-VALID`), i.e. asserted in a stylesheet no
+test can reach. It now lives only in `verdictLabel`, and the stylesheet knows nothing but
+`pos`/`neg`/`warn`/`neutral`:
+
+| verdict | label | tone | glyph |
+|---|---|---|---|
+| INVALID | Disputable | pos | `+` |
+| VALID | Conceded | neg | `−` |
+| ESCALATE | Your call | warn | `?` |
+| unresolved / null / unknown | Not investigated (or the raw string) | neutral | `·` |
+
+Three details are load-bearing rather than tidiness:
+
+1. **The glyph is not decoration** — it is what carries the money direction in greyscale and to a
+   colour-blind reader. Tested for presence and distinctness, so it can't be lost by omission.
+2. **An unknown verdict degrades to `neutral`, never to a tone.** Rendering an unrecognised value as
+   "Conceded" would be a *wrong* money direction, which is worse than an admitted unknown.
+   `Object.hasOwn`, not a truthiness lookup: `VERDICTS["constructor"]` inherits from
+   `Object.prototype`, is truthy, and would have spread into a chip with no label, tone or glyph.
+3. **`confidenceBand` deliberately returns no `tone`.** High confidence must not be green, or the
+   token that now means "recoverable money" would mean two things at once — the exact mistake being
+   fixed. It gets its own `.c-High/.c-Moderate/.c-Low` scale, and clamps to `[0,1]` because the value
+   is a model self-report and a stray `1.3` would render a meter fill wider than its own track.
+
+**`discrepancyPhrase`.** The recon row was `0 EACH · $0.00` in plain text and anything non-zero in
+red — so it read as missing data when a zero discrepancy is precisely *the grounds for disputing*, and
+as an error when a real shortage is a finding. Now: `12 EACH short · $30.00 — favours the retailer's
+claim` / `No quantity discrepancy — the documents reconcile exactly` / `8 EACH over-shipped · $20.00 —
+favours us`. It says "favours the retailer's **claim**", not "the retailer wins": s04 has a genuine
+shortage and an INVALID verdict on the timeline, so the quantity arithmetic does not decide the
+verdict. Money booked against a zero quantity is appended rather than hidden — that is an
+inconsistency in the agent's own arithmetic and the analyst should see it.
+
+**Deviation from `docs/PLAN.md`, recorded there too.** PLAN.md called for `reasonLabel` + `titleCase`;
+both collapsed into one `sentenceCase`. Real title case gives "Promo Billback" / "Order Date", which
+matches nothing else on the page ("Source documents", "Purchase order"), and with a sentence-caser all
+four `ClaimReason` values come out right *with no map at all* — which left `reasonLabel` a single-use
+wrapper whose fallback branch was unreachable dead code. One honestly-named function, four call sites.
+
+**Colour that asserted something it shouldn't, also fixed.** Both decision buttons are now `.ghost`
+(a green Accept beside a red Override said agreeing with the agents is safe and disagreeing is
+dangerous — overriding from the source documents is an ordinary part of the job; `button.ok` and
+`button.danger` had exactly one call site each and are deleted). The UOM callout stops being
+warning-amber for what is neutral arithmetic. The Reviewer's CONFIRM/OVERTURN loses its
+green/red entirely — colouring agreement green says agreement is good, the opposite of why a second
+agent exists — and only its ESCALATE keeps a tone.
+
+**The confidence meter** gets `role="progressbar"` + `aria-valuemin/max/now` + `aria-label`, reads
+`High confidence (98%)` instead of a bare `98% confidence`, and carries a static visible line: *"The
+Reviewer's own stated confidence in this verdict — not a measured accuracy rate."* Visible rather than
+a `title` tooltip, which is keyboard-inaccessible. The override `<select>`'s option **text** gains the
+money direction (`INVALID — disputable, we recover`); the `value`s are untouched, so the API contract
+and `postDisposition` are unchanged. That control is the one place the analyst *enters* a verdict, so
+the raw word alone was actively risky there.
+
+**Kept raw on purpose.** The review pane's chip carries the machine verdict beside the label
+(`+ Disputable INVALID`), and the provenance line and the recorded-decision line keep machine words
+throughout — they are the audit record of what each agent and the analyst literally said. All verdict
+*logic* still compares raw verdicts, never labels.
+
+**Two things only looking at the running app could have found.**
+
+1. **The queue's rightmost column has been clipped since Layer 32.** Its six columns measure 531px
+   inside a 420px `.pane { overflow: hidden }`, so `STATUS` was cut mid-word and the four rows
+   carrying a disposition badge lost it entirely. `VALID` was short enough to survive; `Disputable`
+   was not, which is how this surfaced. Measured over CDP, not guessed, and the pane widened to 540px
+   (table now 538px); breakpoint raised 880→1024px so the review pane isn't squeezed. Layer 37 owns
+   the grid proper and will have to size the columns it adds.
+2. **The queue's status cell had a coloured dot and no glyph** — so after all of the above it still
+   said nothing in greyscale. The dot is gone (its CSS rule with it) and the glyph took its place at
+   the same width. The raw verdict is deliberately *not* repeated in the queue row: at 420px the extra
+   word was what pushed the column past the pane, and cross-referencing happens on one claim at a
+   time, in the pane that has room for it.
+
+**Verification.** `scripts/check.sh` — `pytest` **392 passed, 10 deselected** (unchanged, as
+predicted); `pyright` 0 errors; `node --test` **32 passing** (was 14). The load-bearing test asserts
+`INVALID` is `pos` and `VALID` is `neg` explicitly and names itself as the regression — a future
+palette tweak inverting those two is the one thing nothing else in the suite would catch.
+
+**Live.** Real `uvicorn` against the real DB, driven headless over the Chrome DevTools Protocol (no
+dependencies — Node 22's global `WebSocket`), because the default To-do tab is empty on a fully-decided
+lot and a plain screenshot never reaches the review pane. Verified on real data, DOM asserted as well
+as screenshotted: `CLM-SYN-0009` (real 12-unit shortage → `− Conceded VALID`, red, `12 EACH short ·
+$30.00 — favours the retailer's claim`), `CLM-002` (s02 casepack mismatch → `+ Disputable INVALID`,
+green, `No quantity discrepancy — the documents reconcile exactly`, neutral UOM callout, both buttons
+`ghost sm`, `aria-valuenow=98`, `.c-High`), and `CLM-SYN-0007` (a real **OVERTURN**: Investigator
+proposed INVALID (pos) → Reviewer OVERTURN (untinted) → final VALID (neg) — the provenance chain
+rendering exactly as designed). Then the **greyscale pass**: `filter: grayscale(1)` on the full
+25-row `All` tab, mixed VALID and INVALID — every verdict still readable from glyph + word with zero
+colour, and the previously-clipped `accept` badges now visible. No live OpenRouter run and no writes
+to the real DB — this layer touches no agent code and records no decisions.
+
+**Known and deferred:** the `.check.PASS/.FAIL` chips keep green/red (a failed reviewer check is a
+genuine defect signal and the chip carries the word), as do `.tl-event.invalid` (an out-of-order date
+*is* a document defect) and the priority pills (urgency, not money direction). Green therefore carries
+two meanings across different blocks — acceptable, and narrowing the check chips is Layer 39's
+business. Static CSS remains unguarded by any test, the same gap Layer 35 recorded.
+
+---
+
+## Previous layer
 **Layer 35 — KPIs that add up complete**
 
 Third of the Layers 33–41 UX-remediation phase. Closes the "numbers that don't survive scrutiny" class
