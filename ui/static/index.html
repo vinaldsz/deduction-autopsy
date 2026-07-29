@@ -253,18 +253,38 @@
     .callout { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
     .callout .k { color: var(--muted); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 
-    .timeline { display: flex; flex-wrap: wrap; gap: 8px; }
+    .timeline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .tl-event { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-width: 92px; }
     .tl-event .e { font-size: 11px; color: var(--muted); }
     .tl-event .d { font-variant-numeric: tabular-nums; font-size: 13px; }
     .tl-event.invalid { border-color: var(--bad); }
     .tl-event.invalid .e { color: var(--bad); }
+    /* The interval between two events, not decoration: "+90 days" is why a deduction is late. The sign
+       and the words carry the direction, so it reads with no colour at all. */
+    .tl-gap { font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    /* A negative interval is a sequence violation sitting in plain sight — the one gap that is a
+       finding rather than a measurement, so it keeps the same red the invalid event chip uses. */
+    .tl-gap.back { color: var(--bad); }
 
-    .checks { display: flex; flex-wrap: wrap; gap: 8px; }
-    .check { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); }
+    /* One row per check rather than a chip row. "uom: PASS" is unreadable to anyone who hasn't read
+       the Reviewer's prompt, and the description has to be VISIBLE — a title tooltip is unreachable
+       by keyboard (Layer 36). */
+    .checks { display: flex; flex-direction: column; gap: 6px; }
+    .check-row { display: grid; grid-template-columns: 64px 132px 1fr; gap: 10px; align-items: baseline; }
+    .check-row .label { font-size: 13px; }
+    .check-row .desc { font-size: 12px; color: var(--muted); }
+    .check { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); text-align: center; }
     .check.PASS { color: var(--ok); border-color: var(--ok); }
     .check.FAIL { color: var(--bad); border-color: var(--bad); }
     .check.NA { color: var(--muted); opacity: .7; }
+
+    /* The agents' own prose. pre-wrap because it is multi-paragraph model output, and textContent-only
+       because it can quote a fixture `notes` field — the documented injection surface. Never markdown. */
+    .why { display: flex; flex-direction: column; gap: 10px; }
+    .why .who { font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px; }
+    .why .prose { font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+    /* Run history, read-only: which verdicts this claim has had, newest first. */
+    #w-runs { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
     .grounds { margin: 0; padding-left: 18px; }
     .grounds li { margin-bottom: 4px; font-size: 14px; }
@@ -276,6 +296,7 @@
     #trace { list-style: none; margin: 0; padding: 0 12px 8px; display: flex; flex-direction: column; gap: 5px; }
     #trace li { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
     #trace li.error { border-color: var(--bad); }
+    #trace-empty { color: var(--muted); font-size: 12px; padding: 0 12px 8px; }
     .agent-tag { display: inline-block; min-width: 92px; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
     .agent-investigator { color: var(--accent); }
     .agent-reviewer { color: var(--warn); }
@@ -470,7 +491,12 @@
               <div class="conf-note">The Reviewer's own stated confidence in this verdict — not a measured accuracy rate.</div>
             </div>
           </div>
-          <div class="provenance" id="w-provenance"></div>
+          <div>
+            <div class="provenance" id="w-provenance"></div>
+            <!-- Only rendered when a claim has more than one run: on today's lot 46 of 50 have exactly
+                 one, and a control that says "1 run" on 92% of claims is noise. -->
+            <div class="hidden" id="w-runs"></div>
+          </div>
           <div style="margin-left:auto"><button class="sm" id="w-investigate">Investigate</button></div>
         </div>
 
@@ -509,15 +535,35 @@
           <div class="context-chips" id="w-context"></div>
         </div>
 
+        <!-- After Context (which is evidence) and before Dispute grounds (which is the output). The
+             agents' prose is a conclusion, so evidence-first ordering puts it late; it is also the most
+             anchoring content on the page — the very thing the Reviewer is deliberately not shown. -->
+        <div class="block hidden" id="w-why-block">
+          <h3>Why this verdict</h3>
+          <div class="why">
+            <div class="hidden" id="w-why-inv">
+              <div class="who">Investigator — proposed verdict</div>
+              <div class="prose" id="w-why-inv-body"></div>
+            </div>
+            <div class="hidden" id="w-why-rev">
+              <div class="who">Reviewer — independent spot-check</div>
+              <div class="prose" id="w-why-rev-body"></div>
+            </div>
+          </div>
+        </div>
+
         <div class="block hidden" id="w-dispute-block">
           <h3>Dispute grounds</h3>
           <ul class="grounds" id="w-grounds"></ul>
           <button class="ghost sm" id="w-download">Download dispute packet</button>
         </div>
 
-        <details class="audit">
+        <!-- Not force-opened on a run any more: the analyst opens the audit trail when auditing. The
+             trace is fetched lazily on first open, so a past run's is available too. -->
+        <details class="audit" id="w-audit">
           <summary>Agent tool trace &amp; token usage (audit)</summary>
           <ol id="trace"></ol>
+          <div class="hidden" id="trace-empty"></div>
           <div class="usage" id="usage"></div>
         </details>
 

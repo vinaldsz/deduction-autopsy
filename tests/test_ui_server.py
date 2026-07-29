@@ -6,6 +6,7 @@ tests/test_ui_queries.py; the pipeline by tests/test_orchestrator_pipeline.py.
 """
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -242,6 +243,237 @@ def test_dispute_packet_404_when_absent(monkeypatch, tmp_path):
     monkeypatch.setattr(queries, "claim_exists", lambda c: True)
     monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
     assert client.get("/api/claims/CLM-002/dispute-packet").status_code == 404
+
+
+# --- run history + stored trace (Layer 39) -------------------------------------------------------
+#
+# These build run directories the way orchestrator/output.py really does, which the older fixtures
+# above deliberately do not: they `mkdir` a directory named `latest`, while `prepare_run_dir` makes it
+# a relative *symlink* to a run id. Both shapes are exercised, because the mkdir one is what an
+# artifact written before the run-dir layout looks like.
+
+def _run(tmp_path, claim, run_id, *, timestamp, final="INVALID", case_file=True, packet=True):
+    """One archived run, with the verdict.json the pipeline always writes."""
+    run_dir = tmp_path / claim / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "verdict.json").write_text(
+        json.dumps(
+            {
+                "claim_id": claim, "investigator_verdict": final, "reviewer_verdict": "CONFIRM",
+                "final_verdict": final, "confidence": 0.98, "timestamp": timestamp,
+                "usage": {"investigator": {"prompt_tokens": 12536, "completion_tokens": 1653},
+                          "reviewer": {"prompt_tokens": 14515, "completion_tokens": 1613}},
+            }
+        )
+    )
+    if case_file:
+        (run_dir / "case_file.json").write_text(json.dumps({"claim_id": claim}))
+    if packet:
+        (run_dir / "dispute_packet.md").write_text("# Dispute Packet\n")
+    return run_dir
+
+
+def _link_latest(tmp_path, claim, run_id):
+    """`latest` as orchestrator/output.py makes it: a relative symlink, not a directory."""
+    os.symlink(run_id, tmp_path / claim / "latest", target_is_directory=True)
+
+
+def test_done_payload_carries_both_agent_reasonings(monkeypatch):
+    """Both strings were populated, persisted and served by /casefile — and dropped from the live
+    payload, so a claim explained itself after a reload but not after the run that produced it."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    result = _fake_result()
+    # Set here rather than on the shared _CASE_FILE: both fields default to "", so asserting against
+    # the default would pass whether the server forwarded them or not.
+    result.case_file = _CASE_FILE.model_copy(update={"reasoning": "Casepack, not a shortage."})
+    result.reviewer_output = _REVIEWER_OUTPUT.model_copy(
+        update={"reasoning": "Recomputed the conversion; the Investigator's factor holds."})
+
+    async def ok(*, claim_id, **kw):
+        return result
+
+    monkeypatch.setattr(server, "run_pipeline", ok)
+
+    case_file = client.post("/api/claims/CLM-002/investigate").json()["case_file"]
+    assert case_file["investigator_reasoning"] == "Casepack, not a shortage."
+    assert case_file["reviewer_reasoning"].startswith("Recomputed the conversion")
+
+
+def test_runs_lists_newest_first_skipping_the_latest_symlink(monkeypatch, tmp_path):
+    """`latest` is a real symlink to a run dir, and `is_dir()` follows it — so an enumeration that
+    doesn't exclude it by name reports the newest run twice, once under the name "latest"."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    _run(tmp_path, "CLM-002", "20260725T062603Z", timestamp="2026-07-25T06:26:56+00:00")
+    _run(tmp_path, "CLM-002", "20260728T062104Z", timestamp="2026-07-28T06:21:50+00:00")
+    _link_latest(tmp_path, "CLM-002", "20260728T062104Z")
+
+    body = client.get("/api/claims/CLM-002/runs").json()
+    assert [r["run_id"] for r in body["runs"]] == ["20260728T062104Z", "20260725T062603Z"]
+    assert body["latest_run_id"] == "20260728T062104Z"
+
+
+def test_runs_orders_by_verdict_timestamp_not_directory_name(monkeypatch, tmp_path):
+    """Run ids are caller-supplied strings: outputs/CLM-002 really holds `run-A`/`run-B` beside four
+    timestamp-shaped ids, and they sort lexically *last* while being the oldest runs on disk."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    _run(tmp_path, "CLM-002", "20260728T062104Z", timestamp="2026-07-28T06:21:50+00:00")
+    _run(tmp_path, "CLM-002", "run-B", timestamp="2026-07-24T02:33:45+00:00")
+
+    body = client.get("/api/claims/CLM-002/runs").json()
+    assert [r["run_id"] for r in body["runs"]] == ["20260728T062104Z", "run-B"]
+
+
+def test_runs_ignores_loose_files_beside_run_dirs(monkeypatch, tmp_path):
+    """outputs/CLM-008 has verdict.json / reasoning_trace.json / dispute_packet.md sitting at the claim
+    level from before the run-dir layout. A file is not a run."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    _run(tmp_path, "CLM-008", "20260727T012615Z", timestamp="2026-07-27T01:26:15+00:00")
+    (tmp_path / "CLM-008" / "verdict.json").write_text("{}")
+    (tmp_path / "CLM-008" / "dispute_packet.md").write_text("# stray\n")
+
+    body = client.get("/api/claims/CLM-008/runs").json()
+    assert [r["run_id"] for r in body["runs"]] == ["20260727T012615Z"]
+
+
+def test_runs_reports_a_run_that_cannot_be_rebuilt(monkeypatch, tmp_path):
+    """17 of the real run dirs predate Layer 32 and have no case_file.json, and only an INVALID verdict
+    gets a dispute packet — so being listed does not mean being openable."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    _run(tmp_path, "CLM-002", "20260725T062603Z", timestamp="2026-07-25T06:26:56+00:00",
+         final="VALID", case_file=False, packet=False)
+
+    (run,) = client.get("/api/claims/CLM-002/runs").json()["runs"]
+    assert run["has_case_file"] is False and run["has_dispute_packet"] is False
+    assert run["final_verdict"] == "VALID" and run["usage"]["investigator"]["prompt_tokens"] == 12536
+
+
+def test_runs_tolerates_a_run_with_no_readable_verdict(monkeypatch, tmp_path):
+    """prepare_run_dir mkdirs before the pipeline can fail, so a crashed run leaves a bare directory.
+    It sorts last — having no timestamp — rather than ahead of runs that finished."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    _run(tmp_path, "CLM-002", "20260728T062104Z", timestamp="2026-07-28T06:21:50+00:00")
+    (tmp_path / "CLM-002" / "20260729T000000Z").mkdir()
+    (tmp_path / "CLM-002" / "20260730T000000Z").mkdir()
+    (tmp_path / "CLM-002" / "20260730T000000Z" / "verdict.json").write_text("{ not json")
+
+    body = client.get("/api/claims/CLM-002/runs").json()
+    assert body["runs"][0]["run_id"] == "20260728T062104Z"
+    assert {r["run_id"] for r in body["runs"][1:]} == {"20260729T000000Z", "20260730T000000Z"}
+    assert body["runs"][1]["final_verdict"] is None
+
+
+def test_runs_is_empty_for_a_claim_nobody_has_investigated(monkeypatch, tmp_path):
+    """200 with an empty list, not 404: the client asks this for every claim it opens, and "never
+    investigated" is a true answer rather than a missing resource."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+
+    resp = client.get("/api/claims/CLM-004/runs")
+    assert resp.status_code == 200
+    assert resp.json() == {"claim_id": "CLM-004", "latest_run_id": None, "runs": []}
+
+
+def test_runs_latest_run_id_is_none_when_latest_is_not_a_symlink(monkeypatch, tmp_path):
+    """Guards os.readlink against the pre-run-dir shape (and against the mkdir-based fixtures above).
+    Path.resolve().name would have answered the literal "latest" as though it were a run id."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    (tmp_path / "CLM-002" / "latest").mkdir(parents=True)
+    (tmp_path / "CLM-002" / "latest" / "verdict.json").write_text("{}")
+
+    body = client.get("/api/claims/CLM-002/runs").json()
+    assert body["latest_run_id"] is None
+    assert body["runs"] == []
+
+
+def test_runs_unknown_claim_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: False)
+    assert client.get("/api/claims/CLM-999/runs").status_code == 404
+
+
+def test_trace_compacts_the_stored_tool_calls(monkeypatch, tmp_path):
+    """The persisted trace holds raw OpenAI messages with both system prompts and `arguments` as a JSON
+    *string*; the client renders `{agent, name, args, is_error}` with args as a dict."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    latest = tmp_path / "CLM-002" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "reasoning_trace.json").write_text(json.dumps({
+        "claim_id": "CLM-002",
+        "investigator": [
+            {"role": "system", "content": "You are the Investigator..."},
+            {"role": "assistant", "content": "I'll investigate.", "tool_calls": [
+                {"id": "call-1", "type": "function",
+                 "function": {"name": "get_deduction_claim",
+                              "arguments": '{"claim_id": "CLM-002"}'}}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": '{"po_id": "PO-002"}'},
+        ],
+        "reviewer": [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call-2", "type": "function",
+                 "function": {"name": "normalize_uom", "arguments": '{"sku": "SKU-002"}'}}]},
+        ],
+    }))
+
+    body = client.get("/api/claims/CLM-002/trace").json()
+    assert body["tool_calls"] == [
+        {"agent": "investigator", "name": "get_deduction_claim",
+         "args": {"claim_id": "CLM-002"}, "is_error": False},
+        {"agent": "reviewer", "name": "normalize_uom", "args": {"sku": "SKU-002"}, "is_error": False},
+    ]
+
+
+def test_trace_marks_an_errored_call_from_the_result_that_followed_it(monkeypatch, tmp_path):
+    """`is_error` is not stored: agents/base.py writes an "ERROR: " prefix into the tool result, so the
+    call is marked from the reply matching its tool_call_id — read back, not recomputed."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    latest = tmp_path / "CLM-002" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "reasoning_trace.json").write_text(json.dumps({
+        "investigator": [
+            {"role": "assistant", "tool_calls": [
+                {"id": "bad", "function": {"name": "get_po", "arguments": '{"po_id": "CLM-002"}'}},
+                {"id": "good", "function": {"name": "get_po", "arguments": '{"po_id": "PO-002"}'}}]},
+            {"role": "tool", "tool_call_id": "bad", "content": "ERROR: unknown po: 'CLM-002'"},
+            {"role": "tool", "tool_call_id": "good", "content": '{"po_id": "PO-002"}'},
+        ],
+    }))
+
+    calls = client.get("/api/claims/CLM-002/trace").json()["tool_calls"]
+    assert [c["is_error"] for c in calls] == [True, False]
+
+
+def test_trace_survives_unparseable_arguments(monkeypatch, tmp_path):
+    """Mirrors agents/base.py, which records `args = {}` and an error when the model emits bad JSON —
+    the trace must render rather than 500 on the very call that went wrong."""
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    latest = tmp_path / "CLM-002" / "latest"
+    latest.mkdir(parents=True)
+    (latest / "reasoning_trace.json").write_text(json.dumps({
+        "investigator": [{"role": "assistant", "tool_calls": [
+            {"id": "x", "function": {"name": "get_po", "arguments": "{not json"}}]}],
+    }))
+
+    (call,) = client.get("/api/claims/CLM-002/trace").json()["tool_calls"]
+    assert call["args"] == {} and call["name"] == "get_po"
+
+
+def test_trace_404_when_the_run_stored_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: True)
+    monkeypatch.setattr(server, "OUTPUT_DIR", tmp_path)
+    assert client.get("/api/claims/CLM-002/trace").status_code == 404
+
+
+def test_trace_unknown_claim_is_404(monkeypatch):
+    monkeypatch.setattr(queries, "claim_exists", lambda c: False)
+    assert client.get("/api/claims/CLM-999/trace").status_code == 404
 
 
 def test_investigate_post_happy_and_errors(monkeypatch):

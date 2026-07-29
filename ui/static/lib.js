@@ -313,6 +313,104 @@ export function bulkOutcomeSummary(results) {
     .join(" · ");
 }
 
+// --- Layer 39: explainability ----------------------------------------------------------------------
+//
+// What each reviewer check actually tested. Derived from agents/reviewer.py's spot-check instructions
+// (lines 36-74) rather than invented here, so the screen describes the review that was really run; the
+// prompt is the source of truth and this is a reading of it. Keys and their ORDER mirror
+// orchestrator/pipeline.py's ReviewFindings, whose field order is load-bearing precisely because these
+// render in it.
+//
+// Deliberately no `tone`. In this file a tone is a *money* direction, and PASS is not money: on
+// CLM-002 `timeline_check: FAIL` is exactly what makes the claim disputable, so painting PASS green
+// would invert Layer 36 on the very case Layer 36 was built for. The literal word PASS/FAIL/N/A stays
+// in the row, which is what survives greyscale.
+const CHECKS = {
+  uom_check: {
+    label: "Unit of measure",
+    description: "Recomputed every conversion the Investigator applied, rather than trusting a stated factor.",
+  },
+  split_shipment_check: {
+    label: "Split shipment",
+    description: "Re-fetched the PO's ASNs to confirm none was missed — one delivery can span several.",
+  },
+  timeline_check: {
+    label: "Timeline sequence",
+    description: "Re-derived order → ship → receipt → invoice → claim from the raw dates. An out-of-order pair is physically impossible, and is grounds to dispute on its own however cleanly the quantities reconcile.",
+  },
+  trade_agreement_check: {
+    label: "Trade agreement",
+    description: "Re-looked-up the claim's promo code to confirm the agreement truly matches it.",
+  },
+  duplicate_check: {
+    label: "Duplicate claim",
+    description: "Re-listed the other claims on this PO to see whether this deduction was already taken and settled.",
+  },
+  substitution_check: {
+    label: "Substitution",
+    description: "Whether the SKU shipped differs from the SKU ordered, and whether the receiving notes show it was pre-approved.",
+  },
+  data_completeness_check: {
+    label: "Data completeness",
+    description: "The odd one out: never a dispute ground, and not the Reviewer's own finding. It FAILs only when the orchestrator reports source data genuinely missing or an investigation left incomplete — and that forces ESCALATE.",
+  },
+};
+
+/** ReviewFindings -> one row per check: [{ key, status, label, description }].
+ *
+ *  Iterates the findings the server sent, so the order on screen is the model's field order rather
+ *  than one retyped here. An unrecognised key keeps its row with a generated label and no description:
+ *  an eighth check added upstream must still show its status, and silently dropping it would hide a
+ *  FAIL. */
+export function reviewChecks(findings) {
+  return Object.entries(findings || {}).map(([key, status]) => {
+    // hasOwn for the reason verdictLabel documents: CHECKS["constructor"] inherits a truthy function
+    // from Object.prototype and would spread a row with no label at all.
+    const known = Object.hasOwn(CHECKS, key) ? CHECKS[key] : null;
+    return {
+      key,
+      status: status == null || status === "" ? "N/A" : String(status),
+      label: known ? known.label : sentenceCase(key.replace(/_check$/, "")),
+      description: known ? known.description : "",
+    };
+  });
+}
+
+/** CaseFile.timeline -> the same events, in the same order, each annotated with the interval since the
+ *  previous one: [{ event, date, valid, gapDays, gap }].
+ *
+ *  The interval is the finding. Five bare dates say nothing, while "+90 days" between receipt and
+ *  claim is the whole reason a deduction is late, and a *negative* interval is a sequence violation
+ *  standing in plain sight.
+ *
+ *  Never sorts, on purpose. The Investigator emits this list itself and can emit it out of order —
+ *  CLM-002 lists invoice_date 2024-02-04 after receipt_date 2024-02-05, both flagged valid, while the
+ *  Reviewer independently recorded timeline_check: FAIL. Quietly reordering that would delete the
+ *  visible evidence for the Reviewer's own finding. Reconciling the two is not this function's
+ *  business either: showing the disagreement is the deliverable, resolving it would be verdict logic. */
+export function timelineGaps(events) {
+  const list = events || [];
+  let previous = null;
+  return list.map((e) => {
+    // `TimelineEvent.date` is an unvalidated string, so a bad value must yield no gap rather than
+    // "NaN days". isoDate is the same guard parseHash uses on a URL date.
+    const date = isoDate(e && e.date);
+    const at = date ? Date.parse(`${date}T00:00:00Z`) : null;
+    // An unreadable date voids the NEXT event's gap too: an interval that skipped over it would be
+    // labelled "since the previous event" while measuring from two events back.
+    const gapDays = at != null && previous != null ? Math.round((at - previous) / 86400000) : null;
+    previous = at;
+    return { event: e && e.event, date: e && e.date, valid: e && e.valid, gapDays, gap: gapLabel(gapDays) };
+  });
+}
+
+function gapLabel(days) {
+  if (days == null) return null;
+  if (days === 0) return "same day";
+  const unit = Math.abs(days) === 1 ? "day" : "days";
+  return days > 0 ? `+${days} ${unit}` : `${Math.abs(days)} ${unit} earlier · out of order`;
+}
+
 /** The header subtitle: the state of today's lot, not a description of the architecture. */
 export function lotSubtitle(metrics) {
   if (!metrics || !metrics.batch) return "No lot loaded — run the ETL to ingest today's deductions.";

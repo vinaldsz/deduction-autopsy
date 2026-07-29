@@ -1,6 +1,133 @@
 # Progress
 
 ## Current layer
+**Layer 39 — Explainability: reasoning, runs, checks, timeline complete**
+
+Seventh of the Layers 33–41 UX-remediation phase. Layers 33–38 made the worklist correct, then
+workable; it still wasn't **explainable** — the analyst was asked to accept or override a verdict with
+no sight of why the agents reached it. No agent/prompt/verdict-logic changes, no fixture edits, **no
+schema change**; the 8 ground-truth verdicts are untouched and the fidelity oracle was re-run
+explicitly. `agents/reviewer.py` was read, never edited: it is the source the check descriptions are
+derived from.
+
+**The headline finding is that the browser already had the answer and threw it away.** Both
+`CaseFile.reasoning` and `ReviewerOutput.reasoning` are populated model prose, persisted to
+`case_file.json`, and `/api/claims/{id}/casefile` returns that file **verbatim** — so `fromCasefile`
+was receiving both strings and simply not copying them. `grep -rn reasoning ui/` returned zero hits.
+The live path was worse: `_case_file_summary` enumerates fields and dropped both, so a client-only fix
+would have shown prose after a reload and nothing after the run that produced it. Both now ride in the
+case-file summary, which `fromDone` already spreads — one shape from either path, and the new "Why this
+verdict" block reads it. Stripping `reasoning` from the *Reviewer's input* is an anti-anchoring prompt
+control and says nothing about what the analyst may see.
+
+**Three policy decisions, all deviations from `docs/PLAN.md` and recorded there.**
+
+1. **`/runs` ships read-only; the run picker and `?run_id=` are deferred to Layer 41.** A picker renders
+   an old run's case file under the *current* verdict chip — `fromCasefile` takes `final_verdict` from
+   the row's effective status, so CLM-002's VALID run would appear beneath an INVALID header. Doing it
+   honestly needs the verdict header re-sourced, an off-latest marker, the decision bar disabled and the
+   packet re-pointed: ~40 lines in ungated `app.js` governing *which claim's evidence is on screen*,
+   which is the exact failure family as the two bugs Layer 37b recorded. `?run_id=` is deferred with it
+   rather than shipped with no caller.
+2. **`/reasoning` dropped as redundant and swapped for `/trace`.** `/casefile` already serves both
+   reasoning strings, so `/reasoning` would be a second reader of one file. `reasoning_trace.json` was
+   the only persisted artifact with **no reader anywhere in the codebase**, which is why the audit
+   drawer was permanently empty on every already-investigated claim — an audit trail readable only
+   during the ~40 seconds it is being produced, against a CLAUDE.md non-negotiable that calls the
+   tool-call trace the point of MCP-only data access.
+3. **`checkDescription(key)` became `reviewChecks(findings)`.** A label table has to exist regardless —
+   `sentenceCase("uom")` gives **"Uom"** — so returning the whole row keeps the `_check`-stripping and
+   the lookup behind `node --test` instead of in ungated `app.js`.
+
+**The checks carry no `tone`, deliberately.** In `lib.js` a tone is a *money* direction, and CLM-002 is
+the case that proves the point: its `timeline_check: FAIL` is exactly what makes the claim disputable,
+so painting PASS green would invert Layer 36 on the very case Layer 36 was built for. The seven chips
+became seven rows — status word, a real label, and one **visible** sentence saying what was tested
+(a `title` tooltip is keyboard-inaccessible, established in Layer 36). All seven descriptions are read
+off `agents/reviewer.py:36-74` rather than invented, including the one that says
+`data_completeness_check` is never a dispute ground and forces ESCALATE — the check that works
+differently from the other six.
+
+**`timelineGaps` never sorts.** The Investigator emits the timeline itself and can emit it out of
+order: CLM-002 lists `invoice_date 2024-02-04` *after* `receipt_date 2024-02-05`, flags both `valid`,
+while the Reviewer independently recorded `timeline_check: FAIL`. Quietly reordering would delete the
+visible evidence for the Reviewer's own finding, and reconciling the two would be inventing verdict
+logic. The interval is the finding — live, that row reads `+2 days → +2 days → 1 day earlier · out of
+order → +6 days`. An unreadable date voids the **next** event's gap too, or that interval would be
+labelled "since the previous event" while measuring from two events back.
+
+**Run history exists because Layer 34 half-built it.** `decision_stale` tells the analyst the agents
+have moved past their decision while the case they signed off on was unreachable, and the DB keeps one
+resolution row per claim so history lives only on disk. CLM-002's six real runs read **Disputable →
+Conceded → Disputable → Conceded → Disputable → Disputable (current)**. Ordering is by
+`verdict.json`'s `timestamp` with **no mtime fallback** — every one of the 57 real run dirs has a
+verdict.json, and mixing simulated 2026 timestamps with real wall-clock mtimes would compare two
+clocks. `run-A`/`run-B` are why: they sort after every `%Y%m%dT%H%M%SZ` id while being the *oldest*
+runs on disk, so reverse-lexical would have put them first. `iterdir()` + `is_dir()` skips CLM-008's
+loose claim-level artifacts, `latest` is excluded **by name** because `is_dir()` follows it, and
+`_latest_run_id` uses `os.readlink` guarded by `is_symlink()` — `resolve().name` returns the literal
+`"latest"` for the `mkdir`-based fixtures, hiding the difference the new symlink fixture exists to
+expose. `has_case_file` is not cosmetic: **17 of 57 run dirs predate Layer 32**, so a listed run is not
+necessarily rebuildable.
+
+**`#usage` was the other half of the empty drawer.** `fromCasefile` hardcodes `usage: null`, so the
+token line existed only during a live run while `verdict.json` had it all along. It now comes from
+`/runs`, which makes the drawer non-empty for historical claims independently of `/trace`.
+
+**Verification.** `scripts/check.sh` — `pytest` **435 passed, 10 deselected** (was 421); `pyright` 0
+errors; `node --test` **81 passing** (was 62). Explicit `pytest tests/test_etl.py tests/test_db.py` —
+59 passed, so the fidelity oracle is untouched (confirmed, not assumed, as in Layers 34/35/37a/38).
+
+**Live.** Real `uvicorn` + headless Chrome over CDP, **read-only — every call a GET, no writes, no
+OpenRouter run**; the real `data/deductions.db` was confirmed afterwards at its original 52
+resolutions / 6 dispositions / 0 ESCALATEs. **72 browser assertions across four suites**, plus a
+separate layout measurement pass.
+
+- **CLM-002, the showcase claim:** both reasonings rendered, seven described check rows with the
+  Reviewer's real FAIL, the out-of-order interval labelled in words, the six-run history naming the
+  current run, and the drawer **closed** after selection with its 14 stored tool calls loading only on
+  demand.
+- **The leak test, on real data:** nine real claims have a latest run with no `case_file.json`, so
+  clicking CLM-002 → CLM-003 in the *same document* takes the `showDisputeDownloadOnly` path where
+  `renderEvidence` never runs. Reasoning, checks, timeline and history all cleared; the older-run
+  dispute note shown instead; and all of it returned on clicking back.
+- **A never-investigated claim** (against a **copy** of the DB doctored to have two, since the real lot
+  has none): nothing leaked into an open drawer — no prose, no history, no trace rows, no token spend —
+  while the source documents still rendered, because those come from the DB and never needed a run.
+- **Genuinely absent artifacts**, by booting from a CWD with no `outputs/` (`OUTPUT_DIR` is
+  CWD-relative): `/runs` 200 with an empty list, `/trace` 404, `/documents` still 200, no error banner —
+  a missing artifact is not a page failure.
+- **Greyscale:** every check status is a word, every gap label carries text, and a backwards interval
+  says "out of order" rather than relying on red.
+- **Measured, not guessed:** zero horizontal overflow, both stickies still pinned through a scroll, the
+  queue still at its 9 columns, and at 1100px the layout collapses to one column with the check rows
+  and their descriptions intact.
+
+**Two things only the running app showed.**
+
+1. **A toggle-only trace hook left the drawer permanently empty from the second claim onward.** An
+   analyst who leaves the drawer open fires no `toggle` event on the next claim, so `selectClaim`
+   cleared `#trace` and nothing refetched it. `maybeLoadTrace` is now called from **both** the toggle
+   and claim selection: "open the drawer" and "the open drawer needs a different claim's trace" are two
+   triggers, not one. Caught by asserting the row count after navigating away and back.
+2. **The run history wrapped the sticky header onto a second line.** Full ISO dates on the six-run claim
+   cost 65px of evidence pane *permanently*, because the header is sticky (223px vs 158px, measured).
+   Shortened to `MM-DD` — the year is identical on every run. At six runs it still wraps, and that is
+   **accepted rather than capped**: a "+3 older" would hide which verdicts those runs reached, which is
+   the whole signal. Verified instead that the taller header breaks nothing.
+
+Also added while in there: an un-investigated claim's open drawer says *"No agent run yet — investigate
+this claim to record a tool trace"* rather than sitting blank, said directly instead of by letting a
+request 404 when the answer is already known.
+
+**Known and deferred:** the run picker, `?run_id=` and the `decided_run_id` plumbing that would make
+"open the run I signed off on" a real task (Layer 41). `app.js` remains untested by construction — this
+layer moved two more pure functions across the `lib.js` boundary — which is why both bugs above were
+found by driving the app rather than by a gate. Layers 40–41 continue the phase.
+
+---
+
+## Previous layer
 **Layer 38 — Working the volume complete**
 
 Sixth of the Layers 33–41 UX-remediation phase. Layers 33–37b made the worklist *correct*; it still

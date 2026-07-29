@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import {
   ageLabel, buildHash, bulkOutcomeSummary, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars,
   dollarsCompact, keyAction, lotSubtitle, nextClaimId, parseHash, priorityLegend, queueFooter,
-  sentenceCase, sortIndicator, todoSplit, verdictLabel,
+  reviewChecks, sentenceCase, sortIndicator, timelineGaps, todoSplit, verdictLabel,
 } from "../../ui/static/lib.js";
 
 /** The /api/dashboard shape, as ui/queries.py::dashboard_metrics returns it. */
@@ -475,5 +475,152 @@ describe("bulkOutcomeSummary", () => {
     // grew a new outcome is a lie about what happened to it; an ugly word is not.
     const summary = bulkOutcomeSummary({ "CLM-1": "recorded", "CLM-2": "spontaneously_combusted" });
     assert.equal(summary, "1 accepted · 1 spontaneously_combusted");
+  });
+});
+
+// --- Layer 39: explainability -----------------------------------------------------------------------
+
+/** ReviewFindings as orchestrator/pipeline.py declares it — all seven fields, in field order. */
+const FINDINGS = {
+  uom_check: "PASS", split_shipment_check: "PASS", timeline_check: "FAIL",
+  trade_agreement_check: "N/A", duplicate_check: "PASS", substitution_check: "N/A",
+  data_completeness_check: "PASS",
+};
+
+describe("reviewChecks", () => {
+  it("keeps the order the ReviewFindings model declared", () => {
+    // Field order in pipeline.py is load-bearing *because* these render in it — data_completeness_check
+    // is declared last with a comment saying so. Iterating the payload keeps the two in step with no
+    // second copy of the order here.
+    assert.deepEqual(
+      reviewChecks(FINDINGS).map((c) => c.key),
+      Object.keys(FINDINGS),
+    );
+  });
+
+  it("labels uom_check 'Unit of measure', not 'Uom'", () => {
+    // The reason this is a table and not sentenceCase(key): the very first check is the one the
+    // generic path mangles.
+    assert.equal(reviewChecks(FINDINGS)[0].label, "Unit of measure");
+  });
+
+  it("says what every check the model declares actually tested", () => {
+    for (const check of reviewChecks(FINDINGS)) {
+      assert.ok(check.description.length > 20, `${check.key} needs a description`);
+    }
+  });
+
+  it("carries the status through untouched, because the word is what survives greyscale", () => {
+    const byKey = Object.fromEntries(reviewChecks(FINDINGS).map((c) => [c.key, c.status]));
+    assert.equal(byKey.timeline_check, "FAIL");
+    assert.equal(byKey.trade_agreement_check, "N/A");
+  });
+
+  it("gives no check a tone — PASS is not a money direction", () => {
+    // CLM-002 is the case: timeline_check FAIL is what makes the claim disputable, so a green PASS
+    // would invert Layer 36 exactly where Layer 36 matters.
+    for (const check of reviewChecks(FINDINGS)) {
+      assert.equal(check.tone, undefined, check.key);
+    }
+  });
+
+  it("says data completeness is not a dispute ground", () => {
+    // agents/reviewer.py:67-74 — the one check that works differently, and whose FAIL forces ESCALATE.
+    const completeness = reviewChecks(FINDINGS).find((c) => c.key === "data_completeness_check");
+    assert.match(completeness.description, /never a dispute ground/);
+    assert.match(completeness.description, /ESCALATE/);
+  });
+
+  it("keeps a check it doesn't recognise rather than dropping the row", () => {
+    // An eighth check added upstream must still show its status: a dropped row could be hiding a FAIL.
+    const [row] = reviewChecks({ carrier_liability_check: "FAIL" });
+    assert.equal(row.status, "FAIL");
+    assert.equal(row.label, "Carrier liability");
+    assert.equal(row.description, "");
+  });
+
+  it("ignores what it inherits from Object.prototype", () => {
+    // CHECKS["constructor"] is a truthy function; a truthiness lookup would spread it into a row.
+    const [row] = reviewChecks({ constructor: "PASS" });
+    assert.equal(row.description, "");
+    assert.equal(row.label, "Constructor");
+  });
+
+  it("survives being called with nothing", () => {
+    assert.deepEqual(reviewChecks(null), []);
+    assert.deepEqual(reviewChecks({}), []);
+  });
+});
+
+describe("timelineGaps", () => {
+  const timeline = [
+    { event: "order_date", date: "2024-02-01", valid: true },
+    { event: "ship_date", date: "2024-02-03", valid: true },
+    { event: "receipt_date", date: "2024-05-02", valid: true },
+  ];
+
+  it("states the interval since the previous event", () => {
+    // The interval is the finding: a claim filed 90 days after receipt is why a deduction is late.
+    assert.deepEqual(timelineGaps(timeline).map((e) => e.gap), [null, "+2 days", "+89 days"]);
+  });
+
+  it("leaves the first event without a gap, having nothing to measure from", () => {
+    const [first] = timelineGaps(timeline);
+    assert.equal(first.gap, null);
+    assert.equal(first.gapDays, null);
+  });
+
+  it("does not reorder the events", () => {
+    // CLM-002, real: the Investigator emits invoice_date BEFORE the receipt it follows, flags both
+    // valid, and the Reviewer independently records timeline_check FAIL. Sorting this would delete the
+    // visible evidence for that FAIL.
+    const outOfOrder = [
+      { event: "receipt_date", date: "2024-02-05", valid: true },
+      { event: "invoice_date", date: "2024-02-04", valid: true },
+    ];
+    assert.deepEqual(timelineGaps(outOfOrder).map((e) => e.event), ["receipt_date", "invoice_date"]);
+  });
+
+  it("names a backwards interval as out of order", () => {
+    const outOfOrder = [
+      { event: "receipt_date", date: "2024-02-05", valid: true },
+      { event: "invoice_date", date: "2024-02-04", valid: true },
+    ];
+    const [, invoice] = timelineGaps(outOfOrder);
+    assert.equal(invoice.gapDays, -1);
+    assert.equal(invoice.gap, "1 day earlier · out of order");
+  });
+
+  it("says 'same day' rather than '+0 days'", () => {
+    const sameDay = [{ date: "2024-02-01" }, { date: "2024-02-01" }];
+    assert.equal(timelineGaps(sameDay)[1].gap, "same day");
+  });
+
+  it("uses the singular for one day", () => {
+    assert.equal(timelineGaps([{ date: "2024-02-01" }, { date: "2024-02-02" }])[1].gap, "+1 day");
+  });
+
+  it("offers no gap for a date it cannot read", () => {
+    // TimelineEvent.date is an unvalidated str, and "NaN days" on screen is worse than no label.
+    const bad = [{ date: "2024-02-01" }, { date: "not a date" }, { date: "2024-13-45" }];
+    assert.deepEqual(timelineGaps(bad).map((e) => e.gap), [null, null, null]);
+  });
+
+  it("voids the gap after an unreadable date instead of measuring from two events back", () => {
+    const withHole = [{ date: "2024-02-01" }, { date: "" }, { date: "2024-02-10" }];
+    const gaps = timelineGaps(withHole).map((e) => e.gap);
+    assert.deepEqual(gaps, [null, null, null], "the third gap would read '+9 days' since the first");
+  });
+
+  it("passes the event's own fields straight through", () => {
+    const [first] = timelineGaps([{ event: "order_date", date: "2024-02-01", valid: false }]);
+    assert.equal(first.event, "order_date");
+    assert.equal(first.date, "2024-02-01");
+    assert.equal(first.valid, false);
+  });
+
+  it("survives being called with nothing", () => {
+    assert.deepEqual(timelineGaps(null), []);
+    assert.deepEqual(timelineGaps([]), []);
   });
 });

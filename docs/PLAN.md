@@ -743,6 +743,48 @@ at the running app. One commit each.
 - `ui/static/app.js`: stop force-opening the audit drawer on every run.
 - **Verify:** `pytest -q` with a fixture that creates `latest` as a **real symlink** (every existing
   test uses `mkdir`, so a double-counting bug would pass unnoticed).
+- **Three deviations from the above, approved in planning.**
+  1. **`/runs` ships read-only; the run picker and `?run_id=` are deferred to Layer 41.** A picker
+     renders an old run's case file under the *current* verdict chip — `fromCasefile` sources
+     `final_verdict` from the row's effective status, so CLM-002's VALID run would appear beneath an
+     INVALID header. Doing it honestly needs the verdict header re-sourced from that run's
+     `verdict.json`, an off-latest marker, the decision bar disabled and the packet re-pointed: ~40
+     lines in ungated `app.js` governing *which claim's evidence is on screen*, the same failure family
+     as the two bugs recorded at 37b. Layer 41 is the right home, where plumbing
+     `d.decided_run_id`/`r.run_id` through `batch_claims` makes "open the run I signed off on" a task
+     rather than a date dropdown. `?run_id=` is deferred with it instead of shipping with no caller.
+  2. **`/reasoning` dropped as redundant, swapped for `/trace`.** `/casefile` already returns both
+     reasoning strings verbatim, so `/reasoning` would be a second reader of one file. The budget went
+     to `GET /api/claims/{id}/trace`, a compact list derived from `reasoning_trace.json` — the only
+     persisted artifact with no reader — in the exact shape the SSE `tool_call` event emits, so
+     `appendTrace` renders live and historical traces unchanged. Without it, "stop force-opening the
+     drawer" leaves a drawer that is empty on every already-investigated claim.
+  3. **`checkDescription(key)` became `reviewChecks(findings)`.** A label table has to exist regardless
+     (`sentenceCase("uom")` gives "Uom"), so returning the whole row keeps the `_check`-stripping and
+     the lookup out of ungated `app.js`.
+- **What the build added.** `#usage` is filled from `/runs`: `fromCasefile` hardcodes `usage: null`, so
+  the token line existed only during a live run while `verdict.json` had it all along — which makes the
+  audit drawer non-empty for historical claims independently of `/trace`. Ordering is by
+  `verdict.json`'s `timestamp` with **no mtime fallback** (every one of the 57 real run dirs has a
+  verdict.json, and mixing simulated 2026 timestamps with real wall-clock mtimes would compare two
+  clocks); `run-A`/`run-B` prove lexical sort is not recency, sorting after every timestamp-shaped id
+  while being the oldest runs on disk. `_latest_run_id` uses `os.readlink` guarded by `is_symlink()`,
+  because `resolve().name` returns the literal `"latest"` for the `mkdir`-based fixtures — hiding the
+  difference the new symlink fixture exists to expose. The checks carry **no `tone`**: a tone is a money
+  direction here, and CLM-002's `timeline_check: FAIL` is what makes that claim disputable, so a green
+  PASS would invert Layer 36 on the case Layer 36 was built for.
+- **Two things only the running app showed.**
+  1. **A toggle-only trace hook left the drawer permanently empty from the second claim onward.** An
+     analyst who leaves the drawer open fires no `toggle` event on the next claim, so the trace was
+     cleared by `selectClaim` and never refetched. `maybeLoadTrace` is now called from *both* the toggle
+     and claim selection — "open the drawer" and "the open drawer needs another claim's trace" are two
+     triggers, not one.
+  2. **The run history wrapped the sticky header to two lines.** Full ISO dates on the real six-run
+     claim cost 65px of evidence pane, permanently, because the header is sticky. Shortened to `MM-DD`
+     (the year is identical on every run); at six runs it still wraps, and that is **accepted rather
+     than capped** — a "+3 older" would hide which verdicts those runs reached, which is the entire
+     signal. Measured instead: no horizontal overflow, the evidence still scrolls, and both stickies
+     still pin at the taller height.
 
 ### 40. Run transparency
 

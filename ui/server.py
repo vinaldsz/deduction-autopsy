@@ -11,6 +11,7 @@ Data comes from the relational store (ui/queries.py); "scenario" is retired (Lay
 import asyncio
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -45,7 +46,15 @@ app = FastAPI(title="Deduction Autopsy")
 
 
 def _case_file_summary(result: PipelineResult) -> dict:
-    """The evidence bundle the review workspace renders: reconciliation, timeline, checklist."""
+    """The evidence bundle the review workspace renders: reconciliation, timeline, checklist.
+
+    Both agents' `reasoning` rides along so a live run explains itself the same way a reload does
+    (/casefile has always returned these two strings verbatim; only this summary dropped them).
+    Costs ~1.3 KB of prose per claim on the batch `claim_done` event, which the batch runner does
+    not read — bounded, and this server is localhost-only. Stripping `reasoning` from the
+    *Reviewer's input* is an anti-anchoring prompt control (see CLAUDE.md) and says nothing about
+    what the analyst may see.
+    """
     cf = result.case_file
     ro = result.reviewer_output
     return {
@@ -57,6 +66,8 @@ def _case_file_summary(result: PipelineResult) -> dict:
         "discrepancy_qty": cf.discrepancy_qty,
         "discrepancy_amount_cents": cf.discrepancy_amount_cents,
         "review_findings": ro.review_findings.model_dump(),
+        "investigator_reasoning": cf.reasoning,
+        "reviewer_reasoning": ro.reasoning,
     }
 
 
@@ -80,6 +91,61 @@ def _result_payload(result: PipelineResult) -> dict:
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+# --- run artifacts on disk -------------------------------------------------------------------------
+#
+# OUTPUT_DIR is read inside these helpers rather than captured at import: the tests monkeypatch
+# `server.OUTPUT_DIR`, and a default argument or module-level join would silently read the real
+# outputs/ tree instead.
+
+
+def _run_dirs(claim_id: str) -> list[Path]:
+    """Every archived run directory for a claim, unordered.
+
+    `iterdir()` + `is_dir()` because a claim directory is not uniformly run directories: pre-run-layout
+    claims still have loose verdict.json / reasoning_trace.json / dispute_packet.md sitting beside
+    them. `latest` is excluded **by name** — it is a symlink to one of the real run dirs, and
+    `is_dir()` follows it, so counting it would report the newest run twice.
+    """
+    claim_dir = OUTPUT_DIR / claim_id
+    if not claim_dir.is_dir():
+        return []
+    return [p for p in claim_dir.iterdir() if p.name != "latest" and p.is_dir()]
+
+
+def _latest_run_id(claim_id: str) -> str | None:
+    """Which run `latest` points at, or None when there is no symlink to read.
+
+    `os.readlink` rather than `Path.resolve().name`: the link target is the bare run id, and resolve()
+    on a plain directory named `latest` would return the string "latest" as if it were a run.
+    """
+    latest = OUTPUT_DIR / claim_id / "latest"
+    return os.readlink(latest) if latest.is_symlink() else None
+
+
+def _run_entry(run_dir: Path) -> dict:
+    """One run's summary, from the verdict.json the pipeline already writes."""
+    verdict = {}
+    path = run_dir / "verdict.json"
+    if path.exists():
+        try:
+            verdict = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            logger.warning("unreadable_verdict_json path=%s", path)
+    return {
+        "run_id": run_dir.name,
+        "timestamp": verdict.get("timestamp"),
+        "investigator_verdict": verdict.get("investigator_verdict"),
+        "reviewer_verdict": verdict.get("reviewer_verdict"),
+        "final_verdict": verdict.get("final_verdict"),
+        "confidence": verdict.get("confidence"),
+        "usage": verdict.get("usage"),
+        # A listed run is not necessarily rebuildable: runs predating Layer 32 wrote no case_file.json,
+        # and only an INVALID verdict gets a dispute packet.
+        "has_case_file": (run_dir / "case_file.json").exists(),
+        "has_dispute_packet": (run_dir / "dispute_packet.md").exists(),
+    }
 
 
 @app.get("/api/dashboard")
@@ -108,6 +174,81 @@ async def casefile(claim_id: str):
     if not path.exists():
         return JSONResponse(status_code=404, content={"error": f"claim not yet investigated: {claim_id}"})
     return JSONResponse(content=json.loads(path.read_text()))
+
+
+@app.get("/api/claims/{claim_id}/runs")
+async def runs(claim_id: str):
+    """Every archived run for a claim, newest first, so the analyst can see how the verdict has moved.
+
+    Read-only history: there is no way to *open* an older run from here, on purpose. Rendering an old
+    case file under the pane's current verdict chip would show one run's evidence beside another run's
+    answer, and doing it honestly is Layer 41's work (see docs/PLAN.md).
+
+    Ordered by verdict.json's `timestamp`, never by directory name: run ids are caller-supplied
+    strings, and the repo's own `run-A`/`run-B` sort after every timestamp-shaped id while being the
+    oldest runs on disk. A run with no readable timestamp sorts last, where a crashed run belongs.
+    """
+    if not queries.claim_exists(claim_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown claim: {claim_id!r}"})
+    entries = [_run_entry(d) for d in _run_dirs(claim_id)]
+    entries.sort(key=lambda e: (e["timestamp"] is not None, e["timestamp"] or ""), reverse=True)
+    # A real claim with no runs is 200 with an empty list, not 404: "never investigated" is a true
+    # answer, and the client asks this for every claim it opens.
+    return {"claim_id": claim_id, "latest_run_id": _latest_run_id(claim_id), "runs": entries}
+
+
+def _compact_trace(payload: dict) -> list[dict]:
+    """reasoning_trace.json's raw message arrays -> the shape the live `tool_call` SSE event emits.
+
+    Compacted rather than served raw for two reasons: the file runs ~28 KB and embeds both agents'
+    system prompts verbatim, and `appendTrace` in the client already renders exactly this shape — so a
+    past run's trace and a live one go through one renderer.
+
+    Two details are a conversion, not a projection. `function.arguments` is a JSON *string* on disk
+    while the live hook sends a dict, and `is_error` survives only as the "ERROR: " prefix that
+    agents/base.py writes into the tool result — so it is read back from there rather than recomputed.
+    """
+    out: list[dict] = []
+    for agent in ("investigator", "reviewer"):
+        messages = payload.get(agent) or []
+        # Which results errored, by tool_call_id, so a call can be marked from the reply that follows it.
+        errored = {
+            m.get("tool_call_id")
+            for m in messages
+            if m.get("role") == "tool" and str(m.get("content", "")).startswith("ERROR: ")
+        }
+        for message in messages:
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                try:
+                    args = json.loads(function.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                out.append(
+                    {
+                        "agent": agent,
+                        "name": function.get("name"),
+                        "args": args,
+                        "is_error": call.get("id") in errored,
+                    }
+                )
+    return out
+
+
+@app.get("/api/claims/{claim_id}/trace")
+async def trace(claim_id: str):
+    """The latest run's tool-call trace, so the audit drawer works on a claim nobody just ran.
+
+    CLAUDE.md's first non-negotiable is that MCP-only data access "is what makes the tool-call trace
+    meaningful as an audit trail" — and until now the trace was readable only during the ~40 seconds it
+    was being produced. The artifact was written every run and read by nothing.
+    """
+    if not queries.claim_exists(claim_id):
+        return JSONResponse(status_code=404, content={"error": f"unknown claim: {claim_id!r}"})
+    path = OUTPUT_DIR / claim_id / "latest" / "reasoning_trace.json"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": f"no trace recorded for {claim_id}"})
+    return {"claim_id": claim_id, "tool_calls": _compact_trace(json.loads(path.read_text()))}
 
 
 @app.get("/api/claims/{claim_id}/dispute-packet")

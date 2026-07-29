@@ -4,7 +4,7 @@
 import {
   ageLabel, buildHash, bulkOutcomeSummary, confidenceBand, DEFAULT_STATE, discrepancyPhrase, dollars,
   dollarsCompact, keyAction, lotSubtitle, nextClaimId, parseHash, priorityLegend, queueFooter,
-  sentenceCase, sortIndicator, todoSplit, verdictLabel,
+  reviewChecks, sentenceCase, sortIndicator, timelineGaps, todoSplit, verdictLabel,
 } from "./lib.js";
 
 // Everything in DEFAULT_STATE is mirrored in the URL hash and sanitized by parseHash. The rest is
@@ -21,6 +21,9 @@ const state = {
   // Neither is in the hash: a shared link that arrives with rows pre-checked is a trap, and the hash
   // describes a *view*. `picked` is cleared on every queue load — see loadQueue.
   picked: new Set(), pageIds: [], actionNote: "",
+  // Which claim's stored trace has already been pulled into the audit drawer, so opening and closing
+  // it doesn't re-fetch the largest artifact on disk.
+  tracedClaim: null,
 };
 
 const isFiltered = () =>
@@ -527,6 +530,9 @@ function fromCasefile(json, rowStatus) {
     uom_conversions_applied: cf.uom_conversions_applied, prior_claims: cf.prior_claims,
     trade_agreement_found: cf.trade_agreement_found, discrepancy_qty: cf.discrepancy_qty,
     discrepancy_amount_cents: cf.discrepancy_amount_cents, review_findings: ro.review_findings,
+    // Both have been in this response since Layer 32 and were read by nothing. Mapped to the same two
+    // names the live payload uses, so renderEvidence reads one shape from either path.
+    investigator_reasoning: cf.reasoning, reviewer_reasoning: ro.reasoning,
   };
 }
 
@@ -584,6 +590,9 @@ async function selectClaim(claim) {
   $("w-meta").textContent = `${claim.retailer} · ${sentenceCase(claim.claimed_reason)} · ${dollars(claim.claimed_amount)} · claimed ${claim.claim_date}`;
   $("trace").replaceChildren();
   $("usage").textContent = "";
+  // The trace belongs to the run being displayed, so a claim change re-arms the lazy load.
+  $("trace-empty").classList.add("hidden");
+  state.tracedClaim = null;
   $("w-disp-status").textContent = "";
   $("w-disp-status").classList.remove("err");
   // Clear the override inputs: a reason typed for one claim must not carry over and attach itself
@@ -610,8 +619,14 @@ async function selectClaim(claim) {
   if (claim.status === "unresolved") {
     renderVerdictHeader({ final_verdict: "unresolved" });
     hideAgentEvidence();
+    // Said here rather than left to a 404: there is no run to have a trace, so asking for one would be
+    // a request we already know the answer to, and an empty drawer explains nothing.
+    setTraceEmpty("No agent run yet — investigate this claim to record a tool trace.");
     return;
   }
+  loadRuns(claim);
+  // Only matters when the analyst left the drawer open — see maybeLoadTrace.
+  maybeLoadTrace();
   const resp = await fetch(`/api/claims/${encodeURIComponent(claim.claim_id)}/casefile`);
   if (resp.ok) {
     renderEvidence(claim.claim_id, fromCasefile(await resp.json(), claim.status));
@@ -622,6 +637,83 @@ async function selectClaim(claim) {
     hideAgentEvidence();
     if (claim.status === "INVALID") showDisputeDownloadOnly(claim.claim_id);
   }
+}
+
+/** Read-only run history + the token spend, both from /runs.
+ *
+ *  The history line only appears above one run: on today's lot 46 of 50 claims have exactly one, and
+ *  "1 run" on 92% of claims is noise. It is what makes Layer 34's stale-decision badge actionable —
+ *  that badge says the agents moved on without ever saying what they used to think.
+ *
+ *  This is also what fills `#usage` for a claim nobody just ran: fromCasefile hardcodes `usage: null`,
+ *  so before this the token line existed only during a live run, while verdict.json had it all along. */
+async function loadRuns(claim) {
+  try {
+    const data = await fetchJSON(`/api/claims/${encodeURIComponent(claim.claim_id)}/runs`);
+    if (state.renderedClaim !== claim.claim_id) return;  // a slower response for a claim we left
+    const runs = data.runs || [];
+    const line = $("w-runs");
+    if (runs.length > 1) {
+      const parts = runs.map((r) => {
+        // MM-DD, not the full ISO date: the year is the same on every run and the line lives in the
+        // *sticky* header, where a second line is permanently subtracted from the evidence pane. On the
+        // real six-run claim the full dates wrapped; measured, not guessed.
+        const when = (r.timestamp || r.run_id).slice(5, 10);
+        const verdict = verdictLabel(r.final_verdict);
+        return `${when} ${verdict.label}${r.run_id === data.latest_run_id ? " (current)" : ""}`;
+      });
+      line.textContent = `${runs.length} runs · ${parts.join(" ← ")}`;
+      line.classList.remove("hidden");
+    } else line.classList.add("hidden");
+
+    const current = runs.find((r) => r.run_id === data.latest_run_id) || runs[0];
+    if (current && current.usage) renderUsage(current.usage);
+  } catch (err) {
+    // A missing history is not worth a banner over: the evidence and the decision bar both work
+    // without it, and the alternative is an error box on a claim that rendered perfectly well.
+    console.error("loadRuns", err);
+  }
+}
+
+/** Pull the trace in whenever the drawer is open and empty.
+ *
+ *  Called from BOTH the drawer's toggle and claim selection, because "open the drawer" and "the open
+ *  drawer needs a different claim's trace" are two different triggers. Found by driving the app: an
+ *  analyst who leaves the drawer open fires no toggle event on the next claim, so a toggle-only hook
+ *  left the drawer open and permanently empty from the second claim onward. */
+function maybeLoadTrace() {
+  if ($("w-audit").open && state.renderedClaim && !$("trace").children.length) {
+    loadTrace(state.renderedClaim);
+  }
+}
+
+/** The trace, fetched on demand rather than on every claim selection — auditing is occasional, and
+    this is the largest artifact on disk. */
+async function loadTrace(claimId) {
+  if (state.tracedClaim === claimId) return;
+  state.tracedClaim = claimId;
+  try {
+    const data = await fetchJSON(`/api/claims/${encodeURIComponent(claimId)}/trace`);
+    if (state.renderedClaim !== claimId) return;
+    $("trace").replaceChildren();
+    (data.tool_calls || []).forEach(appendTrace);
+    if (!(data.tool_calls || []).length) setTraceEmpty("This run recorded no tool calls.");
+  } catch (err) {
+    console.error("loadTrace", err);
+    state.tracedClaim = null;  // let a retry happen on the next open
+    setTraceEmpty("No tool trace stored for this run — re-investigate to record one.");
+  }
+}
+
+function setTraceEmpty(message) {
+  $("trace-empty").textContent = message;
+  $("trace-empty").classList.remove("hidden");
+}
+
+function renderUsage(u) {
+  $("usage").textContent =
+    `tokens — investigator: ${u.investigator.prompt_tokens} in / ${u.investigator.completion_tokens} out · ` +
+    `reviewer: ${u.reviewer.prompt_tokens} in / ${u.reviewer.completion_tokens} out`;
 }
 
 async function loadDocuments(claim) {
@@ -644,6 +736,24 @@ function hideAgentEvidence() {
   $("w-uom").classList.add("hidden");
   $("w-context-block").classList.add("hidden");
   $("w-dispute-block").classList.add("hidden");
+  // Without this the previous claim's reasoning and run history survive onto an un-investigated one —
+  // the Layer 33 stale-documents bug, in the two blocks this layer adds.
+  $("w-why-block").classList.add("hidden");
+  $("w-runs").classList.add("hidden");
+}
+
+/** The agents' own prose. Each half hides on its own: a run may carry one reasoning and not the other,
+    and an empty labelled box reads as a failed load rather than as an absent field. */
+function renderWhy(investigator, reviewer) {
+  const halves = [["w-why-inv", investigator], ["w-why-rev", reviewer]];
+  let any = false;
+  for (const [id, text] of halves) {
+    const present = Boolean(text && String(text).trim());
+    $(id).classList.toggle("hidden", !present);
+    if (present) $(`${id}-body`).textContent = text;
+    any = any || present;
+  }
+  $("w-why-block").classList.toggle("hidden", !any);
 }
 
 function showDisputeDownloadOnly(claimId) {
@@ -719,8 +829,11 @@ function renderEvidence(claimId, ev) {
   if (uom.length) { $("w-uom").classList.remove("hidden"); $("w-uom-body").textContent = uom.join("; "); }
   else $("w-uom").classList.add("hidden");
 
+  // The interval between events goes BETWEEN the chips, in the agent's own order — see timelineGaps
+  // for why this list is never sorted.
   const tl = $("w-timeline"); tl.replaceChildren();
-  for (const e of ev.timeline || []) {
+  for (const e of timelineGaps(ev.timeline)) {
+    if (e.gap) tl.appendChild(el("span", "tl-gap" + (e.gapDays < 0 ? " back" : ""), e.gap));
     const div = el("div", "tl-event" + (e.valid ? "" : " invalid"));
     div.appendChild(el("span", "e", sentenceCase(e.event)));
     div.appendChild(el("span", "d", e.date));
@@ -728,9 +841,12 @@ function renderEvidence(claimId, ev) {
   }
 
   const checks = $("w-checks"); checks.replaceChildren();
-  for (const [k, v] of Object.entries(ev.review_findings || {})) {
-    const label = k.replace(/_check$/, "").replace(/_/g, " ");
-    checks.appendChild(el("span", "check " + safeClass(v), `${label}: ${v}`));
+  for (const c of reviewChecks(ev.review_findings)) {
+    const row = el("div", "check-row");
+    row.appendChild(el("span", "check " + safeClass(c.status), c.status));
+    row.appendChild(el("span", "label", c.label));
+    row.appendChild(el("span", "desc", c.description));
+    checks.appendChild(row);
   }
 
   const chips = [];
@@ -741,6 +857,11 @@ function renderEvidence(claimId, ev) {
     $("w-context").replaceChildren(...chips.map((c) => el("span", "chip", c)));
   } else $("w-context-block").classList.add("hidden");
 
+  // Deliberately NOT in EVIDENCE_BLOCKS: that list is unhidden unconditionally, and both reasoning
+  // fields default to "" (a model that omits them still validates), which would leave a bare
+  // "Why this verdict" heading over nothing. Each agent's half hides independently.
+  renderWhy(ev.investigator_reasoning, ev.reviewer_reasoning);
+
   const grounds = ev.dispute_grounds || [];
   if (ev.final_verdict === "INVALID" && grounds.length) {
     $("w-dispute-block").classList.remove("hidden");
@@ -748,12 +869,7 @@ function renderEvidence(claimId, ev) {
     $("w-download").onclick = () => window.open(`/api/claims/${encodeURIComponent(claimId)}/dispute-packet`, "_blank");
   } else $("w-dispute-block").classList.add("hidden");
 
-  if (ev.usage) {
-    const u = ev.usage;
-    $("usage").textContent =
-      `tokens — investigator: ${u.investigator.prompt_tokens} in / ${u.investigator.completion_tokens} out · ` +
-      `reviewer: ${u.reviewer.prompt_tokens} in / ${u.reviewer.completion_tokens} out`;
-  }
+  if (ev.usage) renderUsage(ev.usage);
 }
 
 // --- investigate (single claim, live SSE) --------------------------------------------------------
@@ -764,13 +880,16 @@ function appendTrace(d) {
   li.appendChild(el("span", null, d.name));
   li.appendChild(el("span", "tool-args", " " + JSON.stringify(d.args)));
   $("trace").appendChild(li);
+  $("trace-empty").classList.add("hidden");
 }
 
 function investigateClaim(claimId) {
   if (source) source.close();
   $("trace").replaceChildren();
   $("w-investigate").disabled = true;
-  document.querySelector("details.audit").open = true;
+  // The audit drawer is deliberately NOT force-opened here. It was opened on every run, which put a
+  // scrolling wall of tool calls between the analyst and the decision bar on work that is usually
+  // routine; auditing is a thing you choose to do, and a past run's trace now loads on demand.
 
   source = new EventSource(`/api/claims/${encodeURIComponent(claimId)}/stream`);
   source.addEventListener("tool_call", (e) => appendTrace(JSON.parse(e.data)));
@@ -980,6 +1099,8 @@ $("w-investigate").addEventListener("click", () => {
   }
   investigateClaim(state.claim);
 });
+
+$("w-audit").addEventListener("toggle", maybeLoadTrace);
 
 $("w-override-verdict").addEventListener("change", syncOverrideButton);
 $("w-note").addEventListener("input", syncOverrideButton);

@@ -65,6 +65,7 @@ was gated on sign-off — it is the only layer that edits the agent prompts):
 | 37a | Query surface for a workable grid — total sort order, filters, filtered totals, 422 on bad input | ✅ Done |
 | 37b | A grid you can work — PO/Age columns, sort indicators, filtered total, page size, URL-hash routing | ✅ Done |
 | 38 | Working the volume — bulk accept (accept-only), keyboard path, pinned decision bar, save-and-next | ✅ Done |
+| 39 | Explainability — agent reasoning, described reviewer checks, timeline intervals, run history (`/runs`, `/trace`) | ✅ Done |
 | — | Layer-end verification tooling (`scripts/check.sh`, `/layer-done`, `tests/test_invariants.py`) | ✅ Done |
 
 ## Setup
@@ -184,6 +185,15 @@ API (data comes from the relational store — there is no "scenario"):
   404 if the claim hasn't been investigated.
 - `GET /api/claims/{claim_id}/dispute-packet` → the Markdown packet for an `INVALID` claim's latest
   run (download).
+- `GET /api/claims/{claim_id}/runs` → every archived run, **newest first by `verdict.json`'s
+  timestamp** (run ids are arbitrary strings, so directory order is not recency), each with its verdict
+  trio, confidence, token usage and `has_case_file`/`has_dispute_packet`. A claim with no runs is `200`
+  with an empty list, not a 404. Read-only history — there is no way to *open* an older run, because
+  rendering one run's evidence beside another run's verdict is worse than not showing it (Layer 41).
+- `GET /api/claims/{claim_id}/trace` → the latest run's tool-call trace, compacted from
+  `reasoning_trace.json` into the same `{agent, name, args, is_error}` shape the live SSE emits, so the
+  audit drawer works on a claim nobody just ran. Compacted rather than raw: the artifact embeds both
+  system prompts verbatim.
 - `POST /api/claims/{claim_id}/disposition` → record the analyst's decision
   `{disposition: accept|override|escalate, override_verdict?, note?}`.
 - `POST /api/batches/{batch_id}/dispositions` → **accept only**, over a selection:
