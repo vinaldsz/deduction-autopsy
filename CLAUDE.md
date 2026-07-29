@@ -9,8 +9,22 @@ The core loop: Investigator agent gathers all source documents via MCP tools, no
 unit-of-measure, proposes a verdict → Reviewer agent independently spot-checks the
 highest-risk steps and either CONFIRMs, OVERTURNs, or ESCALATEs.
 
-Full domain context and architecture in `docs/SPEC.md`.
-Full implementation plan in `docs/PLAN.md`.
+Where to read what:
+
+- `docs/ARCHITECTURE.md` — how the parts fit together and why: the four planes, the control
+  points, data flow, the frontend layering, and a "where to add things" map. **Start here** for
+  orientation; it is the doc a new contributor (human or agent) should read first.
+- `docs/SPEC.md` — the exact contracts: relational schema, JSON schemas, ground truth, ETL rules.
+  Authoritative when it disagrees with prose elsewhere.
+- `docs/API.md` — the MCP tool surface and every HTTP route.
+- `docs/PLAN.md` — the full implementation plan, layer by layer.
+- `docs/GLOSSARY.md` — CPG deduction vocabulary and this system's own terms.
+- `CONTRIBUTING.md` — the human-facing short version of this file: setup, the four gates, layer
+  discipline, style.
+- `README.md` — the visitor-facing overview; its Status table is the single layer index.
+
+When a layer changes a contract or a route, update `docs/SPEC.md` / `docs/API.md` in the same
+commit — those two are the ones other documents defer to.
 
 ---
 
